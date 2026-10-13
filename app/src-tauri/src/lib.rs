@@ -51,6 +51,7 @@ pub fn run() {
             check::check_target,
             check::finish_check,
             check::capture_check,
+            check::check_path,
             config::get_config,
             config::open_road_data,
             config::open_geo_data,
@@ -61,6 +62,7 @@ pub fn run() {
             videos::scan_videos,
             videos::build_timeline,
             videos::locate,
+            videos::export_csv,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the app");

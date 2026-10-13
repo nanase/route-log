@@ -26,6 +26,8 @@ interface AppHandle {
   /** 保存と時刻の推定が済むまで待つ */
   settled(): Promise<void>;
   rideDate(): string;
+  /** CSV を報告の隣に書き出し、その場所を返す */
+  exportCsv(): Promise<string>;
   message(): string;
 }
 
@@ -98,6 +100,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   await sleep(600);
   note("県境に 12:00:00 を手で入れ、補正を 0 に戻す", "県境は 12:00:00 のまま。出発と到着は 90 秒戻る。順序が合わないので警告が出る");
 
+  const csv = await app.exportCsv();
   const captured = await invoke<string>("capture_check", { name: "confirm" }).catch((e) => `写せない: ${e}`);
 
   key("Backspace");
@@ -125,5 +128,5 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
     "K のあと 2 秒（動かない）": await moved(["l", "k"], 2000),
   };
 
-  return { steps, transport, captures: [captured], message: app.message() };
+  return { steps, transport, captures: [captured], csv, message: app.message() };
 }

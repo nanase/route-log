@@ -6,12 +6,11 @@
 use std::collections::BTreeSet;
 
 use routelog_core::geo::{self, LonLat};
-use routelog_core::{Event, EventDetail, EventKind, EventStatus, RouteRef};
+use routelog_core::{Event, EventDetail, EventKind, EventStatus, RouteRef, route_name};
 use rstar::primitives::{GeomWithData, Line, Rectangle};
 use rstar::{PointDistance, RTree};
 
 use crate::data::{Area, BBox, GeoData, Structure};
-use crate::prefecture::route_name;
 
 /// 緯度 1 度の長さ（m）。
 const M_PER_DEGREE: f64 = 111_195.08;

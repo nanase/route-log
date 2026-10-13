@@ -1,6 +1,6 @@
 //! 都道府県道の所属（国道マップの地域名）と、都道府県の名前。
 
-use routelog_core::{RouteClass, RouteRef};
+use crate::event::{RouteClass, RouteRef};
 
 const NAMES: [(&str, &str); 47] = [
     ("aichi", "愛知県"),

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { open, save } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import { runConfirmCheck } from "./lib/confirm-check";
   import EventList from "./lib/EventList.svelte";
@@ -295,6 +295,27 @@
     event.preventDefault();
   }
 
+  /** イベントの通過時刻の一覧を CSV に書き出す。書き出し先は、その場で選ぶ。 */
+  async function exportCsv() {
+    if (doc === null) return;
+    const path = await save({
+      title: "通過時刻の一覧を書き出す",
+      defaultPath: `${doc.ride.title}.csv`,
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (path !== null) await writeCsv(path);
+  }
+
+  async function writeCsv(path: string) {
+    await flush();
+    try {
+      const rows = await invoke<number>("export_csv", { doc, path });
+      message = `${rows} 件を書き出しました`;
+    } catch (e) {
+      message = `書き出せません: ${e}`;
+    }
+  }
+
   async function createRide() {
     if (newDate === "") return;
     await select(newDate);
@@ -355,6 +376,11 @@
           await sleep(300);
         },
         rideDate: () => date ?? "",
+        exportCsv: async () => {
+          const path = await invoke<string>("check_path", { name: "events.csv" });
+          await writeCsv(path);
+          return path;
+        },
         message: () => message,
       });
     } catch (e) {
@@ -418,6 +444,7 @@
           }}
         />
         <span>経由点 {doc?.waypoints.length ?? 0}・{(lengthM / 1000).toFixed(1)} km</span>
+        <button type="button" onclick={exportCsv} disabled={doc === null}>CSV を書き出す</button>
         <label>
           時計の補正（秒）
           <input

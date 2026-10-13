@@ -64,6 +64,21 @@ pub fn finish_check(app: tauri::AppHandle, report: String) -> Result<(), String>
     Ok(())
 }
 
+/// 確認のために書くファイルの場所。報告と同じ場所で、名前に `name` を足す。
+#[tauri::command]
+pub fn check_path(name: String) -> Result<String, String> {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
+        return Err(format!("名前に使えない文字があります: {name}"));
+    }
+    let report = report_path()?;
+    let stem = report.file_stem().unwrap_or_default().to_string_lossy();
+    let path = report.with_file_name(format!("{stem}-{name}"));
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// いまの画面を PNG に写す。書き先は報告と同じ場所で、名前に `name` を足す。
 ///
 /// 写るのはこのアプリの画面だけで、デスクトップやほかのウィンドウは写らない。

@@ -4,11 +4,9 @@
 
 mod data;
 mod extract;
-mod prefecture;
 
 pub use data::{Area, BBox, GeoData, Road, Station, Structure};
 pub use extract::{Options, Prepared};
-pub use prefecture::route_name;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

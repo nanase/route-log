@@ -62,6 +62,22 @@ pub fn build_timeline(
     timeline
 }
 
+/// イベントの通過時刻の一覧を CSV に書き出す。動画の中の位置は、いま開いているタイムラインから求める。
+///
+/// 表計算ソフトが文字コードを取り違えないよう、先頭に BOM を付ける。
+#[tauri::command]
+pub fn export_csv(
+    state: tauri::State<State>,
+    doc: routelog_core::RideDocument,
+    path: String,
+) -> Result<usize, String> {
+    let timeline = state.timeline.lock().unwrap();
+    let empty = Timeline::new(Vec::new(), doc.ride.clock_offset_ms);
+    let text = routelog_core::export::csv(&doc.events, timeline.as_ref().unwrap_or(&empty));
+    std::fs::write(&path, format!("\u{feff}{text}")).map_err(|e| format!("{path}: {e}"))?;
+    Ok(text.lines().count() - 1)
+}
+
 /// 実時刻を動画の位置にする。録画していない時刻は、次に録画が始まる位置にする。
 #[tauri::command]
 pub fn locate(state: tauri::State<State>, real_ms: i64) -> Option<Position> {
