@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::event::Event;
 use crate::geo::{self, LonLat};
 
 /// 走行。
@@ -55,6 +56,8 @@ pub struct RideDocument {
     pub waypoints: Vec<Waypoint>,
     #[serde(default)]
     pub route: Route,
+    #[serde(default)]
+    pub events: Vec<Event>,
 }
 
 /// 走行のデータが形として正しくない理由。
@@ -160,6 +163,7 @@ mod tests {
             },
             waypoints,
             route: Route { segments },
+            events: Vec::new(),
         }
     }
 

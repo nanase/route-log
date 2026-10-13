@@ -7,6 +7,7 @@
 //! - `ROUTELOG_CHECK_DIR`: フォルダを読み、ファイルをまたぐ再生と時刻の変換を確かめる
 //! - `ROUTELOG_CHECK_MAP`: 地図の表示と経路の編集・保存を確かめる。値は道路データのフォルダで、
 //!   重ねないなら `-`
+//! - `ROUTELOG_CHECK_GEO`: 地図の確認に、イベントの抽出を足す。値は判定用データのフォルダ
 //! - `ROUTELOG_CHECK_REPORT`: 報告（JSON）の書き先。画面の写しは同じ場所に PNG で書く
 
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ use serde::Serialize;
 const FILE: &str = "ROUTELOG_CHECK_FILE";
 const DIR: &str = "ROUTELOG_CHECK_DIR";
 const MAP: &str = "ROUTELOG_CHECK_MAP";
+const GEO: &str = "ROUTELOG_CHECK_GEO";
 const REPORT: &str = "ROUTELOG_CHECK_REPORT";
 
 #[derive(Serialize)]
@@ -23,6 +25,7 @@ pub struct Target {
     file: Option<String>,
     dir: Option<String>,
     map: Option<String>,
+    geo: Option<String>,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -48,6 +51,7 @@ pub fn check_target() -> Target {
         file: var(FILE),
         dir: var(DIR),
         map: var(MAP),
+        geo: var(GEO),
     }
 }
 

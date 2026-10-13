@@ -11,6 +11,7 @@ const DATA_DIR_ENV: &str = "ROUTELOG_DATA_DIR";
 
 const NATIONAL: &str = "national-routes.pmtiles";
 const PREFECTURAL: &str = "prefectural-routes.pmtiles";
+const GEO_FILES: [&str; 3] = ["roads.fgb", "admin.fgb", "michi-no-eki.fgb"];
 
 pub fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
     if let Some(dir) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
@@ -29,6 +30,9 @@ pub struct Config {
     pub video_dir: Option<String>,
     /// 国道マップの配信データ（PMTiles）があるフォルダ。
     pub road_data_dir: Option<String>,
+    /// 判定用データ（FlatGeobuf）があるフォルダ。
+    #[serde(default)]
+    pub geo_data_dir: Option<String>,
 }
 
 pub struct ConfigFile {
@@ -99,6 +103,18 @@ pub fn open_road_data(
     };
     config.update(|c| c.road_data_dir = Some(dir.clone()))?;
     Ok(data)
+}
+
+/// 判定用データのフォルダを開く。以後、経路を保存するたびにイベントを抽出する。
+#[tauri::command]
+pub fn open_geo_data(config: tauri::State<ConfigFile>, dir: String) -> Result<(), String> {
+    for name in GEO_FILES {
+        let path = Path::new(&dir).join(name);
+        if !path.is_file() {
+            return Err(format!("{} がありません", path.display()));
+        }
+    }
+    config.update(|c| c.geo_data_dir = Some(dir.clone()))
 }
 
 #[cfg(test)]

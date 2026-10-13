@@ -29,12 +29,15 @@
     path,
     rideId,
     roads = null,
+    marks = [],
     onchange,
   }: {
     path: Path;
     /** 走行が変わったら、経路の全体が見えるように地図を動かす */
     rideId: string | null;
     roads?: RoadData | null;
+    /** イベントの位置。地図に点で出す */
+    marks?: { at: LonLat; label: string; hidden: boolean }[];
     onchange: (path: Path) => void;
   } = $props();
 
@@ -181,6 +184,18 @@
         layout: round,
         paint: { "line-color": "#e03131", "line-width": 4 },
       });
+      created.addSource("marks", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      created.addLayer({
+        id: "marks",
+        type: "circle",
+        source: "marks",
+        paint: {
+          "circle-radius": 5,
+          "circle-color": ["case", ["get", "hidden"], "#adb5bd", "#f59f00"],
+          "circle-stroke-color": "#fff",
+          "circle-stroke-width": 1.5,
+        },
+      });
       ready = true;
     });
     created.on("click", (event) => onchange(appendWaypoint(path, event.lngLat.toArray())));
@@ -204,6 +219,16 @@
   $effect(() => {
     void rideId;
     if (ready) untrack(() => fit(path));
+  });
+
+  $effect(() => {
+    if (!ready) return;
+    const features: Feature[] = marks.map((mark) => ({
+      type: "Feature",
+      properties: { label: mark.label, hidden: mark.hidden },
+      geometry: { type: "Point", coordinates: mark.at },
+    }));
+    (map?.getSource("marks") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features });
   });
 
   // 道路の線は経路の下に重ねる。
@@ -231,6 +256,16 @@
     overlay("prefectural", roads.prefectural, "#2f9e44", 2);
     overlay("national", roads.national, "#1c7ed6", 3);
   });
+
+  let popup: maplibregl.Popup | undefined;
+
+  /** その位置を地図のまん中に出し、名前を添える。 */
+  export function focus(at: LonLat, label: string) {
+    if (map === undefined) return;
+    popup?.remove();
+    popup = new maplibregl.Popup({ closeButton: false, offset: 10 }).setLngLat(at).setText(label).addTo(map);
+    map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 13) });
+  }
 
   /** 自動の確認が使う口。 */
   export function jump(center: LonLat, zoom: number) {

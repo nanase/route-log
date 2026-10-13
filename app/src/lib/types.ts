@@ -69,10 +69,43 @@ export interface Route {
   segments: LonLat[][];
 }
 
+export type EventKind =
+  | "departure"
+  | "arrival"
+  | "pref_boundary"
+  | "muni_boundary"
+  | "road"
+  | "bridge"
+  | "tunnel"
+  | "michi_no_eki"
+  | "custom";
+
+export type EventStatus = "estimated" | "confirmed" | "hidden";
+
+export interface RouteRef {
+  class: "national" | "prefectural";
+  /** 都道府県道の所属。国道では無い */
+  pref?: string;
+  number: number;
+}
+
+/** 字幕にするイベント。DOM の Event と紛れないよう、こちらは RideEvent と呼ぶ。 */
+export interface RideEvent {
+  id: string;
+  kind: EventKind;
+  label: string;
+  /** 経路の始点からの距離（m） */
+  route_m: number;
+  time_ms: number | null;
+  status: EventStatus;
+  detail: { routes?: RouteRef[]; end_m?: number };
+}
+
 export interface RideDocument {
   ride: Ride;
   waypoints: Waypoint[];
   route: Route;
+  events: RideEvent[];
 }
 
 export interface RideSummary {
@@ -87,6 +120,7 @@ export interface RideSummary {
 export interface Config {
   video_dir: string | null;
   road_data_dir: string | null;
+  geo_data_dir: string | null;
 }
 
 /** 地図に重ねる道路データ（PMTiles）の場所。 */

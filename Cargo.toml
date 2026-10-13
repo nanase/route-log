@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/routelog-core", "crates/routelog-video", "app/src-tauri"]
+members = [
+    "crates/routelog-core",
+    "crates/routelog-geo",
+    "crates/routelog-video",
+    "app/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,6 +13,7 @@ edition = "2024"
 
 [workspace.dependencies]
 routelog-core = { path = "crates/routelog-core" }
+routelog-geo = { path = "crates/routelog-geo" }
 routelog-video = { path = "crates/routelog-video" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -22,3 +28,10 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# 抽出は点ごとに索引を引くので、最適化なしでは索引を作るだけで秒単位かかる。
+[profile.dev.package.rstar]
+opt-level = 3
+
+[profile.dev.package.routelog-geo]
+opt-level = 2

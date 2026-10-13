@@ -2,9 +2,14 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use routelog_core::{Ride, RideDocument, Route, jst};
-use serde::Serialize;
+use std::path::Path;
 
+use routelog_core::{Event, Ride, RideDocument, Route, jst};
+use serde::Serialize;
+use tauri::Manager;
+
+use crate::config::ConfigFile;
+use crate::events::Extractor;
 use crate::store::{RideSummary, Store};
 
 fn now() -> String {
@@ -40,6 +45,7 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
         },
         waypoints: Vec::new(),
         route: Route::default(),
+        events: Vec::new(),
     };
     store.save(&doc).map_err(|e| e.to_string())?;
     Ok(doc)
@@ -49,15 +55,37 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
 pub struct Saved {
     updated_at: String,
     length_m: f64,
+    events: Vec<Event>,
 }
 
-/// 走行を保存し、更新時刻と経路の長さを返す。
+/// 走行を保存し、更新時刻・経路の長さ・イベントを返す。
+///
+/// `extract` なら、保存の前に経路からイベントを抽出し直す。判定用データを開いていなければ、
+/// イベントはそのままにする。
 #[tauri::command]
-pub fn save_ride(store: tauri::State<Store>, mut doc: RideDocument) -> Result<Saved, String> {
+pub async fn save_ride(
+    app: tauri::AppHandle,
+    mut doc: RideDocument,
+    extract: bool,
+) -> Result<Saved, String> {
+    doc.validate().map_err(|e| e.to_string())?;
+    let geo_dir = app.state::<ConfigFile>().get().geo_data_dir;
+    if let (true, Some(dir)) = (extract, geo_dir) {
+        let handle = app.clone();
+        let (returned, events) = tauri::async_runtime::spawn_blocking(move || {
+            let events = handle.state::<Extractor>().extract(Path::new(&dir), &doc);
+            (doc, events)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        doc = returned;
+        doc.events = events.map_err(|e| e.to_string())?;
+    }
     doc.ride.updated_at = now();
-    store.save(&doc).map_err(|e| e.to_string())?;
+    app.state::<Store>().save(&doc).map_err(|e| e.to_string())?;
     Ok(Saved {
         length_m: doc.length_m(),
         updated_at: doc.ride.updated_at,
+        events: doc.events,
     })
 }

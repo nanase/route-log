@@ -2,5 +2,7 @@ target/
 node_modules/
 dist/
 app/src-tauri/gen/schemas/
+data/
+__pycache__/
 mise.local.toml
 *.log

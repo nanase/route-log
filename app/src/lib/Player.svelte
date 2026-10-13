@@ -138,8 +138,10 @@
   </div>
   <p class="ends"><span>{clock(startMs)}</span><span>{clock(endMs)}</span></p>
 
-  <table>
-    <tbody>
+  <details>
+    <summary>ファイル {timeline.files.length} 本</summary>
+    <table>
+      <tbody>
       {#each timeline.spans as span (span.file)}
         {@const item = timeline.files[span.file]}
         {@const gap = timeline.gaps.find((g) => g.start_ms === span.end_ms)}
@@ -153,14 +155,15 @@
           <tr class="gap"><td colspan="4">録画停止 {hms(gap.end_ms - gap.start_ms)}</td></tr>
         {/if}
       {/each}
-    </tbody>
-  </table>
+      </tbody>
+    </table>
+  </details>
 </section>
 
 <style>
   section {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) auto auto auto minmax(0, 12rem);
+    grid-template-rows: minmax(0, 1fr) auto auto auto auto;
     grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
     height: 100%;
@@ -223,8 +226,12 @@
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
   }
+  details {
+    font-size: 0.85rem;
+  }
   table {
     display: block;
+    max-height: 9rem;
     overflow: auto;
     border-collapse: collapse;
     white-space: nowrap;

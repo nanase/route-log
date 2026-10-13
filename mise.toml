@@ -4,8 +4,16 @@ node = "26.10.0"
 bun = "1.4.2"
 # 動画の長さを読む ffprobe のために入れる。
 "conda:ffmpeg" = "9.0.2"
+# 判定用データの書き出し（pipeline/）に使う。
+python = "3.14"
+uv = "0.12"
 
 [settings]
 # ここで固定した版を、PATH に先に入っている別の node より優先させる。
 # これがないと、bun から呼ばれる vite や svelte-check が別の版の node で動く。
 activate_aggressive = true
+
+[tasks.export-geo]
+description = "国道マップの生成物から、判定用データ（data/geo/）を書き出す"
+# 国道マップのフォルダは環境変数 KOKUDO_MAP_DIR で渡す。mise.local.toml に書く。
+run = "uv run pipeline/export_geo.py"

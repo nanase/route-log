@@ -1,0 +1,133 @@
+//! 実データで抽出を確かめる。国道を 1 本たどった線を経路とみなし、イベントを表示する。
+//!
+//! 使い方: cargo run -p routelog-geo --example along -- <データのフォルダ> <国道の番号>
+//!             <始点の経度> <始点の緯度> <行き先の経度> <行き先の緯度>
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+use routelog_core::geo::{self, LonLat};
+use routelog_core::{EventStatus, RouteClass};
+use routelog_geo::{BBox, GeoData, Options, Prepared, Road};
+
+/// 始点にいちばん近い way から、端が一致する way を行き先へ向けてつないでいく。
+fn chain(roads: &[Road], number: u32, start: LonLat, toward: LonLat) -> Vec<LonLat> {
+    let on_route = |road: &&Road| {
+        road.kind == "road"
+            && road
+                .routes
+                .iter()
+                .any(|r| r.class == RouteClass::National && r.number == number)
+    };
+    let mut rest: Vec<&Road> = roads.iter().filter(on_route).collect();
+    let nearest = |road: &&Road| {
+        road.line
+            .iter()
+            .map(|p| geo::distance_m(*p, start))
+            .fold(f64::MAX, f64::min)
+    };
+    let Some(first) =
+        (0..rest.len()).min_by(|a, b| nearest(&rest[*a]).total_cmp(&nearest(&rest[*b])))
+    else {
+        return Vec::new();
+    };
+    let mut line = rest.swap_remove(first).line.clone();
+    if geo::distance_m(line[0], toward) < geo::distance_m(*line.last().unwrap(), toward) {
+        line.reverse();
+    }
+    loop {
+        let end = *line.last().unwrap();
+        // 端が一致する way のうち、反対の端が行き先にいちばん近いもの。
+        let next = rest
+            .iter()
+            .enumerate()
+            .filter_map(|(i, road)| {
+                let (head, tail) = (road.line[0], *road.line.last().unwrap());
+                if head == end {
+                    Some((i, false, geo::distance_m(tail, toward)))
+                } else if tail == end {
+                    Some((i, true, geo::distance_m(head, toward)))
+                } else {
+                    None
+                }
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        let Some((i, reversed, distance)) = next else {
+            return line;
+        };
+        if distance > geo::distance_m(end, toward) + 2000.0 {
+            return line;
+        }
+        let mut piece = rest.swap_remove(i).line.clone();
+        if reversed {
+            piece.reverse();
+        }
+        line.extend_from_slice(&piece[1..]);
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let [dir, number, lon0, lat0, lon1, lat1] = args.as_slice() else {
+        return Err(
+            "引数: <データのフォルダ> <国道の番号> <始点の経度> <緯度> <行き先の経度> <緯度>"
+                .into(),
+        );
+    };
+    let (start, toward): (LonLat, LonLat) = (
+        [lon0.parse()?, lat0.parse()?],
+        [lon1.parse()?, lat1.parse()?],
+    );
+    let bbox = BBox::around(&[start, toward]).unwrap().expand(0.1);
+
+    let started = Instant::now();
+    let data = GeoData::load(&PathBuf::from(dir), bbox)?;
+    println!(
+        "読み込み {:?}: 道 {} 本、面 {} 個、道の駅 {} 個",
+        started.elapsed(),
+        data.roads.len(),
+        data.areas.len(),
+        data.stations.len()
+    );
+
+    let line = chain(&data.roads, number.parse()?, start, toward);
+    println!(
+        "経路 {:.1} km、{} 点",
+        geo::length_m(&line) / 1000.0,
+        line.len()
+    );
+
+    let started = Instant::now();
+    let prepared = Prepared::new(data, bbox);
+    let built = started.elapsed();
+    let started = Instant::now();
+    let events = prepared.extract(&line, &Options::default());
+    println!(
+        "索引 {built:?}、抽出 {:?}: イベント {} 件",
+        started.elapsed(),
+        events.len()
+    );
+    for event in &events {
+        let hidden = if event.status == EventStatus::Hidden {
+            "（非表示）"
+        } else {
+            ""
+        };
+        let end = event
+            .detail
+            .end_m
+            .map(|m| format!(" 長さ {:.0} m", m - event.route_m))
+            .unwrap_or_default();
+        println!(
+            "{:7.2} km  {:13}  {}{end}{hidden}",
+            event.route_m / 1000.0,
+            format!("{:?}", event.kind),
+            if event.label.is_empty() {
+                "（名前なし）"
+            } else {
+                &event.label
+            },
+        );
+    }
+    Ok(())
+}

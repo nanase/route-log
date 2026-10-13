@@ -141,6 +141,7 @@ mod tests {
             route: Route {
                 segments: vec![vec![]],
             },
+            events: Vec::new(),
         }
     }
 

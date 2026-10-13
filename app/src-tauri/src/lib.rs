@@ -1,5 +1,6 @@
 mod check;
 mod config;
+mod events;
 mod rides;
 mod store;
 mod videos;
@@ -38,6 +39,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(videos::State::default())
+        .manage(events::Extractor::default())
         .setup(|app| {
             let dir = config::data_dir(app.handle())?;
             app.manage(store::Store::new(dir.join("rides")));
@@ -51,6 +53,7 @@ pub fn run() {
             check::capture_check,
             config::get_config,
             config::open_road_data,
+            config::open_geo_data,
             rides::list_rides,
             rides::load_ride,
             rides::create_ride,

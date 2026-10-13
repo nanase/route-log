@@ -2,21 +2,34 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
+  import EventList from "./lib/EventList.svelte";
+  import { pointAt } from "./lib/geo";
   import { runMapCheck } from "./lib/map-check";
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
-  import type { Path } from "./lib/route";
+  import { line, type Path } from "./lib/route";
   import RouteMap from "./lib/RouteMap.svelte";
   import { hms } from "./lib/time";
   import { runTimelineCheck } from "./lib/timeline-check";
-  import type { Config, RideDocument, RideSummary, RideVideos, RoadData, Scan, Timeline } from "./lib/types";
+  import type {
+    Config,
+    RideDocument,
+    RideEvent,
+    RideSummary,
+    RideVideos,
+    RoadData,
+    Scan,
+    Timeline,
+  } from "./lib/types";
 
   /** 保存を待つ時間。続けて編集している間は書かない */
   const SAVE_DELAY_MS = 400;
   const EMPTY: Path = { waypoints: [], route: { segments: [] } };
 
   /** 自動の確認の対象。`undefined` は問い合わせ中 */
-  let check = $state<{ file: string | null; dir: string | null; map: string | null } | undefined>(undefined);
+  let check = $state<
+    { file: string | null; dir: string | null; map: string | null; geo: string | null } | undefined
+  >(undefined);
   let player = $state<Player>();
   let routeMap = $state<RouteMap>();
   let message = $state("");
@@ -25,8 +38,12 @@
   let roads = $state<RoadData | null>(null);
   /** 開いている走行の日付 */
   let date = $state<string | null>(null);
-  /** 開いている走行。まだ何も記録していない日付では null */
-  let doc = $state<RideDocument | null>(null);
+  /** 開いている走行。まだ何も記録していない日付では null。編集のたびに丸ごと入れ替える */
+  let doc = $state.raw<RideDocument | null>(null);
+  /** 判定用データを開いてあるか */
+  let geoReady = $state(false);
+  /** 経路が変わっていて、次の保存でイベントを抽出し直すか */
+  let extractNeeded = false;
   let lengthM = $state(0);
   let timeline = $state<Timeline | null>(null);
   let newDate = $state("");
@@ -38,6 +55,13 @@
   );
   const files = $derived(videos.find((v) => v.date === date)?.files ?? []);
   const clockOffsetMs = $derived(doc?.ride.clock_offset_ms ?? 0);
+  const routeLine = $derived(doc === null ? [] : line(doc));
+  const marks = $derived(
+    (doc?.events ?? []).flatMap((event) => {
+      const at = pointAt(routeLine, event.route_m);
+      return at === null ? [] : [{ at, label: event.label, hidden: event.status === "hidden" }];
+    }),
+  );
 
   onMount(async () => {
     check = await invoke("check_target");
@@ -47,6 +71,7 @@
     if (check?.map) return checkMap(check.map);
     const config = await invoke<Config>("get_config");
     if (config.road_data_dir) await loadRoads(config.road_data_dir);
+    if (config.geo_data_dir) await loadGeo(config.geo_data_dir);
     if (config.video_dir) await loadVideos(config.video_dir);
   });
 
@@ -72,6 +97,24 @@
     } catch (e) {
       message = String(e);
     }
+  }
+
+  async function loadGeo(dir: string) {
+    try {
+      await invoke("open_geo_data", { dir });
+      geoReady = true;
+      extractAgain();
+    } catch (e) {
+      message = String(e);
+    }
+  }
+
+  /** 開いている走行のイベントを、いまの経路から抽出し直す。 */
+  function extractAgain() {
+    if (doc === null) return;
+    extractNeeded = true;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flush, 0);
   }
 
   async function pick(title: string, load: (dir: string) => Promise<void>) {
@@ -102,7 +145,9 @@
       message = "走行を選ぶか、日付を入れて作ってください";
       return;
     }
-    doc = change(current);
+    const next = change(current);
+    if (next.waypoints !== current.waypoints || next.route !== current.route) extractNeeded = true;
+    doc = next;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flush, SAVE_DELAY_MS);
   }
@@ -113,15 +158,25 @@
     clearTimeout(saveTimer);
     saveTimer = undefined;
     const saving = doc;
+    const extract = extractNeeded;
+    extractNeeded = false;
     try {
-      const saved = await invoke<{ updated_at: string; length_m: number }>("save_ride", { doc: saving });
+      const saved = await invoke<{ updated_at: string; length_m: number; events: RideEvent[] }>("save_ride", {
+        doc: saving,
+        extract,
+      });
       lengthM = saved.length_m;
+      // 保存を待つ間に経路が変わっていたら、返ってきたイベントは古い。次の保存に任せる。
+      if (doc !== null && doc.waypoints === saving.waypoints && doc.route === saving.route) {
+        doc = { ...doc, events: saved.events };
+      }
       stored = stored.map((s) =>
         s.id === saving.ride.id
           ? { ...s, updated_at: saved.updated_at, length_m: saved.length_m, waypoints: saving.waypoints.length }
           : s,
       );
     } catch (e) {
+      extractNeeded ||= extract;
       message = `保存できません: ${e}`;
     }
   }
@@ -169,6 +224,8 @@
       while (routeMap === undefined) await sleep(100);
       report = await runMapCheck(routeMap, {
         loadRoads: roadDir === "-" ? null : () => loadRoads(roadDir),
+        loadGeo: check?.geo ? () => loadGeo(check!.geo!) : null,
+        events: () => doc?.events ?? [],
         create: async (rideDate) => {
           newDate = rideDate;
           await createRide();
@@ -200,6 +257,7 @@
     <header>
       <button type="button" onclick={() => pick("動画フォルダを選ぶ", loadVideos)}>動画フォルダを開く</button>
       <button type="button" onclick={() => pick("道路データのフォルダを選ぶ", loadRoads)}>道路データを開く</button>
+      <button type="button" onclick={() => pick("判定データのフォルダを選ぶ", loadGeo)}>判定データを開く</button>
       <span class="message">{message}</span>
       {#if date !== null}
         <input
@@ -247,14 +305,27 @@
         path={doc ?? EMPTY}
         rideId={date}
         {roads}
+        {marks}
         onchange={(path) => edit((current) => ({ ...current, ...path }))}
       />
     </div>
-    <div class="player">
-      {#if timeline !== null}
-        <Player bind:this={player} {timeline} muted={check.dir !== null} />
-      {:else if date !== null}
-        <p>この日付の動画はありません。</p>
+    <div class="side">
+      <div class="player">
+        {#if timeline !== null}
+          <Player bind:this={player} {timeline} muted={check.dir !== null} />
+        {:else if date !== null}
+          <p>この日付の動画はありません。</p>
+        {/if}
+      </div>
+      {#if date !== null}
+        <EventList
+          events={doc?.events ?? []}
+          onselect={(event) => {
+            const at = pointAt(routeLine, event.route_m);
+            if (at !== null) routeMap?.focus(at, event.label || "（名前なし）");
+          }}
+          onextract={geoReady ? extractAgain : null}
+        />
       {/if}
     </div>
   </main>
@@ -324,10 +395,16 @@
     background: #e6eef7;
   }
   .map,
+  .side,
   .player {
     min-width: 0;
     min-height: 0;
     overflow: hidden;
+  }
+  .side {
+    display: grid;
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 0.5rem;
   }
   .player p {
     color: #777;

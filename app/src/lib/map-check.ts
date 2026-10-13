@@ -2,7 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { line, type Path } from "./route";
-import type { LonLat, RideDocument, RideSummary } from "./types";
+import type { LonLat, RideDocument, RideEvent, RideSummary } from "./types";
 
 /** 確認のために `RouteMap` が見せる口。 */
 export interface MapHandle {
@@ -18,6 +18,9 @@ export interface MapHandle {
 export interface AppHandle {
   /** 道路データを開く。重ねないなら null */
   loadRoads: (() => Promise<void>) | null;
+  /** 判定用データを開く。抽出を確かめないなら null */
+  loadGeo: (() => Promise<void>) | null;
+  events(): RideEvent[];
   create(rideDate: string): Promise<void>;
   edit(change: (path: Path) => Path): Promise<void>;
   path(): Path;
@@ -92,5 +95,23 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     list: await app.list(),
   });
 
-  return { steps, captures: [edited] };
+  const captures = [edited];
+  if (app.loadGeo !== null) {
+    // 碓氷峠。軽井沢町から安中市へ、県境をまたぐ線を引く。
+    await app.loadGeo();
+    await app.create("2026-10-04");
+    map.jump([138.66, 36.35], 12);
+    await map.idle();
+    map.click([138.62, 36.345]);
+    await sleep(300);
+    map.click([138.7, 36.36]);
+    await sleep(2500);
+    note("県境をまたぐ線を引く", "県境と市区町村境のイベントが 1 件ずつできる", {
+      events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}`),
+      message: app.message(),
+    });
+    captures.push(await capture("events"));
+  }
+
+  return { steps, captures };
 }
