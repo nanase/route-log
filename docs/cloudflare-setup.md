@@ -96,11 +96,24 @@ mise exec -- bun wrangler secret put ACCESS_AUD
 
 ## 9. 確かめる
 
+まず、ヘッダを付けない要求が通らないことを確かめます。Access のエラー画面（403）が返れば、Access が前に立っています。
+
 ```sh
-curl -H "CF-Access-Client-Id: <Client ID>" -H "CF-Access-Client-Secret: <Client Secret>" https://routelog.example.com/api/rides
+curl -i https://routelog.example.com/api/rides
 ```
 
-`[]` が返れば通っています。ヘッダを付けない要求が通らないことも確かめてください。
+サービストークンを付けた要求は、手順 10 のアプリで確かめます。curl のコマンドに Client Secret を書くと、シェルの履歴に残るためです。
+
+どうしても curl で確かめるなら、値を画面にも履歴にも出さずに読み込みます。
+
+```sh
+read -rs CLIENT_ID      # Client ID を貼って Enter。画面には出ない
+read -rs CLIENT_SECRET  # Client Secret を貼って Enter
+curl -H "CF-Access-Client-Id: $CLIENT_ID" -H "CF-Access-Client-Secret: $CLIENT_SECRET" https://routelog.example.com/api/rides
+unset CLIENT_ID CLIENT_SECRET
+```
+
+`[]` が返れば通っています。
 
 ## 10. アプリに設定する
 
@@ -134,14 +147,16 @@ mise exec -- bun wrangler delete          # Worker を消す
 
 D1 と R2 は、ダッシュボードか `wrangler d1 delete` / `wrangler r2 bucket delete` で消します。Access のアプリケーションとサービストークンは、ダッシュボードで消します。
 
-## まだ確かめていないこと
+## 確かめたことと、まだのこと
 
-手元の Worker では、その場で作った鍵で署名したトークンを使って API を確かめました。本物の Access を通した確認は、この手順が初めてになります。
+2026-10-13 に、この手順で `routelog.nanase.cc` を作りました。
 
-- サービストークンのトークンが、持ち主を `common_name` に持つこと
-  - 違っていたら、`routelog-access` の持ち主の読み方を直す
-- 手順 7・8 の画面の細かい名前
-  - サービストークンの画面と、アプリケーションを作り始める所までは、Cloudflare の文書で確かめた
-  - ポリシーの条件の欄の名前と、AUD タグの置き場所は、文書では確かめられなかった
-- GitHub Actions からのデプロイ
-  - まだ組んでいない。いまは手元から `wrangler deploy` する
+- 確かめたこと
+  - `ACCESS_AUD` を置く前は、Worker がすべての要求を 403 で拒む
+  - Access のアプリケーションを作ると、ヘッダの無い要求は Access のエラー画面（403）で止まる
+  - アプリにサービストークンを入れると、一覧を取れる。サービストークンのトークンは、持ち主を `common_name` に持つ
+- 初回のデプロイで出たエラー
+  - `This Worker does not exist on your account. [code: 10007]` が出た。アップロードは済んでいて、もう一度 `wrangler deploy` を実行すると通った
+- まだのこと
+  - 手順 7・8 の画面の細かい名前。ポリシーの条件の欄の名前と、AUD タグの置き場所は、Cloudflare の文書では確かめられなかった
+  - GitHub Actions からのデプロイ。いまは手元から `wrangler deploy` する

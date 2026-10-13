@@ -18,7 +18,7 @@ command = "worker-build --release"
 binding = "DB"
 database_name = "routelog"
 # `wrangler d1 create routelog` が割り当てる。作ったら書き換える。
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "78c92a03-5569-4a8f-b640-a294756b02e2"
 
 # 経路の線。
 [[r2_buckets]]
@@ -28,11 +28,12 @@ bucket_name = "routelog-routes"
 # Access のチームのドメイン。`<team>.cloudflareaccess.com` の形で、秘密ではない。
 # 空のあいだは、すべての要求を拒む。
 [vars]
-ACCESS_TEAM_DOMAIN = ""
+ACCESS_TEAM_DOMAIN = "nanase.cloudflareaccess.com"
 
-# ホスト名は決まってから足す。
-# [[routes]]
-# pattern = "routelog.example.com"
-# custom_domain = true
+# API のホスト名。ルートのパターンではなくカスタムドメインにする。DNS のレコードを
+# Cloudflare が作って持つので、設定がこのファイルだけで読める。
+[[routes]]
+pattern = "routelog.nanase.cc"
+custom_domain = true
 
 # シークレットはここに書かない。`wrangler secret put ACCESS_AUD` で置く。
