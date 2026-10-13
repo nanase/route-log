@@ -10,6 +10,9 @@
 //        ACCESS_CERTS_URL=http://127.0.0.1:8799/certs
 //   2. bun run migrate:local
 //   3. node test/local.mjs を先に起動し、鍵を配り始めたら bun run dev を起動する
+//
+// アプリからの同期を確かめるときは、node test/local.mjs --token とする。1 時間使える
+// トークンを 1 行出し、止められるまで鍵を配り続ける。
 
 import { createSign, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
@@ -52,6 +55,11 @@ const document = (updated_at, title = "碓氷峠") => ({
     { id: "0199c0de-0000-7000-8000-0000000000e2", kind: "road", label: "国道18号", route_m: 120.5, time_ms: null, status: "estimated", detail: { routes: [{ class: "national", number: 18 }], extracted_label: "国道18号" } },
   ],
 });
+
+if (process.argv.includes("--token")) {
+  console.log(token({ exp: Math.floor(Date.now() / 1000) + 3600 }));
+  await new Promise(() => {});
+}
 
 let failed = 0;
 function check(name, actual, expected) {

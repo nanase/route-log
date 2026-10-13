@@ -3,6 +3,7 @@ mod config;
 mod events;
 mod rides;
 mod store;
+mod sync;
 mod videos;
 
 use std::path::PathBuf;
@@ -44,6 +45,8 @@ pub fn run() {
             let dir = config::data_dir(app.handle())?;
             app.manage(store::Store::new(dir.join("rides")));
             app.manage(config::ConfigFile::open(dir.join("config.json")));
+            app.manage(sync::Synced::open(dir.join("sync.json")));
+            sync::init_credentials();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -59,6 +62,11 @@ pub fn run() {
             rides::load_ride,
             rides::create_ride,
             rides::save_ride,
+            sync::get_sync_settings,
+            sync::set_sync_settings,
+            sync::sync_list,
+            sync::sync_push,
+            sync::sync_pull,
             videos::scan_videos,
             videos::build_timeline,
             videos::locate,

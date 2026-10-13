@@ -8,6 +8,7 @@
 //! - `ROUTELOG_CHECK_MAP`: 地図の表示と経路の編集・保存を確かめる。値は道路データのフォルダで、
 //!   重ねないなら `-`
 //! - `ROUTELOG_CHECK_GEO`: 地図の確認に、イベントの抽出を足す。値は判定用データのフォルダ
+//! - `ROUTELOG_CHECK_SYNC`: クラウドとの同期を確かめる。値は API の URL で、手元で動かした Worker を指す
 //! - `ROUTELOG_CHECK_REPORT`: 報告（JSON）の書き先。画面の写しは同じ場所に PNG で書く
 
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ const FILE: &str = "ROUTELOG_CHECK_FILE";
 const DIR: &str = "ROUTELOG_CHECK_DIR";
 const MAP: &str = "ROUTELOG_CHECK_MAP";
 const GEO: &str = "ROUTELOG_CHECK_GEO";
+const SYNC: &str = "ROUTELOG_CHECK_SYNC";
 const REPORT: &str = "ROUTELOG_CHECK_REPORT";
 
 #[derive(Serialize)]
@@ -26,6 +28,7 @@ pub struct Target {
     dir: Option<String>,
     map: Option<String>,
     geo: Option<String>,
+    sync: Option<String>,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -52,6 +55,7 @@ pub fn check_target() -> Target {
         dir: var(DIR),
         map: var(MAP),
         geo: var(GEO),
+        sync: var(SYNC),
     }
 }
 

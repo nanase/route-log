@@ -12,11 +12,13 @@ use crate::config::ConfigFile;
 use crate::events::Extractor;
 use crate::store::{RideSummary, Store};
 
+/// いまの時刻。更新時刻は、手元とクラウドのどちらが新しいかを見分けるのに使う。同じ秒の
+/// うちに保存と同期が続いても見分けられるよう、ミリ秒まで持つ。
 fn now() -> String {
     let unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64);
-    jst::iso(unix_ms)
+    jst::iso_millis(unix_ms)
 }
 
 #[tauri::command]

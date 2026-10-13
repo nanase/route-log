@@ -19,9 +19,12 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
+keyring-core = "1"
+ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v7"] }
 
 # 画面の写し（自動の確認）に使う。版は tauri が使うものに合わせる。
 [target."cfg(windows)".dependencies]
 webview2-com = "0.39"
+windows-native-keyring-store = "1"
 windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }

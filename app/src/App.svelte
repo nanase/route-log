@@ -18,6 +18,8 @@
   import { pointAt } from "./lib/geo";
   import { KINDS } from "./lib/kinds";
   import { runMapCheck } from "./lib/map-check";
+  import { runSyncCheck } from "./lib/sync-check";
+  import SyncPanel from "./lib/SyncPanel.svelte";
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
   import { line, type Path } from "./lib/route";
@@ -41,7 +43,7 @@
 
   /** 自動の確認の対象。`undefined` は問い合わせ中 */
   let check = $state<
-    { file: string | null; dir: string | null; map: string | null; geo: string | null } | undefined
+    { file: string | null; dir: string | null; map: string | null; geo: string | null; sync: string | null } | undefined
   >(undefined);
   let player = $state<Player>();
   let routeMap = $state<RouteMap>();
@@ -57,6 +59,9 @@
   let geoReady = $state(false);
   /** 新しく足す区間を、道に沿わせるか */
   let snapNew = $state(false);
+  /** 同期の画面を開いているか */
+  let syncOpen = $state(false);
+  let syncPanel = $state<SyncPanel>();
   /** 経路が変わっていて、次の保存でイベントを抽出し直すか */
   let extractNeeded = false;
   /** 動画の再生位置の実時刻 */
@@ -120,6 +125,7 @@
     if (check?.file) return;
     if (check?.dir && check.geo) return checkConfirm(check.dir, check.geo);
     if (check?.dir) return checkTimeline(check.dir);
+    if (check?.sync) return checkSync(check.sync);
     if (check?.map) return checkMap(check.map);
     const config = await invoke<Config>("get_config");
     if (config.road_data_dir) await loadRoads(config.road_data_dir);
@@ -392,6 +398,44 @@
     await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
   }
 
+  /** 受け取りで手元の走行が変わった。一覧と、開いている走行を読み直す。 */
+  async function reload() {
+    stored = await invoke("list_rides");
+    if (date !== null) {
+      clearTimeout(saveTimer);
+      saveTimer = undefined;
+      await select(date);
+    }
+  }
+
+  /** クラウドとの同期を確かめて、報告を書いて終了する。 */
+  async function checkSync(apiUrl: string) {
+    let report: unknown;
+    try {
+      while (routeMap === undefined) await sleep(100);
+      report = await runSyncCheck(apiUrl, routeMap, {
+        create: async (rideDate) => {
+          newDate = rideDate;
+          await createRide();
+        },
+        setTitle: async (title) => {
+          await edit((current) => ({ ...current, ride: { ...current.ride, title } }));
+          await flush();
+        },
+        doc: () => doc,
+        openSync: async () => {
+          await flush();
+          syncOpen = true;
+          while (syncPanel === undefined) await sleep(100);
+          return syncPanel;
+        },
+      });
+    } catch (e) {
+      report = { error: String(e), message };
+    }
+    await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
+  }
+
   /** 地図の表示と、経路の編集・保存を確かめて、報告を書いて終了する。 */
   async function checkMap(roadDir: string) {
     let report: unknown;
@@ -441,6 +485,13 @@
       >
         <input type="checkbox" bind:checked={snapNew} disabled={!geoReady} />道に沿わせる
       </label>
+      <button
+        type="button"
+        onclick={async () => {
+          await flush();
+          syncOpen = true;
+        }}>同期</button
+      >
       <span class="message">{message}</span>
       {#if date !== null}
         <input
@@ -525,6 +576,9 @@
       {/if}
     </div>
   </main>
+  {#if syncOpen}
+    <SyncPanel bind:this={syncPanel} onchanged={reload} onclose={() => (syncOpen = false)} />
+  {/if}
 {/if}
 
 <style>

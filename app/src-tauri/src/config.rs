@@ -33,6 +33,9 @@ pub struct Config {
     /// 判定用データ（FlatGeobuf）があるフォルダ。
     #[serde(default)]
     pub geo_data_dir: Option<String>,
+    /// 走行ログの API の URL。
+    #[serde(default)]
+    pub api_url: Option<String>,
 }
 
 pub struct ConfigFile {

@@ -104,6 +104,15 @@ pub fn iso(unix_ms: i64) -> String {
     )
 }
 
+/// `YYYY-MM-DDThh:mm:ss.sss+09:00`。更新時刻のように、続けて起きたことを見分けたいときに使う。
+pub fn iso_millis(unix_ms: i64) -> String {
+    let c = from_unix_ms(unix_ms);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}+09:00",
+        c.year, c.month, c.day, c.hour, c.minute, c.second, c.millisecond
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +143,7 @@ mod tests {
             Some(946_684_800_000)
         );
         assert_eq!(iso(946_684_800_000), "2000-01-01T09:00:00+09:00");
+        assert_eq!(iso_millis(946_684_800_042), "2000-01-01T09:00:00.042+09:00");
     }
 
     #[test]
