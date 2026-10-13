@@ -56,9 +56,11 @@ pub struct Saved {
     updated_at: String,
     length_m: f64,
     events: Vec<Event>,
+    /// 位置が先なのに時刻が後になっている、確定済みのイベントの ID。
+    conflicts: Vec<String>,
 }
 
-/// 走行を保存し、更新時刻・経路の長さ・イベントを返す。
+/// 走行を保存し、更新時刻・経路の長さ・イベントを返す。イベントの時刻は、保存の前に推定し直す。
 ///
 /// `extract` なら、保存の前に経路からイベントを抽出し直す。判定用データを開いていなければ、
 /// イベントはそのままにする。
@@ -81,11 +83,18 @@ pub async fn save_ride(
         doc = returned;
         doc.events = events.map_err(|e| e.to_string())?;
     }
+    let conflicts = routelog_core::refresh(&mut doc);
+    for event in &mut doc.events {
+        if event.id.is_empty() {
+            event.id = uuid::Uuid::now_v7().hyphenated().to_string();
+        }
+    }
     doc.ride.updated_at = now();
     app.state::<Store>().save(&doc).map_err(|e| e.to_string())?;
     Ok(Saved {
         length_m: doc.length_m(),
         updated_at: doc.ride.updated_at,
         events: doc.events,
+        conflicts,
     })
 }

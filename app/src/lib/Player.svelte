@@ -1,17 +1,38 @@
 <script lang="ts">
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { clock, hms } from "./time";
   import type { Position, Timeline } from "./types";
 
   /** 分割された動画を、実時刻の 1 本の軸として再生する。 */
-  let { timeline, muted = false }: { timeline: Timeline; muted?: boolean } = $props();
+  let {
+    timeline,
+    muted = false,
+    ticks = [],
+    note = "",
+    ontime,
+  }: {
+    timeline: Timeline;
+    muted?: boolean;
+    /** タイムラインに出すイベントの時刻 */
+    ticks?: { time_ms: number; confirmed: boolean }[];
+    /** 動画の下に出す 1 行。次のイベントの案内に使う */
+    note?: string;
+    /** 再生位置の実時刻が変わるたびに呼ぶ */
+    ontime?: (realMs: number) => void;
+  } = $props();
+
+  /** 逆再生で 1 回に戻る間隔。負の再生速度が使えないので、シークを繰り返す */
+  const REVERSE_STEP_MS = 300;
 
   let video: HTMLVideoElement;
   /** いま読み込んでいるファイルの番号。まだ無ければ -1 */
   let file = $state(-1);
   let realMs = $state(0);
   let offsetMs = $state(0);
+  /** 再生の倍率。負なら逆再生、0 なら停止 */
+  let rate = $state(0);
+  let reverseTimer: ReturnType<typeof setInterval> | undefined;
   let loadedPath = "";
   /** 読み込みが済んだら移る位置 */
   let pending: { offsetMs: number; play: boolean } | null = null;
@@ -29,6 +50,9 @@
       show({ file: 0, offset_ms: 0 }, false);
     }
   });
+
+  $effect(() => ontime?.(realMs));
+  onDestroy(() => clearInterval(reverseTimer));
 
   function show(position: Position, play: boolean) {
     const target = timeline.files[position.file];
@@ -48,6 +72,8 @@
   function onloadedmetadata() {
     if (pending === null) return;
     video.currentTime = pending.offsetMs / 1000;
+    // ファイルを替えると倍率が 1 に戻るので、掛け直す。
+    video.playbackRate = rate > 0 ? rate : 1;
     if (pending.play) void video.play();
     pending = null;
   }
@@ -76,8 +102,27 @@
     if (position !== null) show(position, !video.paused);
   }
 
-  export const play = () => void video.play();
-  export const pause = () => video.pause();
+  /** 再生の倍率を変える。負なら逆再生、0 なら停止。 */
+  function setRate(next: number) {
+    clearInterval(reverseTimer);
+    reverseTimer = undefined;
+    rate = next;
+    if (next > 0) {
+      video.playbackRate = next;
+      void video.play();
+    } else {
+      video.pause();
+      video.playbackRate = 1;
+      if (next < 0) reverseTimer = setInterval(() => void seek(now() + REVERSE_STEP_MS * rate), REVERSE_STEP_MS);
+    }
+  }
+
+  export const play = () => setRate(1);
+  export const pause = () => setRate(0);
+  /** 再生位置の実時刻。画面の表示より新しい */
+  export function now(): number {
+    return file < 0 ? realMs : timeline.spans[file].start_ms + video.currentTime * 1000;
+  }
   /** いまの状態。自動の確認が読む。 */
   export const snapshot = () => ({
     file: timeline.files[file]?.name ?? "",
@@ -91,12 +136,20 @@
     const target = event.target;
     // 文字を打つ欄では何もしない。タイムラインのつまみは、こちらの動きに揃える。
     if (target instanceof HTMLInputElement && target.type !== "range") return;
-    if (event.key === " ") {
-      if (video.paused) void video.play();
-      else video.pause();
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === " ") {
+      setRate(video.paused && rate >= 0 ? 1 : 0);
+    } else if (key === "k") {
+      setRate(0);
+    } else if (key === "l") {
+      // 続けて押すと 2 倍、4 倍になる。
+      setRate(rate > 0 ? Math.min(rate * 2, 4) : 1);
+    } else if (key === "j") {
+      setRate(rate < 0 ? Math.max(rate * 2, -4) : -1);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       const step = (event.shiftKey ? 10_000 : 1000) * (event.key === "ArrowLeft" ? -1 : 1);
-      void seek(realMs + step);
+      void seek(now() + step);
     } else {
       return;
     }
@@ -108,13 +161,15 @@
 
 <section>
   <!-- svelte-ignore a11y_media_has_caption -->
-  <video bind:this={video} muted={muted} {onloadedmetadata} {ontimeupdate} onended={() => next(true)}></video>
+  <video bind:this={video} muted={muted} {onloadedmetadata} {ontimeupdate} onended={() => next(rate > 0)}></video>
 
   <p class="now">
     <strong>{clock(realMs)}</strong>
     <span>{hms(offsetMs)}</span>
     <span>{timeline.files[file]?.name ?? ""}</span>
+    {#if rate !== 0 && rate !== 1}<span class="rate">×{rate}</span>{/if}
   </p>
+  <p class="note">{note}</p>
 
   <div class="bar">
     {#each timeline.spans as span (span.file)}
@@ -124,6 +179,11 @@
         style:left="{percent(span.start_ms)}%"
         style:width="{percent(span.end_ms) - percent(span.start_ms)}%"
       ></div>
+    {/each}
+    {#each ticks as tick}
+      {#if tick.time_ms >= startMs && tick.time_ms <= endMs}
+        <div class="tick" class:confirmed={tick.confirmed} style:left="{percent(tick.time_ms)}%"></div>
+      {/if}
     {/each}
     <div class="head" style:left="{percent(realMs)}%"></div>
     <input
@@ -163,7 +223,7 @@
 <style>
   section {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) auto auto auto auto;
+    grid-template-rows: minmax(0, 1fr) auto auto auto auto auto;
     grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
     height: 100%;
@@ -202,6 +262,31 @@
   }
   .span.current {
     background: #1f4e79;
+  }
+  .rate {
+    color: #d33;
+    font-weight: bold;
+  }
+  .note {
+    min-height: 1.3em;
+    margin: 0;
+    overflow: hidden;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .tick {
+    position: absolute;
+    top: 0;
+    width: 0;
+    height: 40%;
+    border-left: 2px solid #f8f9fa;
+    opacity: 0.8;
+  }
+  .tick.confirmed {
+    height: 100%;
+    border-left-color: #ffd43b;
+    opacity: 1;
   }
   .head {
     position: absolute;

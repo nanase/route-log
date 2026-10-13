@@ -2,14 +2,27 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
+  import { runConfirmCheck } from "./lib/confirm-check";
   import EventList from "./lib/EventList.svelte";
+  import {
+    confirmOnVideo,
+    customAt,
+    defaultTarget,
+    knotsOf,
+    neighbor,
+    nextConfirmable,
+    patch,
+    positionAt,
+    unconfirm,
+  } from "./lib/events";
   import { pointAt } from "./lib/geo";
+  import { KINDS } from "./lib/kinds";
   import { runMapCheck } from "./lib/map-check";
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
   import { line, type Path } from "./lib/route";
   import RouteMap from "./lib/RouteMap.svelte";
-  import { hms } from "./lib/time";
+  import { clock, hms } from "./lib/time";
   import { runTimelineCheck } from "./lib/timeline-check";
   import type {
     Config,
@@ -44,6 +57,14 @@
   let geoReady = $state(false);
   /** 経路が変わっていて、次の保存でイベントを抽出し直すか */
   let extractNeeded = false;
+  /** 動画の再生位置の実時刻 */
+  let nowMs = $state(0);
+  /** 人が選んだ、次に確定する相手。選んでいなければ推定時刻から決める */
+  let chosenId = $state<string | null>(null);
+  /** 位置が先なのに時刻が後になっている、確定済みのイベントの ID */
+  let conflicts = $state<string[]>([]);
+  /** 動画を見て確定したイベントの ID。Backspace で新しい順に戻す */
+  let confirmedOnVideo: string[] = [];
   let lengthM = $state(0);
   let timeline = $state<Timeline | null>(null);
   let newDate = $state("");
@@ -56,6 +77,34 @@
   const files = $derived(videos.find((v) => v.date === date)?.files ?? []);
   const clockOffsetMs = $derived(doc?.ride.clock_offset_ms ?? 0);
   const routeLine = $derived(doc === null ? [] : line(doc));
+  const events = $derived(doc?.events ?? []);
+  const target = $derived(
+    events.find((event) => event.id === chosenId) ?? (timeline === null ? null : defaultTarget(events, nowMs)),
+  );
+  /** 動画のいまの時刻にいると推定される位置 */
+  const here = $derived.by(() => {
+    if (timeline === null) return null;
+    const routeM = positionAt(knotsOf(events), nowMs);
+    return routeM === null ? null : pointAt(routeLine, routeM);
+  });
+  const ticks = $derived(
+    events.flatMap((event) =>
+      event.status === "hidden" || event.time_ms === null
+        ? []
+        : [{ time_ms: event.time_ms, confirmed: event.status === "confirmed" }],
+    ),
+  );
+  const note = $derived.by(() => {
+    if (target === null || timeline === null) return "";
+    // 出発と到着は、名前を直していなければ種類と同じ語になる。重ねて出さない。
+    const kind = KINDS[target.kind];
+    const name = target.label === kind ? kind : `${kind} ${target.label || "（名前なし）"}`;
+    if (target.status === "confirmed") return `選択中: ${name} — 確定済み。Enter で確定し直す`;
+    if (target.time_ms === null) return `次: ${name} — Enter で確定`;
+    const rest = target.time_ms - nowMs;
+    const when = rest >= 0 ? `あと ${hms(rest)}` : `${hms(-rest)} 前`;
+    return `次: ${name} — 推定 ${clock(target.time_ms)}（${when}）Enter で確定`;
+  });
   const marks = $derived(
     (doc?.events ?? []).flatMap((event) => {
       const at = pointAt(routeLine, event.route_m);
@@ -67,6 +116,7 @@
     check = await invoke("check_target");
     stored = await invoke("list_rides");
     if (check?.file) return;
+    if (check?.dir && check.geo) return checkConfirm(check.dir, check.geo);
     if (check?.dir) return checkTimeline(check.dir);
     if (check?.map) return checkMap(check.map);
     const config = await invoke<Config>("get_config");
@@ -128,6 +178,9 @@
     doc = summary ? await invoke<RideDocument>("load_ride", { id: summary.id }) : null;
     lengthM = summary?.length_m ?? 0;
     date = next;
+    chosenId = null;
+    conflicts = [];
+    confirmedOnVideo = [];
   }
 
   /** 開いている日付の走行を、無ければ作って返す。日付を選んでいなければ null。 */
@@ -139,7 +192,7 @@
     return doc;
   }
 
-  async function edit(change: (current: RideDocument) => RideDocument) {
+  async function edit(change: (current: RideDocument) => RideDocument, delayMs = SAVE_DELAY_MS) {
     const current = await ensureDoc();
     if (current === null) {
       message = "走行を選ぶか、日付を入れて作ってください";
@@ -149,7 +202,7 @@
     if (next.waypoints !== current.waypoints || next.route !== current.route) extractNeeded = true;
     doc = next;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(flush, SAVE_DELAY_MS);
+    saveTimer = setTimeout(flush, delayMs);
   }
 
   /** 待っている保存があれば、いま書く。 */
@@ -161,14 +214,17 @@
     const extract = extractNeeded;
     extractNeeded = false;
     try {
-      const saved = await invoke<{ updated_at: string; length_m: number; events: RideEvent[] }>("save_ride", {
-        doc: saving,
-        extract,
-      });
+      const saved = await invoke<{
+        updated_at: string;
+        length_m: number;
+        events: RideEvent[];
+        conflicts: string[];
+      }>("save_ride", { doc: saving, extract });
       lengthM = saved.length_m;
-      // 保存を待つ間に経路が変わっていたら、返ってきたイベントは古い。次の保存に任せる。
-      if (doc !== null && doc.waypoints === saving.waypoints && doc.route === saving.route) {
+      // 保存を待つ間に編集が進んでいたら、返ってきたイベントは古い。次の保存に任せる。
+      if (doc === saving) {
         doc = { ...doc, events: saved.events };
+        conflicts = saved.conflicts;
       }
       stored = stored.map((s) =>
         s.id === saving.ride.id
@@ -179,6 +235,64 @@
       extractNeeded ||= extract;
       message = `保存できません: ${e}`;
     }
+  }
+
+  /** イベントを書き換える。時刻の推定をすぐ見せたいので、待たずに保存する。 */
+  function editEvents(change: (events: RideEvent[]) => RideEvent[]) {
+    return edit((current) => ({ ...current, events: change(current.events) }), 0);
+  }
+
+  /** 一覧で選んだイベントを次に確定する相手にして、地図と動画をそこへ動かす。 */
+  function choose(event: RideEvent) {
+    chosenId = event.id;
+    const at = pointAt(routeLine, event.route_m);
+    if (at !== null) routeMap?.focus(at, event.label || KINDS[event.kind]);
+    if (event.time_ms !== null) void player?.seek(event.time_ms);
+  }
+
+  /** 次に確定する相手を、動画のいまの位置の時刻で確定する。 */
+  function confirmTarget() {
+    if (player === undefined || target === null || doc === null) return;
+    const [id, realMs, offsetMs] = [target.id, player.now(), clockOffsetMs];
+    confirmedOnVideo.push(id);
+    chosenId = nextConfirmable(events, id)?.id ?? null;
+    void editEvents((current) => patch(current, id, (event) => confirmOnVideo(event, realMs, offsetMs)));
+  }
+
+  /** 動画を見て確定したもののうち、いちばん新しい確定を外す。 */
+  function undoConfirm() {
+    const id = confirmedOnVideo.pop();
+    if (id === undefined) return;
+    chosenId = id;
+    void editEvents((current) => patch(current, id, unconfirm));
+  }
+
+  /** 動画のいまの位置に、手動のイベントを足す。 */
+  function addCustom() {
+    if (player === undefined || doc === null) return;
+    const custom = customAt(player.now(), clockOffsetMs, "メモ");
+    chosenId = custom.id;
+    void editEvents((current) => [...current, custom]);
+  }
+
+  /** 次に確定する相手を隣のイベントへ移し、動画をその時刻へ動かす。 */
+  function move(step: 1 | -1) {
+    const next = neighbor(events, target?.id ?? chosenId, step);
+    if (next !== null) choose(next);
+  }
+
+  function onkeydown(event: KeyboardEvent) {
+    const from = event.target;
+    if (from instanceof HTMLInputElement || from instanceof HTMLTextAreaElement) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "enter") confirmTarget();
+    else if (key === "n") move(1);
+    else if (key === "p") move(-1);
+    else if (key === "backspace") undoConfirm();
+    else if (key === "a") addCustom();
+    else return;
+    event.preventDefault();
   }
 
   async function createRide() {
@@ -217,6 +331,38 @@
     await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
   }
 
+  /** 動画を見ながらの時刻の確定を確かめて、報告を書いて終了する。 */
+  async function checkConfirm(videoDir: string, geoDir: string) {
+    let report: unknown;
+    try {
+      await loadVideos(videoDir);
+      await select(dates[dates.length - 1]);
+      await loadGeo(geoDir);
+      while (timeline === null || player === undefined || routeMap === undefined) await sleep(100);
+      report = await runConfirmCheck(timeline, player, routeMap, {
+        events: () => events,
+        target: () => target?.id ?? null,
+        choose: (id) => {
+          const event = events.find((e) => e.id === id);
+          if (event) choose(event);
+        },
+        setClockOffsetSeconds: (seconds) =>
+          edit((current) => ({ ...current, ride: { ...current.ride, clock_offset_ms: seconds * 1000 } })),
+        changeEvent: (id, change) => editEvents((current) => patch(current, id, change)),
+        settled: async () => {
+          await sleep(100);
+          await flush();
+          await sleep(300);
+        },
+        rideDate: () => date ?? "",
+        message: () => message,
+      });
+    } catch (e) {
+      report = { error: String(e), message };
+    }
+    await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
+  }
+
   /** 地図の表示と、経路の編集・保存を確かめて、報告を書いて終了する。 */
   async function checkMap(roadDir: string) {
     let report: unknown;
@@ -225,7 +371,7 @@
       report = await runMapCheck(routeMap, {
         loadRoads: roadDir === "-" ? null : () => loadRoads(roadDir),
         loadGeo: check?.geo ? () => loadGeo(check!.geo!) : null,
-        events: () => doc?.events ?? [],
+        events: () => events,
         create: async (rideDate) => {
           newDate = rideDate;
           await createRide();
@@ -249,6 +395,8 @@
   const videosOf = (rideDate: string) => videos.find((v) => v.date === rideDate);
   const totalMs = (ride: RideVideos) => ride.files.reduce((sum, file) => sum + file.duration_ms, 0);
 </script>
+
+<svelte:window {onkeydown} />
 
 {#if check?.file}
   <PlaybackCheck target={check.file} />
@@ -306,24 +454,35 @@
         rideId={date}
         {roads}
         {marks}
+        {here}
         onchange={(path) => edit((current) => ({ ...current, ...path }))}
       />
     </div>
     <div class="side">
       <div class="player">
         {#if timeline !== null}
-          <Player bind:this={player} {timeline} muted={check.dir !== null} />
+          <Player
+            bind:this={player}
+            {timeline}
+            {ticks}
+            {note}
+            muted={check.dir !== null}
+            ontime={(realMs) => (nowMs = realMs)}
+          />
         {:else if date !== null}
           <p>この日付の動画はありません。</p>
         {/if}
       </div>
       {#if date !== null}
         <EventList
-          events={doc?.events ?? []}
-          onselect={(event) => {
-            const at = pointAt(routeLine, event.route_m);
-            if (at !== null) routeMap?.focus(at, event.label || "（名前なし）");
-          }}
+          {events}
+          targetId={target?.id ?? null}
+          {conflicts}
+          gaps={timeline?.gaps ?? []}
+          rideDate={date}
+          onselect={choose}
+          onchange={(id, change) => editEvents((current) => patch(current, id, change))}
+          onremove={(id) => editEvents((current) => current.filter((event) => event.id !== id))}
           onextract={geoReady ? extractAgain : null}
         />
       {/if}

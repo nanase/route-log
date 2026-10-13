@@ -32,7 +32,7 @@ impl Extractor {
         Ok(prepared)
     }
 
-    /// 経路からイベントを抽出し直し、人が手を入れた結果を引き継ぐ。新しいイベントには ID を振る。
+    /// 経路からイベントを抽出し直し、人が手を入れた結果を引き継ぐ。
     pub fn extract(
         &self,
         dir: &Path,
@@ -45,12 +45,6 @@ impl Extractor {
                 .extract(&line, &Options::default()),
             _ => Vec::new(),
         };
-        let mut events = carry_over(&doc.events, extracted);
-        for event in &mut events {
-            if event.id.is_empty() {
-                event.id = uuid::Uuid::now_v7().hyphenated().to_string();
-            }
-        }
-        Ok(events)
+        Ok(carry_over(&doc.events, extracted))
     }
 }

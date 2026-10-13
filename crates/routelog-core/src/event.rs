@@ -63,6 +63,18 @@ pub struct EventDetail {
     /// `bridge`・`tunnel`：終わりの位置（m）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_m: Option<f64>,
+    /// 抽出したときの名前。人が名前を直しても、抽出し直したときに同じイベントだと分かる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted_label: Option<String>,
+    /// 動画を見て確定したときの、カメラの時計での時刻（Unix ミリ秒）。
+    ///
+    /// 通過時刻はこれに時計の補正値を足したものになる。補正値を後から変えると、
+    /// 動画で確定した時刻も一緒に動く。手で入力した時刻は持たない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_ms: Option<i64>,
+    /// 位置ではなく時刻が分かっているイベント。位置は時刻から求め、時刻推定の基準にはしない。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_time: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,13 +94,20 @@ pub struct Event {
 
 /// 経路から抽出し直したイベントに、人が手を入れた結果を引き継ぐ。
 ///
-/// - 抽出したイベントは、同じ種類・同じ名前で位置が近い元のイベントがあれば、その ID と
-///   状態と時刻を受け継ぐ。位置は新しい経路のものにする
+/// - 抽出したイベントは、同じ種類で、抽出したときの名前が同じで、位置が近い元のイベントが
+///   あれば、その ID・状態・時刻・人が直した名前を受け継ぐ。位置は新しい経路のものにする
 /// - 人が足したイベント（出発・到着・手動）は、そのまま残す
 /// - 受け継ぐ相手のいない元のイベントは消える
 ///
 /// 結果は位置の順に並ぶ。
 pub fn carry_over(existing: &[Event], extracted: Vec<Event>) -> Vec<Event> {
+    let extracted_label = |event: &Event| -> String {
+        let detail = &event.detail;
+        detail
+            .extracted_label
+            .clone()
+            .unwrap_or_else(|| event.label.clone())
+    };
     let mut taken = vec![false; existing.len()];
     let mut events: Vec<Event> = extracted
         .into_iter()
@@ -96,20 +115,21 @@ pub fn carry_over(existing: &[Event], extracted: Vec<Event>) -> Vec<Event> {
             let nearest = existing
                 .iter()
                 .enumerate()
-                .filter(|(i, old)| !taken[*i] && old.kind == event.kind && old.label == event.label)
+                .filter(|(i, old)| {
+                    !taken[*i] && old.kind == event.kind && extracted_label(old) == event.label
+                })
                 .map(|(i, old)| (i, (old.route_m - event.route_m).abs()))
                 .filter(|(_, distance)| *distance <= CARRY_OVER_M)
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             if let Some((i, _)) = nearest {
                 taken[i] = true;
                 let old = &existing[i];
+                event.detail.extracted_label = Some(event.label.clone());
+                event.detail.camera_ms = old.detail.camera_ms;
                 event.id = old.id.clone();
+                event.label = old.label.clone();
                 event.time_ms = old.time_ms;
-                // 人が決めた状態だけを受け継ぐ。推定のままなら、抽出が決めた状態（短い橋は
-                // 字幕にしない、など）を使う。
-                if old.status != EventStatus::Estimated {
-                    event.status = old.status;
-                }
+                event.status = old.status;
             }
             event
         })
@@ -249,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn an_estimated_event_takes_the_status_the_extraction_gives() {
+    fn a_short_bridge_a_person_chose_to_show_stays_shown() {
         let old = [event(
             "a",
             EventKind::Bridge,
@@ -262,8 +282,49 @@ mod tests {
         let new = carry_over(&old, vec![short]);
         assert_eq!(
             (new[0].id.as_str(), new[0].status),
-            ("a", EventStatus::Hidden)
+            ("a", EventStatus::Estimated)
         );
+    }
+
+    #[test]
+    fn a_name_a_person_gave_survives_and_still_matches_next_time() {
+        let old = [event(
+            "a",
+            EventKind::Bridge,
+            "",
+            1000.0,
+            EventStatus::Estimated,
+        )];
+        let mut named = carry_over(&old, vec![extracted(EventKind::Bridge, "", 1000.0)]);
+        named[0].label = "名無しだった橋".into();
+
+        let again = carry_over(&named, vec![extracted(EventKind::Bridge, "", 1050.0)]);
+        assert_eq!(
+            (
+                again[0].id.as_str(),
+                again[0].label.as_str(),
+                again[0].route_m
+            ),
+            ("a", "名無しだった橋", 1050.0)
+        );
+        assert_eq!(again[0].detail.extracted_label.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn the_camera_time_of_a_confirmed_event_is_kept() {
+        let mut old = event(
+            "a",
+            EventKind::Tunnel,
+            "白地トンネル",
+            1000.0,
+            EventStatus::Confirmed,
+        );
+        old.detail.camera_ms = Some(900);
+        let new = carry_over(
+            &[old],
+            vec![extracted(EventKind::Tunnel, "白地トンネル", 1010.0)],
+        );
+        assert_eq!(new[0].detail.camera_ms, Some(900));
     }
 
     #[test]

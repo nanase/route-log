@@ -180,11 +180,14 @@ fn event(kind: EventKind, label: String, route_m: f64) -> Event {
     Event {
         id: String::new(),
         kind,
+        detail: EventDetail {
+            extracted_label: Some(label.clone()),
+            ..EventDetail::default()
+        },
         label,
         route_m,
         time_ms: None,
         status: EventStatus::Estimated,
-        detail: EventDetail::default(),
     }
 }
 

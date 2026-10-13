@@ -98,7 +98,16 @@ export interface RideEvent {
   route_m: number;
   time_ms: number | null;
   status: EventStatus;
-  detail: { routes?: RouteRef[]; end_m?: number };
+  detail: {
+    routes?: RouteRef[];
+    end_m?: number;
+    /** 抽出したときの名前 */
+    extracted_label?: string;
+    /** 動画を見て確定したときの、カメラの時計での時刻 */
+    camera_ms?: number;
+    /** 位置ではなく時刻が分かっているイベント */
+    by_time?: boolean;
+  };
 }
 
 export interface RideDocument {

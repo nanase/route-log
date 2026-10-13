@@ -30,6 +30,7 @@
     rideId,
     roads = null,
     marks = [],
+    here = null,
     onchange,
   }: {
     path: Path;
@@ -38,6 +39,8 @@
     roads?: RoadData | null;
     /** イベントの位置。地図に点で出す */
     marks?: { at: LonLat; label: string; hidden: boolean }[];
+    /** 動画のいまの時刻にいると推定される位置 */
+    here?: LonLat | null;
     onchange: (path: Path) => void;
   } = $props();
 
@@ -231,6 +234,23 @@
     (map?.getSource("marks") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features });
   });
 
+  let hereMarker: maplibregl.Marker | undefined;
+  $effect(() => {
+    if (!ready || map === undefined) return;
+    if (here === null) {
+      hereMarker?.remove();
+      hereMarker = undefined;
+      return;
+    }
+    if (hereMarker === undefined) {
+      const element = document.createElement("div");
+      element.className = "here";
+      hereMarker = new maplibregl.Marker({ element }).setLngLat(here).addTo(map);
+    } else {
+      hereMarker.setLngLat(here);
+    }
+  });
+
   // 道路の線は経路の下に重ねる。
   $effect(() => {
     if (!ready || roads === null || map === undefined || map.getSource("national")) return;
@@ -336,6 +356,7 @@
         middle: container.querySelectorAll(".handle.middle").length,
       },
       roads: { national: count("national"), prefectural: count("prefectural") },
+      here: hereMarker?.getLngLat().toArray() ?? null,
       errors: [...errors],
     };
   }
@@ -368,6 +389,16 @@
     height: 14px;
     border: 2px solid #e03131;
     background: #fff;
+  }
+  .map :global(.here) {
+    width: 16px;
+    height: 16px;
+    box-sizing: border-box;
+    border: 3px solid #fff;
+    border-radius: 50%;
+    background: #1c7ed6;
+    box-shadow: 0 0 0 2px #1c7ed6;
+    pointer-events: none;
   }
   .map :global(.handle.middle) {
     width: 10px;
