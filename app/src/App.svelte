@@ -31,6 +31,7 @@
   import RouteSide from "./lib/RouteSide.svelte";
   import RouteTools from "./lib/RouteTools.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
+  import { barState, CloudSync, NO_SYNC, type SyncView } from "./lib/sync";
   import { runSyncCheck } from "./lib/sync-check";
   import { hms, short } from "./lib/time";
   import TimelineBar from "./lib/Timeline.svelte";
@@ -70,7 +71,15 @@
 
   /** 自動の確認の対象。`undefined` は問い合わせ中 */
   let check = $state<
-    { file: string | null; dir: string | null; map: string | null; geo: string | null; sync: string | null } | undefined
+    | {
+        file: string | null;
+        dir: string | null;
+        map: string | null;
+        geo: string | null;
+        sync: string | null;
+        step: string | null;
+      }
+    | undefined
   >(undefined);
   let player = $state<Player>();
   let routeMap = $state<RouteMap>();
@@ -97,8 +106,10 @@
   let geoState = $state<FolderState>("none");
   /** 上の帯の下に出している知らせ */
   let notices = $state<Notice[]>([]);
-  /** 右下に出している、できたことの知らせ */
+  /** 右下に出している、短い知らせ */
   let toast = $state("");
+  /** 知らせの種類。できたことか、控えめに伝える注意か */
+  let toastTone = $state<"ok" | "warning">("ok");
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   /** 最後に出した知らせ。自動の確認が読む */
   let lastMessage = "";
@@ -127,11 +138,19 @@
   let confirmedOnVideo = $state.raw<string[]>([]);
   let timeline = $state<Timeline | null>(null);
   let saveState = $state<SaveState>("saved");
+  /**
+   * 待っている保存の予約。立てるのは、`queued` の中からだけにする。列の外で立てると、受け取った
+   * 走行を置いた直後や、走行を消した直後に、画面に残っていた古い内容を書いてしまう。
+   */
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** 書いている最中の保存。走行を消す前に、終わるのを待つ */
   let writing: Promise<void> | undefined;
-  /** 順に行う編集の列の、いちばん後ろ。`inTurn` が継ぎ足す */
+  /** 順に行う編集の列の、いちばん後ろ。`queued` が継ぎ足す */
   let editing: Promise<void> = Promise.resolve();
+  /** クラウドとの同期の状態 */
+  let syncView = $state.raw<SyncView>(NO_SYNC);
+  /** 起動のときに開く走行を、選び終えたか */
+  let booted = false;
   /** 経路の編集の取り消しとやり直し。編集の前の経路を、古い順に持つ */
   let undoStack = $state.raw<Path[]>([]);
   let redoStack = $state.raw<Path[]>([]);
@@ -193,6 +212,8 @@
   );
   /** 地図の縮尺を置く位置。左下に浮かせた板の右へ逃がす */
   const scaleLeft = $derived(mode === "confirm" ? 168 : hintsShown ? 362 : 112);
+  /** 上の帯に 1 つだけ出す、保存と同期の状態 */
+  const bar = $derived(barState(doc === null ? null : saveState, syncView));
   /** 上の帯に出す、開いている走行の動画の要約 */
   const videoSummary = $derived.by(() => {
     if (videoState === "loading") return "動画を読み込み中…";
@@ -211,12 +232,15 @@
     if (check?.dir) return checkTimeline(check.dir);
     if (check?.sync) return checkSync(check.sync);
     if (check?.map) return checkMap(check.map);
+    // クラウドとの突き合わせは裏で行い、画面を出すのを待たせない。
+    void sync.start();
     config = await invoke<Config>("get_config");
     if (config.road_data_dir) await loadRoads(config.road_data_dir);
     if (config.geo_data_dir) await loadGeo(config.geo_data_dir);
     if (config.video_dir) await loadVideos(config.video_dir);
     // 動画が無くても、記録のある走行があれば、いちばん新しいものを開いて始める。
     if (date === null && dates.length > 0) await select(dates[0]);
+    booted = true;
   });
 
   /** エラーか注意を、上の帯の下に出す。同じ事柄の知らせがあれば置き換える。 */
@@ -226,12 +250,13 @@
   }
 
   function dismiss(key: string) {
-    notices = notices.filter((notice) => notice.key !== key);
+    if (notices.some((notice) => notice.key === key)) notices = notices.filter((notice) => notice.key !== key);
   }
 
-  /** できたことを、右下に短い間だけ出す。 */
-  function tell(text: string) {
+  /** できたことを、右下に短い間だけ出す。`tone` が warning なら、控えめに伝える注意として出す。 */
+  function tell(text: string, tone: "ok" | "warning" = "ok") {
     toast = text;
+    toastTone = tone;
     lastMessage = text;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (toast = ""), TOAST_MS);
@@ -282,7 +307,7 @@
       await invoke("open_geo_data", { dir });
       geoState = "ready";
       tell("判定データを開きました");
-      extractAgain();
+      void extractAgain();
     } catch (e) {
       // 選ぶのは、roads.fgb・admin.fgb・michi-no-eki.fgb の 3 つが入ったフォルダである。
       geoState = "error";
@@ -293,11 +318,13 @@
 
   /** 開いている走行のイベントを、いまの経路から抽出し直す。 */
   function extractAgain() {
-    if (doc === null) return;
-    extractNeeded = true;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(flush, 0);
-    saveState = "pending";
+    return inTurn(() => {
+      if (doc === null) return;
+      extractNeeded = true;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(flush, 0);
+      saveState = "pending";
+    });
   }
 
   const FOLDERS: Record<Folder, { title: string; load: (dir: string) => Promise<void> }> = {
@@ -313,9 +340,13 @@
 
   const repick = (folder: Folder) => ({ label: "フォルダを選び直す", run: () => void pick(folder) });
 
-  async function select(next: string) {
-    // 待っている編集を、いまの走行に入れ終えてから切り替える。
-    await editing;
+  /** 走行を切り替える。待っている編集を、いまの走行に入れ終えてから切り替える。 */
+  function select(next: string): Promise<void> {
+    return queued(() => switchTo(next));
+  }
+
+  /** その日付の走行を読んで、画面に出す。`queued` の中からだけ呼ぶ。 */
+  async function switchTo(next: string) {
     await flush();
     const summary = stored.find((s) => s.ride_date === next);
     const loaded = summary ? await invoke<RideDocument>("load_ride", { id: summary.id }) : null;
@@ -335,17 +366,30 @@
   }
 
   /**
+   * 頼まれた順に 1 つずつ行う。前の仕事が済むまで、次を始めない。失敗は、頼んだ側に返す。
+   *
+   * 編集のほかに、走行の切り替え、クラウドから受け取った走行の置き換え、走行の削除も並べる。
+   * どれも開いている走行を入れ替えるので、編集の途中に挟まると、古い内容で上書きしてしまう。
+   */
+  function queued<T>(task: () => T | Promise<T>): Promise<T> {
+    const done = editing.then(task);
+    editing = done.then(
+      () => undefined,
+      () => undefined,
+    );
+    return done;
+  }
+
+  /**
    * 編集を、頼まれた順に 1 つずつ行う。前の編集が済むまで、次を始めない。
    *
    * 編集には、走行を作る、点を道へ寄せるといった、待つ処理が挟まる。順に行うので、待つ間に
    * 来た次の編集が、古い状態から作った結果で上書きすることも、走行を 2 つ作ることもない。
    */
   function inTurn(task: () => void | Promise<void>): Promise<void> {
-    const done = editing.then(task).catch((e) => {
+    return queued(task).catch((e) => {
       report({ key: "edit", level: "error", title: "編集できません。", detail: String(e) });
     });
-    editing = done;
-    return done;
   }
 
   /**
@@ -357,6 +401,7 @@
     if (doc === null && date !== null) {
       doc = await invoke<RideDocument>("create_ride", { rideDate: date });
       stored = await invoke("list_rides");
+      sync.saved(doc.ride.id);
     }
     if (doc === null) {
       report({
@@ -431,6 +476,7 @@
       dismiss("save");
       // 書いている間に次の編集が来ていれば、その保存がまだ待っている。
       if (saveTimer === undefined) saveState = "saved";
+      sync.saved(saving.ride.id);
     } catch (e) {
       extractNeeded ||= extract;
       saveState = "error";
@@ -446,9 +492,12 @@
 
   /** 保存できなかった内容を、もう一度書く。 */
   function retrySave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(flush, 0);
-    saveState = "pending";
+    return inTurn(() => {
+      if (doc === null) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(flush, 0);
+      saveState = "pending";
+    });
   }
 
   const pathOf = (current: RideDocument | null): Path =>
@@ -673,47 +722,146 @@
     await edit((current) => current);
   }
 
-  /** 走行の一覧を開く。同期の前に、待っている保存を書いておく。 */
+  /**
+   * 走行の一覧を開く。待っている保存を書いてから、クラウドと突き合わせ直す。
+   *
+   * 別の場所で直した走行があれば、ここで受け取る。
+   */
   async function openRides() {
     await flush();
     ridesOpen = true;
+    void sync.check();
   }
 
-  /** 受け取りで手元の走行が変わった。一覧と、開いている走行を読み直す。 */
-  async function reload() {
-    stored = await invoke("list_rides");
-    if (date !== null) {
-      clearTimeout(saveTimer);
-      saveTimer = undefined;
-      saveState = "saved";
-      await select(date);
+  /**
+   * 開いている走行のファイルを、保存とは別の口から入れ替えるか消す。待っている保存は捨てる。
+   * `queued` の中からだけ呼ぶ。
+   *
+   * 書いている最中の保存が済むのを待ってから始める。保存の予約は列の中でしか立たないので、
+   * 仕事の間に次の保存が始まることは無い。仕事に失敗したら、捨てた保存を予約し直す。
+   */
+  async function replacing<T>(work: () => Promise<T>): Promise<T> {
+    while (writing !== undefined) await writing;
+    const dropped = saveTimer !== undefined;
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    try {
+      return await work();
+    } catch (e) {
+      if (dropped) {
+        saveTimer = setTimeout(flush, 0);
+        saveState = "pending";
+      }
+      throw e;
     }
   }
 
-  /** 手元の走行の記録を消す。開いている走行なら、待っている保存を捨ててから消す。 */
+  /**
+   * クラウドから取ってきた走行を、手元に置く。置けたら true。
+   *
+   * 開いている走行なら、待っている編集を先に保存する。保存で手元が変わっていれば、Rust 側が
+   * 更新時刻の違いに気づいて置かない。置いたら、画面を読み直す。`overwrite` は、人がクラウドの
+   * 内容を選んだときで、待っている編集は捨てる。
+   */
+  function applyPulled(pulled: RideDocument, expect: string | null, overwrite: boolean): Promise<boolean> {
+    return queued(async () => {
+      const opened = doc?.ride.id === pulled.ride.id;
+      if (opened && !overwrite) {
+        await flush();
+        // 保存できていない編集が残っている。クラウドの内容で上書きしない。
+        if (saveTimer !== undefined || saveState !== "saved") return false;
+      }
+      const place = () => invoke<boolean>("sync_apply", { doc: pulled, expect, overwrite });
+      if (!(await (opened ? replacing(place) : place()))) return false;
+      stored = await invoke("list_rides");
+      if (opened) {
+        extractNeeded = false;
+        saveState = "saved";
+        dismiss("save");
+        await switchTo(pulled.ride.ride_date);
+        tell("クラウドの新しい内容を読み込みました");
+      } else if (doc === null && (date === null ? booted : date === pulled.ride.ride_date)) {
+        // 記録の無かった日付を開いているか、起動が済んでも何も開いていない。受け取った走行を出す。
+        await switchTo(pulled.ride.ride_date);
+      }
+      return true;
+    });
+  }
+
+  /** 走行の日付。手元に無ければ、クラウドにだけある走行から探す。 */
+  const rideDateOf = (id: string) =>
+    stored.find((ride) => ride.id === id)?.ride_date ?? syncView.remote.find((row) => row.id === id)?.ride_date;
+
+  /** クラウドとの同期。保存のたびに知らせると、少し置いてから送る。 */
+  const sync = new CloudSync(
+    {
+      configured: async () => {
+        const settings = await invoke<{ api_url: string | null; has_token: boolean }>("get_sync_settings");
+        return Boolean(settings.api_url) && settings.has_token;
+      },
+      list: () => invoke("sync_list"),
+      push: (id, overwrite) => invoke("sync_push", { id, overwrite }),
+      fetch: (id) => invoke("sync_fetch", { id }),
+      remove: (id) => invoke("sync_delete", { id }),
+    },
+    {
+      settle: async () => {
+        await editing;
+        await flush();
+      },
+      apply: applyPulled,
+      show: (view) => {
+        syncView = view;
+        if (!Object.values(view.rides).includes("conflict")) dismiss("sync");
+      },
+      // 同期できなくても、編集と保存は続けられる。赤い帯は出さず、右下に短く出す。
+      offline: () => tell("クラウドと同期できません。少し置いて、もう一度試します", "warning"),
+      conflicted: (id) =>
+        report({
+          key: "sync",
+          level: "warning",
+          title: `${rideDateOf(id) ?? "ある日付"} の走行が、手元とクラウドの両方で変更されています。`,
+          detail: "どちらを残すかを選んでください。",
+          action: { label: "選ぶ", run: openRides },
+        }),
+    },
+  );
+
+  /**
+   * 走行の記録を消す。同期を設定していれば、クラウドから先に消す。
+   *
+   * クラウドから消せなければ、手元の記録も消さずに投げる。手元だけを消すと、次の起動で
+   * 受け取り直して戻ってしまう。開いている走行なら、待っている保存を捨ててから消す。
+   */
   async function removeRide(id: string) {
-    await editing;
-    const opened = doc?.ride.id === id;
-    if (opened) {
-      clearTimeout(saveTimer);
-      saveTimer = undefined;
-      await writing;
+    try {
+      await sync.remove(id);
+    } catch (e) {
+      const advice = "クラウドから消せないので、記録を消していません。通信できるときに、もう一度消してください。";
+      throw new Error(`${advice}${e}`);
     }
-    await invoke("delete_ride", { id });
-    stored = await invoke("list_rides");
-    if (opened) {
-      doc = null;
-      chosenId = null;
-      selectedId = null;
-      conflicts = [];
-      confirmedOnVideo = [];
-      undoStack = [];
-      redoStack = [];
-      extractNeeded = false;
-      saveState = "saved";
-      dismiss("save");
-      // 動画のある日付は、記録の無い走行として開いたままにする。
-      if (!videos.some((ride) => ride.date === date)) date = null;
+    try {
+      await queued(async () => {
+        const opened = doc?.ride.id === id;
+        const erase = () => invoke("delete_ride", { id });
+        await (opened ? replacing(erase) : erase());
+        stored = await invoke("list_rides");
+        if (!opened) return;
+        doc = null;
+        chosenId = null;
+        selectedId = null;
+        conflicts = [];
+        confirmedOnVideo = [];
+        undoStack = [];
+        redoStack = [];
+        extractNeeded = false;
+        saveState = "saved";
+        dismiss("save");
+        // 動画のある日付は、記録の無い走行として開いたままにする。
+        if (!videos.some((ride) => ride.date === date)) date = null;
+      });
+    } finally {
+      sync.forget(id);
     }
     tell("走行の記録を消しました");
   }
@@ -807,24 +955,28 @@
     await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
   }
 
-  /** クラウドとの同期を確かめて、報告を書いて終了する。 */
+  /** クラウドとの自動の同期を確かめて、報告を書いて終了する。 */
   async function checkSync(apiUrl: string) {
     let report: unknown;
     try {
       while (routeMap === undefined) await sleep(100);
-      report = await runSyncCheck(apiUrl, routeMap, {
+      report = await runSyncCheck(apiUrl, check?.step ?? "", routeMap, {
         create: createRide,
-        setTitle: async (title) => {
-          await setTitle(title);
-          await flush();
-        },
+        open: select,
+        setTitle,
         doc: () => doc,
+        bar: () => bar,
+        view: () => syncView,
+        start: () => sync.start(),
         openRides: async () => {
           await openRides();
           while (ridePanel === undefined) await sleep(100);
           return ridePanel;
         },
+        closeRides: () => (ridesOpen = false),
         list: () => invoke<RideSummary[]>("list_rides"),
+        message: () => lastMessage,
+        notices: () => notices.map((notice) => notice.title),
       });
     } catch (e) {
       report = { error: String(e), message: lastMessage };
@@ -913,13 +1065,13 @@
           title={doc?.ride.title ?? date ?? ""}
           {videoSummary}
           {mode}
-          saveState={doc === null ? null : saveState}
+          status={bar}
+          failure={syncView.failure}
           compact={mode === "confirm"}
           canExport={doc !== null}
           onrides={openRides}
           onmode={setMode}
           onexport={exportCsv}
-          onsync={openRides}
           onsettings={() => (settingsOpen = true)}
           onretry={retrySave}
         />
@@ -1037,7 +1189,9 @@
       />
     </div>
     {#if toast !== ""}
-      <div class="toast" role="status"><Icon name="check" />{toast}</div>
+      <div class="toast {toastTone}" role="status">
+        <Icon name={toastTone === "ok" ? "check" : "warning"} />{toast}
+      </div>
     {/if}
   </main>
   {#if ridesOpen}
@@ -1047,11 +1201,12 @@
       title={doc?.ride.title ?? date ?? ""}
       {videos}
       {stored}
+      sync={syncView}
       onselect={select}
       oncreate={createRide}
       ontitle={setTitle}
       onremove={removeRide}
-      onchanged={reload}
+      onresolve={(id, keep) => sync.resolve(id, keep)}
       onsettings={() => {
         ridesOpen = false;
         settingsOpen = true;
@@ -1069,7 +1224,10 @@
       rideDate={date}
       onpick={pick}
       onclock={setClockOffset}
-      onsynced={() => tell("同期の接続先を保存しました")}
+      onsynced={() => {
+        tell("同期の接続先を保存しました");
+        void sync.start();
+      }}
       onclose={() => (settingsOpen = false)}
     />
   {/if}
@@ -1247,5 +1405,8 @@
   }
   .toast :global(.icon) {
     color: var(--ok);
+  }
+  .toast.warning :global(.icon) {
+    color: var(--warn);
   }
 </style>

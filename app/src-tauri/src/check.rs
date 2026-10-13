@@ -11,6 +11,8 @@
 //! - `ROUTELOG_CHECK_GEO`: 地図の確認に、イベントの抽出と吸着を足す。フォルダの確認に足すと、動画を見ながらの
 //!   時刻の確定と、動画の無い走行を確かめる。値は判定用データのフォルダ
 //! - `ROUTELOG_CHECK_SYNC`: クラウドとの同期を確かめる。値は API の URL で、手元で動かした Worker を指す
+//! - `ROUTELOG_CHECK_STEP`: 同期の確認の、どの段を行うか。同期は 2 つの端末の間で確かめるので、データの
+//!   置き場所を変えながら何度か起動する。段の名前と順番は、画面側の `sync-check.ts` にある
 //! - `ROUTELOG_CHECK_REPORT`: 報告（JSON）の書き先。画面の写しは同じ場所に PNG で書く
 
 use std::path::PathBuf;
@@ -22,6 +24,7 @@ const DIR: &str = "ROUTELOG_CHECK_DIR";
 const MAP: &str = "ROUTELOG_CHECK_MAP";
 const GEO: &str = "ROUTELOG_CHECK_GEO";
 const SYNC: &str = "ROUTELOG_CHECK_SYNC";
+const STEP: &str = "ROUTELOG_CHECK_STEP";
 const REPORT: &str = "ROUTELOG_CHECK_REPORT";
 
 #[derive(Serialize)]
@@ -31,6 +34,7 @@ pub struct Target {
     map: Option<String>,
     geo: Option<String>,
     sync: Option<String>,
+    step: Option<String>,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -58,6 +62,7 @@ pub fn check_target() -> Target {
         map: var(MAP),
         geo: var(GEO),
         sync: var(SYNC),
+        step: var(STEP),
     }
 }
 

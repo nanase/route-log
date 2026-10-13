@@ -1,7 +1,8 @@
 //! クラウドとの同期。走行を丸ごと送り、丸ごと受け取る。
 //!
-//! 同期は人が押したときにだけ行う。手元とクラウドのどちらが新しいかは、最後に同期した
-//! ときの更新時刻を覚えておいて見分ける。
+//! 同期は自動で行う。いつ送り、いつ受け取るかは画面の側が決める。ここは、手元とクラウドの
+//! 突き合わせと、走行 1 つ分の送り受けを受け持つ。手元とクラウドのどちらが新しいかは、
+//! 最後に同期したときの更新時刻を覚えておいて見分ける。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::config::ConfigFile;
-use crate::store::Store;
+use crate::store::{RideSummary, Store};
 
 /// 資格情報ストアでの名前。
 const SERVICE: &str = "routelog";
@@ -27,9 +28,9 @@ const JWT_ENV: &str = "ROUTELOG_SYNC_JWT";
 pub enum SyncState {
     /// 同じ内容。
     Same,
-    /// 手元だけが変わった。送ればよい。
+    /// 手元だけが変わった。
     LocalNewer,
-    /// クラウドだけが変わった。受け取ればよい。
+    /// クラウドだけが変わった。
     RemoteNewer,
     /// 手元にしか無い。
     LocalOnly,
@@ -37,6 +38,31 @@ pub enum SyncState {
     RemoteOnly,
     /// 両方が変わった。どちらを残すかは人が決める。
     Conflict,
+}
+
+/// 突き合わせた走行に、自動ですること。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    /// 何もしない。
+    Keep,
+    /// 手元の走行を送る。
+    Push,
+    /// クラウドの走行を受け取る。
+    Pull,
+    /// どちらを残すかを人に聞く。勝手には上書きしない。
+    Ask,
+}
+
+impl SyncState {
+    pub fn action(self) -> Action {
+        match self {
+            Self::Same => Action::Keep,
+            Self::LocalNewer | Self::LocalOnly => Action::Push,
+            Self::RemoteNewer | Self::RemoteOnly => Action::Pull,
+            Self::Conflict => Action::Ask,
+        }
+    }
 }
 
 /// 手元・クラウド・最後に同期したときの更新時刻から、関係を決める。どちらにも無ければ `None`。
@@ -54,6 +80,89 @@ pub fn classify(
         (Some(local), Some(_)) if synced == Some(local) => SyncState::RemoteNewer,
         (Some(_), Some(_)) => SyncState::Conflict,
     })
+}
+
+/// 突き合わせに使う、走行の見出し。手元の一覧からも、クラウドの一覧からも作る。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Head {
+    id: String,
+    title: String,
+    ride_date: String,
+    updated_at: String,
+}
+
+impl From<RideSummary> for Head {
+    fn from(ride: RideSummary) -> Self {
+        Self {
+            id: ride.id,
+            title: ride.title,
+            ride_date: ride.ride_date,
+            updated_at: ride.updated_at,
+        }
+    }
+}
+
+/// 突き合わせた走行の 1 行。
+#[derive(Debug, PartialEq, Serialize)]
+pub struct SyncRow {
+    id: String,
+    title: String,
+    ride_date: String,
+    local_updated_at: Option<String>,
+    remote_updated_at: Option<String>,
+    state: SyncState,
+    action: Action,
+}
+
+/// 手元とクラウドの走行を突き合わせ、走行ごとの関係と、自動ですることを決める。日付の新しい順。
+///
+/// 通信も、ファイルの読み書きもしない。`synced` は、走行ごとの、最後に同期したときの更新時刻である。
+pub fn reconcile(
+    local: &[Head],
+    remote: &[Head],
+    synced: &HashMap<String, String>,
+) -> Vec<SyncRow> {
+    let mut rows: Vec<SyncRow> = Vec::new();
+    for ride in local {
+        let there = remote.iter().find(|r| r.id == ride.id);
+        let state = classify(
+            Some(&ride.updated_at),
+            there.map(|r| r.updated_at.as_str()),
+            synced.get(&ride.id).map(String::as_str),
+        )
+        .unwrap_or(SyncState::LocalOnly);
+        rows.push(SyncRow {
+            id: ride.id.clone(),
+            title: ride.title.clone(),
+            ride_date: ride.ride_date.clone(),
+            local_updated_at: Some(ride.updated_at.clone()),
+            remote_updated_at: there.map(|r| r.updated_at.clone()),
+            state,
+            action: state.action(),
+        });
+    }
+    for ride in remote {
+        if !local.iter().any(|l| l.id == ride.id) {
+            rows.push(SyncRow {
+                id: ride.id.clone(),
+                title: ride.title.clone(),
+                ride_date: ride.ride_date.clone(),
+                local_updated_at: None,
+                remote_updated_at: Some(ride.updated_at.clone()),
+                state: SyncState::RemoteOnly,
+                action: SyncState::RemoteOnly.action(),
+            });
+        }
+    }
+    rows.sort_by(|a, b| (&b.ride_date, &b.id).cmp(&(&a.ride_date, &a.id)));
+    rows
+}
+
+/// クラウドから消せなくても、手元の走行を消してよいか。
+///
+/// 手元にあって 1 度も同期していない走行は、クラウドに無い。繋がらないときでも消せる。
+fn never_sent(local: bool, synced: Option<&str>) -> bool {
+    local && synced.is_none()
 }
 
 /// 走行ごとの、最後に同期したときの更新時刻。
@@ -79,8 +188,16 @@ impl Synced {
         self.map.lock().unwrap().get(id).cloned()
     }
 
+    fn all(&self) -> HashMap<String, String> {
+        self.map.lock().unwrap().clone()
+    }
+
+    /// 覚えが同じなら、何も書かない。
     fn set(&self, id: &str, updated_at: &str) -> Result<(), String> {
         let mut map = self.map.lock().unwrap();
+        if map.get(id).is_some_and(|known| known == updated_at) {
+            return Ok(());
+        }
         map.insert(id.to_owned(), updated_at.to_owned());
         self.write(&map)
     }
@@ -109,20 +226,16 @@ pub fn init_credentials() {
 }
 
 fn token() -> Option<(String, String)> {
+    // 自動の確認の間は、本物のサービストークンを読まない。
+    if crate::check::data_dir().is_some() {
+        return None;
+    }
     let stored = keyring_core::Entry::new(SERVICE, TOKEN)
         .ok()?
         .get_password()
         .ok()?;
     let (id, secret) = stored.split_once('\n')?;
     Some((id.to_owned(), secret.to_owned()))
-}
-
-#[derive(Deserialize)]
-struct Remote {
-    id: String,
-    title: String,
-    ride_date: String,
-    updated_at: String,
 }
 
 #[derive(Deserialize)]
@@ -154,7 +267,9 @@ impl Api {
                 ]
             }
         };
+        // 繋がらないことは早く知りたいので、繋ぐまでの待ち時間は短くする。
         let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build();
         Ok(Self {
@@ -171,7 +286,7 @@ impl Api {
             .fold(request, |request, (name, value)| request.set(name, value))
     }
 
-    fn list(&self) -> Result<Vec<Remote>, String> {
+    fn list(&self) -> Result<Vec<Head>, String> {
         let response = self.request("GET", "/api/rides").call().map_err(explain)?;
         response.into_json().map_err(|e| e.to_string())
     }
@@ -230,7 +345,7 @@ pub struct SyncSettings {
 pub fn get_sync_settings(config: tauri::State<ConfigFile>) -> SyncSettings {
     SyncSettings {
         api_url: config.get().api_url,
-        has_token: token().is_some() || std::env::var_os(JWT_ENV).is_some(),
+        has_token: std::env::var_os(JWT_ENV).is_some() || token().is_some(),
     }
 }
 
@@ -260,17 +375,6 @@ pub fn set_sync_settings(
     Ok(())
 }
 
-/// 同期の一覧の 1 行。
-#[derive(Serialize)]
-pub struct SyncRow {
-    id: String,
-    title: String,
-    ride_date: String,
-    local_updated_at: Option<String>,
-    remote_updated_at: Option<String>,
-    state: SyncState,
-}
-
 fn blocking<T: Send + 'static>(
     app: &tauri::AppHandle,
     work: impl FnOnce(&tauri::AppHandle) -> Result<T, String> + Send + 'static,
@@ -283,55 +387,50 @@ fn blocking<T: Send + 'static>(
     }
 }
 
-/// 手元とクラウドの走行を突き合わせた一覧。日付の新しい順。
+/// 手元とクラウドの走行を突き合わせた一覧。それぞれに、自動ですることが付く。
 #[tauri::command]
 pub async fn sync_list(app: tauri::AppHandle) -> Result<Vec<SyncRow>, String> {
     blocking(&app, |app| {
-        let remote = Api::new(&app.state::<ConfigFile>())?.list()?;
+        let api = Api::new(&app.state::<ConfigFile>())?;
+        // 手元と覚えを先に読む。クラウドの一覧を待つ間に送信が済んでも、「同じ」に見える。
+        // 逆の順だと、送ったばかりの走行が「クラウドが新しい」に見えて、受け取り直してしまう。
         let local = app.state::<Store>().list().map_err(|e| e.to_string())?;
+        let local: Vec<Head> = local.into_iter().map(Head::from).collect();
         let synced = app.state::<Synced>();
-        let mut rows: Vec<SyncRow> = Vec::new();
-        for ride in &local {
-            let there = remote.iter().find(|r| r.id == ride.id);
-            let remote_updated_at = there.map(|r| r.updated_at.clone());
-            let state = classify(
-                Some(&ride.updated_at),
-                remote_updated_at.as_deref(),
-                synced.get(&ride.id).as_deref(),
-            );
-            rows.push(SyncRow {
-                id: ride.id.clone(),
-                title: ride.title.clone(),
-                ride_date: ride.ride_date.clone(),
-                local_updated_at: Some(ride.updated_at.clone()),
-                remote_updated_at,
-                state: state.unwrap_or(SyncState::LocalOnly),
-            });
-        }
-        for ride in remote {
-            if !local.iter().any(|l| l.id == ride.id) {
-                rows.push(SyncRow {
-                    id: ride.id,
-                    title: ride.title,
-                    ride_date: ride.ride_date,
-                    local_updated_at: None,
-                    remote_updated_at: Some(ride.updated_at),
-                    state: SyncState::RemoteOnly,
-                });
+        let known = synced.all();
+        let remote = api.list()?;
+        let rows = reconcile(&local, &remote, &known);
+        // 同じ内容なら、同期した覚えを合わせておく。送ったあとの応答を受け取れなかったときに、
+        // 覚えだけが古いまま残る。そのまま手元で直すと、「両方で変更」に見えてしまう。
+        for row in rows.iter().filter(|row| row.state == SyncState::Same) {
+            if let Some(updated_at) = &row.local_updated_at {
+                synced.set(&row.id, updated_at)?;
             }
         }
-        rows.sort_by(|a, b| (&b.ride_date, &b.id).cmp(&(&a.ride_date, &a.id)));
         Ok(rows)
     })
     .await
 }
 
+/// 送った結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pushed {
+    Sent,
+    /// クラウドの走行が、別の場所で書き換えられていた。送っていない。
+    Conflict,
+}
+
 /// 手元の走行をクラウドへ送る。
 ///
-/// クラウドが別の場所で書き換えられていたら送らず、エラーにする。`overwrite` なら、
+/// クラウドが別の場所で書き換えられていたら、送らずに `Conflict` を返す。`overwrite` なら、
 /// それでも手元の内容で置き換える。
 #[tauri::command]
-pub async fn sync_push(app: tauri::AppHandle, id: String, overwrite: bool) -> Result<(), String> {
+pub async fn sync_push(
+    app: tauri::AppHandle,
+    id: String,
+    overwrite: bool,
+) -> Result<Pushed, String> {
     blocking(&app, move |app| {
         let api = Api::new(&app.state::<ConfigFile>())?;
         let doc = app.state::<Store>().load(&id).map_err(|e| e.to_string())?;
@@ -341,30 +440,65 @@ pub async fn sync_push(app: tauri::AppHandle, id: String, overwrite: bool) -> Re
             outcome = api.put(&doc, Some(theirs))?;
         }
         match outcome {
-            Ok(()) => synced.set(&id, &doc.ride.updated_at),
-            Err(_) => Err("クラウドの走行が、別の場所で書き換えられています".into()),
+            Ok(()) => {
+                synced.set(&id, &doc.ride.updated_at)?;
+                Ok(Pushed::Sent)
+            }
+            Err(_) => Ok(Pushed::Conflict),
         }
     })
     .await
 }
 
-/// クラウドの走行を受け取り、手元の走行を置き換える。
+/// クラウドの走行を取ってくる。手元にはまだ置かない。置くのは `sync_apply` である。
+///
+/// 取るのと置くのを分けてあるのは、画面の側が、編集の合間を選んで置くためである。
 #[tauri::command]
-pub async fn sync_pull(app: tauri::AppHandle, id: String) -> Result<(), String> {
+pub async fn sync_fetch(app: tauri::AppHandle, id: String) -> Result<RideDocument, String> {
     blocking(&app, move |app| {
-        let doc = Api::new(&app.state::<ConfigFile>())?.get(&id)?;
-        app.state::<Store>().save(&doc).map_err(|e| e.to_string())?;
-        app.state::<Synced>().set(&id, &doc.ride.updated_at)
+        Api::new(&app.state::<ConfigFile>())?.get(&id)
     })
     .await
 }
 
-/// クラウドの走行を消す。手元の走行は残す。同期の覚えは消すので、残した走行は「手元だけ」になる。
+/// 取ってきた走行を手元に置く。置いたら `true`。
+///
+/// 手元の走行の更新時刻が `expect` と違えば、取ってくる間に手元も変わっている。置かずに
+/// `false` を返す。`expect` が無ければ、手元に無いことを確かめる。`overwrite` なら、確かめずに置く。
+#[tauri::command]
+pub fn sync_apply(
+    store: tauri::State<Store>,
+    synced: tauri::State<Synced>,
+    doc: RideDocument,
+    expect: Option<String>,
+    overwrite: bool,
+) -> Result<bool, String> {
+    let placed = if overwrite {
+        store.save(&doc).map(|()| true)
+    } else {
+        store.replace_if(&doc, expect.as_deref())
+    }
+    .map_err(|e| e.to_string())?;
+    if placed {
+        synced.set(&doc.ride.id, &doc.ride.updated_at)?;
+    }
+    Ok(placed)
+}
+
+/// クラウドの走行を消す。同期の覚えも消す。手元の走行には触らない。
+///
+/// 消せなければエラーにする。呼んだ側は、手元の走行を消さずに残す。ただし、1 度も同期して
+/// いない走行はクラウドに無いので、消せなくてもエラーにしない。
 #[tauri::command]
 pub async fn sync_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
     blocking(&app, move |app| {
-        Api::new(&app.state::<ConfigFile>())?.delete(&id)?;
-        app.state::<Synced>().remove(&id)
+        let synced = app.state::<Synced>();
+        let local = app.state::<Store>().load(&id).is_ok();
+        let deleted = Api::new(&app.state::<ConfigFile>()).and_then(|api| api.delete(&id));
+        if !never_sent(local, synced.get(&id).as_deref()) {
+            deleted?;
+        }
+        synced.remove(&id)
     })
     .await
 }
@@ -412,6 +546,147 @@ mod tests {
     #[test]
     fn the_same_content_is_the_same_even_without_a_record_of_syncing() {
         assert_eq!(classify(Some("a"), Some("a"), None), Some(SyncState::Same));
+        // 覚えが、どちらとも違っていても同じである。
+        assert_eq!(
+            classify(Some("b"), Some("b"), Some("a")),
+            Some(SyncState::Same)
+        );
+    }
+
+    #[test]
+    fn a_ride_the_cloud_no_longer_has_counts_as_only_here() {
+        // 同期した覚えがあっても、クラウドに無ければ「手元だけ」になる。
+        assert_eq!(
+            classify(Some("a"), None, Some("a")),
+            Some(SyncState::LocalOnly)
+        );
+        assert_eq!(
+            classify(None, Some("a"), Some("a")),
+            Some(SyncState::RemoteOnly)
+        );
+    }
+
+    #[test]
+    fn only_a_ride_changed_on_both_sides_is_left_to_a_person() {
+        use SyncState::*;
+        for (state, action) in [
+            (Same, Action::Keep),
+            (LocalNewer, Action::Push),
+            (LocalOnly, Action::Push),
+            (RemoteNewer, Action::Pull),
+            (RemoteOnly, Action::Pull),
+            (Conflict, Action::Ask),
+        ] {
+            assert_eq!(state.action(), action, "{state:?}");
+        }
+    }
+
+    fn head(id: &str, ride_date: &str, updated_at: &str) -> Head {
+        Head {
+            id: id.into(),
+            title: format!("{id} の題"),
+            ride_date: ride_date.into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    /// 突き合わせの結果から、走行の ID・関係・することだけを取り出す。
+    fn decided(rows: &[SyncRow]) -> Vec<(&str, SyncState, Action)> {
+        rows.iter()
+            .map(|row| (row.id.as_str(), row.state, row.action))
+            .collect()
+    }
+
+    #[test]
+    fn every_ride_on_either_side_gets_one_decision() {
+        use SyncState::*;
+        let local = [
+            head("same", "2026-10-01", "t1"),
+            head("edited-here", "2026-10-02", "t2"),
+            head("edited-there", "2026-10-03", "t1"),
+            head("new-here", "2026-10-04", "t1"),
+            head("edited-both", "2026-10-05", "t2"),
+        ];
+        let remote = [
+            head("same", "2026-10-01", "t1"),
+            head("edited-here", "2026-10-02", "t1"),
+            head("edited-there", "2026-10-03", "t3"),
+            head("edited-both", "2026-10-05", "t3"),
+            head("new-there", "2026-10-06", "t1"),
+        ];
+        let synced = ["same", "edited-here", "edited-there", "edited-both", "gone"]
+            .map(|id| (id.to_owned(), "t1".to_owned()))
+            .into();
+        let rows = reconcile(&local, &remote, &synced);
+        assert_eq!(
+            decided(&rows),
+            [
+                ("new-there", RemoteOnly, Action::Pull),
+                ("edited-both", Conflict, Action::Ask),
+                ("new-here", LocalOnly, Action::Push),
+                ("edited-there", RemoteNewer, Action::Pull),
+                ("edited-here", LocalNewer, Action::Push),
+                ("same", Same, Action::Keep),
+            ],
+            "日付の新しい順に並び、どちらにも無い走行は出ない"
+        );
+        let there = &rows[0];
+        assert_eq!(there.title, "new-there の題");
+        assert_eq!(there.local_updated_at, None);
+        assert_eq!(there.remote_updated_at.as_deref(), Some("t1"));
+        let both = &rows[1];
+        assert_eq!(both.local_updated_at.as_deref(), Some("t2"));
+        assert_eq!(both.remote_updated_at.as_deref(), Some("t3"));
+    }
+
+    #[test]
+    fn a_new_place_receives_everything_and_sends_nothing() {
+        let remote = [head("a", "2026-10-01", "t1"), head("b", "2026-10-02", "t2")];
+        let rows = reconcile(&[], &remote, &HashMap::new());
+        assert_eq!(
+            decided(&rows),
+            [
+                ("b", SyncState::RemoteOnly, Action::Pull),
+                ("a", SyncState::RemoteOnly, Action::Pull),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_cloud_is_sent_everything_even_what_was_synced_before() {
+        // クラウドの側が空になっても、手元の走行は消さない。送り直す。
+        let local = [head("a", "2026-10-01", "t1"), head("b", "2026-10-02", "t2")];
+        let synced = [("a".to_owned(), "t1".to_owned())].into();
+        let rows = reconcile(&local, &[], &synced);
+        assert_eq!(
+            decided(&rows),
+            [
+                ("b", SyncState::LocalOnly, Action::Push),
+                ("a", SyncState::LocalOnly, Action::Push),
+            ]
+        );
+    }
+
+    #[test]
+    fn nothing_is_done_when_both_sides_are_the_same() {
+        let rides = [head("a", "2026-10-01", "t1"), head("b", "2026-10-02", "t2")];
+        let rows = reconcile(&rides, &rides, &HashMap::new());
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.action == Action::Keep));
+        assert_eq!(reconcile(&[], &[], &HashMap::new()), []);
+    }
+
+    #[test]
+    fn a_ride_that_was_never_sent_can_be_removed_without_the_cloud() {
+        assert!(never_sent(true, None));
+        assert!(
+            !never_sent(true, Some("t1")),
+            "送ってある走行は、クラウドから先に消す"
+        );
+        assert!(
+            !never_sent(false, None),
+            "クラウドにだけある走行は、クラウドから消す"
+        );
     }
 
     #[test]
@@ -447,6 +722,7 @@ mod tests {
             reopened.get("y").as_deref(),
             Some("2026-10-04T05:00:00+09:00")
         );
+        assert_eq!(reopened.all().len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

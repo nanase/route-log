@@ -37,7 +37,10 @@ export interface Notice {
 /** 手元とクラウドの、走行 1 つの関係。Rust 側の `SyncState` と同じ。 */
 export type SyncState = "same" | "local_newer" | "remote_newer" | "local_only" | "remote_only" | "conflict";
 
-/** 同期の一覧の 1 行。Rust 側の `SyncRow` と同じ。 */
+/** 突き合わせた走行に、自動ですること。Rust 側の `Action` と同じ。 */
+export type SyncAction = "keep" | "push" | "pull" | "ask";
+
+/** 突き合わせた走行の 1 行。Rust 側の `SyncRow` と同じ。 */
 export interface SyncRow {
   id: string;
   title: string;
@@ -45,6 +48,7 @@ export interface SyncRow {
   local_updated_at: string | null;
   remote_updated_at: string | null;
   state: SyncState;
+  action: SyncAction;
 }
 
 /** 次の起動でも使う、画面の好み。壊れていれば既定の値にする。 */

@@ -29,7 +29,7 @@
     rideDate: string | null;
     onpick: (folder: Folder) => void;
     onclock: (clockOffsetMs: number) => void;
-    /** 同期の接続先を保存した */
+    /** 同期の接続先を保存した。呼ばれた側は、新しい接続先でクラウドと突き合わせ直す */
     onsynced: () => void;
     onclose: () => void;
   } = $props();
@@ -189,7 +189,7 @@
   <section class="line">
     <div class="text">
       <b>クラウド同期の接続先</b>
-      <span class="sub">API の URL と鍵。保存済みなら中身は出しません</span>
+      <span class="sub">設定すると、走行を自動でクラウドと同期します。保存済みの鍵は出しません</span>
     </div>
     {#if savedUrl !== undefined}
       {#if syncReady}

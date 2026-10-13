@@ -3,6 +3,7 @@
 //! クラウドの API が走行を丸ごと送り受けするので、手元でも同じ形のまま持つ。
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use routelog_core::RideDocument;
 use serde::Serialize;
@@ -40,11 +41,16 @@ pub struct RideSummary {
 
 pub struct Store {
     dir: PathBuf,
+    /// 書いている間、持つ。更新時刻を確かめてから置き換えるまでの間に、別の保存を挟ませない。
+    writing: Mutex<()>,
 }
 
 impl Store {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            writing: Mutex::new(()),
+        }
     }
 
     fn path(&self, id: &str) -> Result<PathBuf, Error> {
@@ -86,8 +92,30 @@ impl Store {
         read(&self.path(id)?)
     }
 
-    /// 書きかけのファイルを残さないよう、別名で書いてから置き換える。
     pub fn save(&self, doc: &RideDocument) -> Result<(), Error> {
+        let _writing = self.writing.lock().unwrap();
+        self.write(doc)
+    }
+
+    /// 手元の走行の更新時刻が `expect` のままなら、`doc` で置き換えて `true` を返す。違えば
+    /// 何も書かず、`false` を返す。`expect` が `None` なら、手元に無いときだけ書く。
+    ///
+    /// クラウドから受け取った走行を置くのに使う。受け取る間に手元で直した走行を、上書きしない。
+    pub fn replace_if(&self, doc: &RideDocument, expect: Option<&str>) -> Result<bool, Error> {
+        let _writing = self.writing.lock().unwrap();
+        let current = match self.load(&doc.ride.id) {
+            Ok(current) => Some(current.ride.updated_at),
+            Err(Error::Io(_, e)) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        if current.as_deref() != expect {
+            return Ok(false);
+        }
+        self.write(doc).map(|()| true)
+    }
+
+    /// 書きかけのファイルを残さないよう、別名で書いてから置き換える。
+    fn write(&self, doc: &RideDocument) -> Result<(), Error> {
         doc.validate().map_err(Error::Invalid)?;
         let path = self.path(&doc.ride.id)?;
         let json = serde_json::to_string_pretty(doc).map_err(|e| Error::Json(path.clone(), e))?;
@@ -204,6 +232,45 @@ mod tests {
             1,
             "もう無いものを消しても、何も起きない"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_ride_is_replaced_only_while_it_is_as_expected() {
+        let (store, dir) = temp_store("replace");
+        let mut theirs = document(FIRST, "2026-10-03");
+        theirs.ride.title = "クラウドの題".into();
+        theirs.ride.updated_at = "2026-10-04T08:00:00+09:00".into();
+
+        assert!(
+            !store
+                .replace_if(&theirs, Some("2026-10-03T05:00:00+09:00"))
+                .unwrap(),
+            "手元にあるはずの走行が無ければ、置かない"
+        );
+        assert!(store.replace_if(&theirs, None).unwrap());
+        assert_eq!(store.load(FIRST).unwrap(), theirs);
+
+        let mut newer = theirs.clone();
+        newer.ride.title = "もっと新しい題".into();
+        newer.ride.updated_at = "2026-10-05T08:00:00+09:00".into();
+        assert!(
+            !store.replace_if(&newer, None).unwrap(),
+            "手元に無いはずの走行があれば、置かない"
+        );
+        assert!(
+            !store
+                .replace_if(&newer, Some("2026-10-03T05:00:00+09:00"))
+                .unwrap(),
+            "受け取る間に手元が変わっていれば、置かない"
+        );
+        assert_eq!(store.load(FIRST).unwrap(), theirs);
+        assert!(
+            store
+                .replace_if(&newer, Some("2026-10-04T08:00:00+09:00"))
+                .unwrap()
+        );
+        assert_eq!(store.load(FIRST).unwrap(), newer);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

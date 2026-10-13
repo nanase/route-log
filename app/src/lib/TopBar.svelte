@@ -1,22 +1,23 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import type { Mode, SaveState } from "./ui";
+  import type { BarState } from "./sync";
+  import type { Mode } from "./ui";
 
   /**
-   * 上の帯。開いている走行、いまの作業（経路／時刻）、保存の状態と、書き出し・同期・設定の入口を並べる。
+   * 上の帯。開いている走行、いまの作業（経路／時刻）、保存と同期の状態と、書き出し・設定の入口を並べる。
    */
   let {
     date,
     title,
     videoSummary,
     mode,
-    saveState,
+    status,
+    failure,
     compact,
     canExport,
     onrides,
     onmode,
     onexport,
-    onsync,
     onsettings,
     onretry,
   }: {
@@ -26,15 +27,16 @@
     /** 動画の本数と長さ。読み込み中はその旨 */
     videoSummary: string;
     mode: Mode;
-    /** 保存の状態。まだ記録の無い走行では null */
-    saveState: SaveState | null;
+    /** 保存と同期の状態。出すものが無ければ null */
+    status: BarState | null;
+    /** 同期できなかった理由。同期できていれば空 */
+    failure: string;
     /** 幅が狭いとき。ボタンの字を省き、動画の要約を出さない */
     compact: boolean;
     canExport: boolean;
     onrides: () => void;
     onmode: (mode: Mode) => void;
     onexport: () => void;
-    onsync: () => void;
     onsettings: () => void;
     /** 保存をやり直す */
     onretry: () => void;
@@ -68,15 +70,34 @@
   </div>
   <div class="space"></div>
 
-  <!-- 保存の状態は、いつも 1 つだけ出す。 -->
+  <!-- 保存と同期の状態は、まとめて 1 つだけ出す。同期を設定していなければ、保存のことだけを出す。 -->
   <div class="save" role="status">
-    {#if saveState === "saved"}
-      <span class="state saved"><Icon name="check" />保存済み</span>
-    {:else if saveState === "saving"}
-      <span class="state saving"><span class="spinner"></span>保存中…</span>
-    {:else if saveState === "pending"}
-      <span class="state pending"><span class="dot"></span>保存待ち</span>
-    {:else if saveState === "error"}
+    {#if status === "saved"}
+      <span class="state done"><Icon name="check" />保存済み</span>
+    {:else if status === "saving"}
+      <span class="state busy"><span class="spinner"></span>保存中…</span>
+    {:else if status === "syncing"}
+      <span class="state busy" title="クラウドと同期しています"><span class="spinner"></span>同期中…</span>
+    {:else if status === "synced"}
+      <span class="state done" title="手元とクラウドが同じです"><Icon name="check" />同期済み</span>
+    {:else if status === "unsynced"}
+      <span
+        class="state behind"
+        title="手元には保存してあります。クラウドと同期できなかったので、次の保存か、少し置いてからもう一度試します。{failure}"
+      >
+        <span class="dot"></span>未同期
+      </span>
+    {:else if status === "conflict"}
+      <button
+        type="button"
+        class="btn small danger"
+        onclick={onrides}
+        aria-haspopup="dialog"
+        title="手元とクラウドの両方で変更された走行があります。押して、どちらを残すかを選びます"
+      >
+        <Icon name="warning" size={13} />両方で変更
+      </button>
+    {:else if status === "save_error"}
       <span class="pill danger"><Icon name="error" size={13} />保存できません</span>
       <button type="button" class="btn small" onclick={onretry}>もう一度</button>
     {/if}
@@ -92,16 +113,6 @@
     title="通過時刻の一覧を CSV に書き出す"
   >
     <Icon name="export" />{#if !compact}CSV を書き出す{/if}
-  </button>
-  <button
-    type="button"
-    class="btn"
-    class:icon-only={compact}
-    onclick={onsync}
-    aria-label="同期"
-    title="走行の一覧を開き、クラウドと比べる"
-  >
-    <Icon name="cloud" />{#if !compact}同期{/if}
   </button>
   <button type="button" class="btn icon-only" onclick={onsettings} aria-label="設定" title="設定">
     <Icon name="settings" />
@@ -156,13 +167,13 @@
     align-items: center;
     gap: 6px;
   }
-  .saved {
+  .done {
     color: var(--ok);
   }
-  .saving {
+  .busy {
     color: var(--ink-2);
   }
-  .pending {
+  .behind {
     color: var(--warn-ink);
   }
   .spinner {

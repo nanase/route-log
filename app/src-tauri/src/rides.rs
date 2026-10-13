@@ -55,6 +55,9 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
 }
 
 /// 手元の走行の記録を消す。同期の覚えも消す。動画のファイルと、クラウドの走行には触らない。
+///
+/// 同期を設定しているときは、画面の側が先に `sync_delete` でクラウドから消す。手元だけを消すと、
+/// 次の起動で受け取り直して戻ってしまう。
 #[tauri::command]
 pub fn delete_ride(
     store: tauri::State<Store>,

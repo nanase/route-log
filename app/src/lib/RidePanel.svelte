@@ -1,26 +1,26 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import Icon from "./Icon.svelte";
+  import { barState, type RideSync, type SyncView } from "./sync";
   import { hms } from "./time";
   import type { RideSummary, RideVideos } from "./types";
-  import type { SyncRow, SyncState } from "./ui";
 
   /**
    * 走行の切り替え。上の帯の日付と題を押すと開く。
    *
-   * 走行を選ぶ・作る・消すことと、クラウドとの同期をここで行う。同期は、手元とクラウドの走行を
-   * 突き合わせ、押したものだけを送り受けする。
+   * 走行を選ぶ・作る・消すことをここで行う。クラウドとの同期は自動なので、ここには走行ごとの
+   * 同期の状態を出すだけである。両方で変わった走行だけは、どちらを残すかをここで選ぶ。
    */
   let {
     date,
     title,
     videos,
     stored,
+    sync,
     onselect,
     oncreate,
     ontitle,
     onremove,
-    onchanged,
+    onresolve,
     onsettings,
     onclose,
   }: {
@@ -30,13 +30,15 @@
     title: string;
     videos: RideVideos[];
     stored: RideSummary[];
+    /** クラウドとの同期の状態 */
+    sync: SyncView;
     onselect: (date: string) => void | Promise<void>;
     oncreate: (date: string) => void | Promise<void>;
     ontitle: (title: string) => void;
-    /** 手元の走行の記録を消す */
+    /** 走行の記録を消す。同期を設定していれば、クラウドからも消える */
     onremove: (id: string) => Promise<void>;
-    /** 手元の走行が受け取りで変わったときに呼ぶ */
-    onchanged: () => void | Promise<void>;
+    /** 両方で変わった走行を、選んだほうで揃える */
+    onresolve: (id: string, keep: "local" | "cloud") => Promise<void>;
     onsettings: () => void;
     onclose: () => void;
   } = $props();
@@ -50,33 +52,29 @@
     title: string;
     videos: RideVideos | undefined;
     summary: RideSummary | undefined;
-    sync: SyncRow | undefined;
+    /** クラウドにだけあって、まだ受け取れていない走行か */
+    remote: boolean;
+    /** 同期の状態。同期を設定していないか、まだ突き合わせていなければ undefined */
+    state: RideSync | undefined;
   }
 
-  const STATES: Record<SyncState, { name: string; tone: string }> = {
-    same: { name: "クラウドと同じ", tone: "ok" },
-    local_newer: { name: "手元が新しい", tone: "warn" },
-    remote_newer: { name: "クラウドが新しい", tone: "info" },
-    local_only: { name: "手元だけ", tone: "warn" },
-    remote_only: { name: "クラウドだけ", tone: "info" },
+  const STATES: Record<RideSync, { name: string; tone: string }> = {
+    synced: { name: "同期済み", tone: "ok" },
+    waiting: { name: "同期中…", tone: "muted" },
+    sending: { name: "同期中…", tone: "muted" },
+    unsent: { name: "未同期", tone: "warn" },
     conflict: { name: "両方で変更", tone: "danger" },
   };
 
   let dialog: HTMLDialogElement;
   let newDate = $state("");
-  /** 同期の接続先が設定してあるか。まだ調べていなければ undefined */
-  let configured = $state<boolean | undefined>(undefined);
-  let synced = $state<SyncRow[]>([]);
-  /** クラウドの一覧を取れているか */
-  let listed = $state(false);
+  /** 操作に失敗した理由 */
   let message = $state("");
   let busy = $state(false);
   /** 消すかどうかを聞いている行 */
   let asking = $state<string | null>(null);
-  let alsoCloud = $state(false);
 
   const rows = $derived.by(() => {
-    const syncOf = (id: string) => synced.find((row) => row.id === id);
     const videosOf = (rideDate: string) => videos.find((ride) => ride.date === rideDate);
     const list: Row[] = stored.map((summary) => ({
       key: summary.id,
@@ -85,10 +83,11 @@
       title: summary.title,
       videos: videosOf(summary.ride_date),
       summary,
-      sync: syncOf(summary.id),
+      remote: false,
+      state: sync.rides[summary.id],
     }));
-    for (const row of synced) {
-      if (row.state !== "remote_only" || list.some((known) => known.id === row.id)) continue;
+    for (const row of sync.remote) {
+      if (list.some((known) => known.id === row.id)) continue;
       list.push({
         key: row.id,
         date: row.ride_date,
@@ -96,30 +95,27 @@
         title: row.title,
         videos: videosOf(row.ride_date),
         summary: undefined,
-        sync: row,
+        remote: true,
+        // 突き合わせの最中なら、これから受け取る。済んでも残っているのは、受け取れなかった走行である。
+        state: sync.rides[row.id] ?? (sync.checking ? "sending" : "unsent"),
       });
     }
     for (const ride of videos) {
       if (list.some((known) => known.date === ride.date)) continue;
-      const none = { id: null, summary: undefined, sync: undefined };
+      const none = { id: null, summary: undefined, remote: false, state: undefined };
       list.push({ key: ride.date, date: ride.date, title: ride.date, videos: ride, ...none });
     }
     return list.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? 1 : -1));
   });
-  const differing = $derived(synced.filter((row) => row.state !== "same").length);
+  /** 同期の全体の状態。上の帯と同じ決め方で、保存のことは見ない */
+  const overall = $derived(barState("saved", sync));
+  const conflicts = $derived(Object.values(sync.rides).filter((state) => state === "conflict").length);
 
   $effect(() => {
     dialog.showModal();
     // 開いたときに、最初の欄やボタンを勝手に選ばない。
     dialog.focus();
-    void load();
   });
-
-  async function load() {
-    const settings = await invoke<{ api_url: string | null; has_token: boolean }>("get_sync_settings");
-    configured = Boolean(settings.api_url) && settings.has_token;
-    if (configured) await refresh();
-  }
 
   /** 画面の操作を 1 つ行う。失敗は 1 行で出す。 */
   async function run(work: () => Promise<void>) {
@@ -128,71 +124,30 @@
     try {
       await work();
     } catch (e) {
-      message = String(e);
+      message = e instanceof Error ? e.message : String(e);
     }
     busy = false;
   }
 
-  async function list() {
-    synced = await invoke<SyncRow[]>("sync_list");
-    listed = true;
-  }
-
-  export const refresh = () => run(list);
-
-  export const push = (id: string, overwrite = false) =>
-    run(async () => {
-      await invoke("sync_push", { id, overwrite });
-      await list();
-    });
-
-  export const pull = (id: string) =>
-    run(async () => {
-      await invoke("sync_pull", { id });
-      await onchanged();
-      await list();
-    });
-
-  /** どちらを残すか迷わないものを、まとめて送り受けする。両方で変わったものは残す。 */
-  const syncAll = () =>
-    run(async () => {
-      for (const row of synced) {
-        if (row.state === "local_newer" || row.state === "local_only") {
-          await invoke("sync_push", { id: row.id, overwrite: false });
-        } else if (row.state === "remote_newer" || row.state === "remote_only") {
-          await invoke("sync_pull", { id: row.id });
-        }
-      }
-      await onchanged();
-      await list();
-    });
+  /** 両方で変わった走行を、手元かクラウドの、選んだほうで揃える。 */
+  export const resolve = (id: string, keep: "local" | "cloud") => run(() => onresolve(id, keep));
 
   /**
-   * 走行の記録を消す。手元とクラウドの、どちらから消すかを選べる。
+   * 走行の記録を消す。同期を設定していれば、クラウドからも消える。
    *
-   * クラウドを先に消す。繋がらずに失敗したら手元も残るので、もう一度選び直せる。
+   * クラウドから消せなかったときは、手元の記録も残る。理由を出して、聞いている行はそのままにする。
    */
-  export const remove = (id: string, where: { local: boolean; cloud: boolean }) =>
+  export const remove = (id: string) =>
     run(async () => {
-      if (where.cloud) await invoke("sync_delete", { id });
-      if (where.local) await onremove(id);
+      await onremove(id);
       asking = null;
-      if (listed) await list();
     });
 
   /** いまの一覧。自動の確認が読む。 */
   export const snapshot = () => ({
-    rows: synced.map((row) => `${row.ride_date} ${row.title}: ${row.state}`),
+    rows: rows.filter((row) => row.id !== null).map((row) => `${row.date} ${row.title}: ${row.state ?? "-"}`),
     message,
   });
-
-  /** その走行がクラウドにもあるか。一覧を取れていなければ、分からないので無いものとして扱う。 */
-  const onCloud = (row: Row) => row.sync !== undefined && row.sync.state !== "local_only";
-
-  function ask(row: Row) {
-    asking = row.key;
-    alsoCloud = false;
-  }
 
   async function create() {
     if (newDate === "") return;
@@ -233,26 +188,22 @@
       </form>
     </header>
 
+    <!-- 同期の全体の状態を 1 行で出す。同期は自動なので、押して送り受けするボタンは置かない。 -->
     <div class="cloud" class:failed={message !== ""}>
       <Icon name={message === "" ? "cloud" : "error"} />
       {#if message !== ""}
         <span class="text">{message}</span>
-      {:else if configured === false}
+      {:else if !sync.configured}
         <span class="text">クラウド同期の接続先が、まだ設定されていません</span>
-      {:else if !listed}
-        <span class="text">{busy ? "クラウドの一覧を取っています…" : "クラウドの一覧をまだ取っていません"}</span>
-      {:else if differing > 0}
-        <span class="text">クラウドと違う走行が {differing} 件あります</span>
-      {:else}
-        <span class="text">どの走行も、クラウドと同じです</span>
-      {/if}
-      {#if configured === false}
         <button type="button" class="btn sized" onclick={onsettings}>設定を開く</button>
-      {:else if configured}
-        <button type="button" class="btn sized" onclick={refresh} disabled={busy}>一覧を取り直す</button>
-        <button type="button" class="btn sized" onclick={syncAll} disabled={busy || !listed || differing === 0}>
-          まとめて同期
-        </button>
+      {:else if overall === "syncing"}
+        <span class="text">クラウドと同期しています…</span>
+      {:else if conflicts > 0}
+        <span class="text">両方で変更された走行が {conflicts} 件あります。どちらを残すかを選んでください</span>
+      {:else if overall === "unsynced"}
+        <span class="text" title={sync.failure}>クラウドと同期できていません。少し置いて、もう一度試します</span>
+      {:else}
+        <span class="text">どの走行も、クラウドと同期済みです</span>
       {/if}
     </div>
 
@@ -263,7 +214,7 @@
         </p>
       {/if}
       {#each rows as row (row.key)}
-        {@const open = row.date === date && row.sync?.state !== "remote_only"}
+        {@const open = row.date === date && !row.remote}
         {#if asking === row.key && row.id !== null}
           {@const id = row.id}
           {@const local = row.summary !== undefined}
@@ -274,25 +225,14 @@
             </span>
             <span>
               {#if local}
-                <b>この走行の記録を消しますか。</b>経路とイベントが消えます。動画のファイルは消えません。
+                <b>この走行の記録を消しますか。</b>経路とイベントが消えます。{#if sync.configured}クラウドからも消えます。{/if}動画のファイルは消えません。
               {:else}
                 <b>クラウドにある、この走行の記録を消しますか。</b>手元には記録がありません。動画のファイルは消えません。
               {/if}
             </span>
             <div class="buttons">
-              {#if local && onCloud(row)}
-                <label><input type="checkbox" bind:checked={alsoCloud} />クラウドからも消す</label>
-              {/if}
-              <span class="space"></span>
               <button type="button" class="btn" onclick={() => (asking = null)}>やめる</button>
-              <button
-                type="button"
-                class="btn danger"
-                disabled={busy}
-                onclick={() => remove(id, { local, cloud: local ? alsoCloud : true })}
-              >
-                記録を消す
-              </button>
+              <button type="button" class="btn danger" disabled={busy} onclick={() => remove(id)}>記録を消す</button>
             </div>
           </div>
         {:else}
@@ -312,7 +252,7 @@
                 </span>
                 <span class="mono detail">{summaryOf(row)}</span>
               </div>
-            {:else if row.sync?.state === "remote_only"}
+            {:else if row.remote}
               <div class="main">
                 <span class="head">
                   <span class="mono date">{row.date}</span>
@@ -330,21 +270,16 @@
               </button>
             {/if}
             <span class="sync">
-              {#if row.sync !== undefined && row.id !== null}
+              {#if row.state !== undefined && row.id !== null}
                 {@const id = row.id}
-                {@const state = row.sync.state}
-                <span class="pill {STATES[state].tone}">
-                  {#if state === "same"}<Icon name="check" size={13} />{/if}{STATES[state].name}
+                <span class="pill {STATES[row.state].tone}">
+                  {#if row.state === "synced"}<Icon name="check" size={13} />{/if}{STATES[row.state].name}
                 </span>
-                {#if state === "local_newer" || state === "local_only"}
-                  <button type="button" class="btn small" onclick={() => push(id)} disabled={busy}>送る</button>
-                {:else if state === "remote_newer" || state === "remote_only"}
-                  <button type="button" class="btn small" onclick={() => pull(id)} disabled={busy}>受け取る</button>
-                {:else if state === "conflict"}
-                  <button type="button" class="btn small" onclick={() => push(id, true)} disabled={busy}>
+                {#if row.state === "conflict"}
+                  <button type="button" class="btn small" onclick={() => resolve(id, "local")} disabled={busy}>
                     手元で上書き
                   </button>
-                  <button type="button" class="btn small" onclick={() => pull(id)} disabled={busy}>
+                  <button type="button" class="btn small" onclick={() => resolve(id, "cloud")} disabled={busy}>
                     クラウドで上書き
                   </button>
                 {/if}
@@ -356,7 +291,7 @@
                 class="btn small icon-only ghost trash"
                 aria-label="{row.date} の記録を消す"
                 title="記録を消す"
-                onclick={() => ask(row)}
+                onclick={() => (asking = row.key)}
               >
                 <Icon name="trash" size={14} />
               </button>
@@ -531,19 +466,7 @@
   .buttons {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 8px;
-  }
-  .buttons label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .buttons input {
-    width: 14px;
-    height: 14px;
-    margin: 0;
-  }
-  .space {
-    flex: 1;
   }
 </style>
