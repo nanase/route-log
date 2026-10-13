@@ -161,9 +161,11 @@
     try {
       await invoke("open_geo_data", { dir });
       geoReady = true;
+      message = "判定データを開きました";
       extractAgain();
     } catch (e) {
-      message = String(e);
+      // 選ぶのは、roads.fgb・admin.fgb・michi-no-eki.fgb の 3 つが入ったフォルダである。
+      message = `判定データを開けません: ${e}`;
     }
   }
 
@@ -484,6 +486,7 @@
         title="新しく足す区間を、国道・都道府県道に沿わせます。Shift を押しながら経由点をクリックすると、区間ごとに切り替えられます"
       >
         <input type="checkbox" bind:checked={snapNew} disabled={!geoReady} />道に沿わせる
+        {#if !geoReady}<span class="hint">（判定データを開くと選べます）</span>{/if}
       </label>
       <button
         type="button"
@@ -618,6 +621,9 @@
   }
   label input[type="number"] {
     width: 5rem;
+  }
+  .hint {
+    color: #777;
   }
   .title {
     width: 11rem;
