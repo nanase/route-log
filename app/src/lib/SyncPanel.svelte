@@ -133,6 +133,11 @@
     <span class="message">{message}</span>
   </p>
 
+  {#if rows.length === 0 && !busy && message === ""}
+    <p class="empty">
+      走行がまだありません。画面を閉じて、左上の日付の欄から走行を作り、地図に経路を引いてください。ここに行が出て、右端に「送る」のボタンが付きます。
+    </p>
+  {/if}
   <table>
     <tbody>
       {#each rows as row (row.id)}
@@ -195,6 +200,10 @@
   }
   .message {
     color: #c92a2a;
+  }
+  .empty {
+    margin: 0;
+    color: #555;
   }
   table {
     width: 100%;
