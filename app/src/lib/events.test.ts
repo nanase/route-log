@@ -93,6 +93,15 @@ describe("確定", () => {
     expect(confirmed).toMatchObject({ status: "confirmed", time_ms: 100_000, detail: { camera_ms: 70_000 } });
   });
 
+  test("動画の位置が小数のミリ秒でも、時刻は整数になる", () => {
+    // 再生位置は小数の秒で返るので、実時刻に直すと端数が付く。Rust 側は整数しか受け付けない。
+    const confirmed = confirmOnVideo(event("x", 500, "estimated"), 1_790_977_977_367.118, 30_000);
+    expect(confirmed.time_ms).toBe(1_790_977_977_367);
+    expect(confirmed.detail.camera_ms).toBe(1_790_977_947_367);
+    const memo = customAt(1_790_977_977_367.9, 0, "メモ");
+    expect([memo.time_ms, memo.detail.camera_ms]).toEqual([1_790_977_977_368, 1_790_977_977_368]);
+  });
+
   test("手で入れた時刻は、カメラの時刻を持たない", () => {
     const onVideo = confirmOnVideo(event("x", 500, "estimated"), 100_000, 30_000);
     const typed = confirmTyped(onVideo, 200_000);

@@ -74,18 +74,20 @@ export function patch(events: RideEvent[], id: string, change: (event: RideEvent
  * カメラの時計での時刻も残す。時計の補正値を後から変えたとき、Rust 側がそこから時刻を求め直す。
  */
 export function confirmOnVideo(event: RideEvent, realMs: number, clockOffsetMs: number): RideEvent {
+  // 動画の再生位置は小数の秒で返る。時刻は整数のミリ秒で持つ決まりなので、ここで丸める。
+  const timeMs = Math.round(realMs);
   return {
     ...event,
     status: "confirmed",
-    time_ms: realMs,
-    detail: { ...event.detail, camera_ms: realMs - clockOffsetMs },
+    time_ms: timeMs,
+    detail: { ...event.detail, camera_ms: timeMs - Math.round(clockOffsetMs) },
   };
 }
 
 /** 手で入れた時刻で確定する。時計の補正値を変えても動かない。 */
 export function confirmTyped(event: RideEvent, timeMs: number): RideEvent {
   const { camera_ms: _, ...detail } = event.detail;
-  return { ...event, status: "confirmed", time_ms: timeMs, detail };
+  return { ...event, status: "confirmed", time_ms: Math.round(timeMs), detail };
 }
 
 /** 確定を外す。時刻は次の保存で推定し直される。 */
@@ -96,13 +98,14 @@ export function unconfirm(event: RideEvent): RideEvent {
 
 /** 動画のいまの位置に、手動のイベントを作る。位置は Rust 側が時刻から求める。 */
 export function customAt(realMs: number, clockOffsetMs: number, label: string): RideEvent {
+  const timeMs = Math.round(realMs);
   return {
     id: crypto.randomUUID(),
     kind: "custom",
     label,
     route_m: 0,
-    time_ms: realMs,
+    time_ms: timeMs,
     status: "confirmed",
-    detail: { by_time: true, camera_ms: realMs - clockOffsetMs },
+    detail: { by_time: true, camera_ms: timeMs - Math.round(clockOffsetMs) },
   };
 }
