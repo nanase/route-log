@@ -78,9 +78,11 @@ export type EventKind =
   | "bridge"
   | "tunnel"
   | "michi_no_eki"
+  | "waypoint"
   | "custom";
 
-export type EventStatus = "estimated" | "confirmed" | "hidden";
+/** 時刻が推定か、人が確定したか。字幕にするかどうかは、これとは別に `hidden` で持つ。 */
+export type EventStatus = "estimated" | "confirmed";
 
 export interface RouteRef {
   class: "national" | "prefectural";
@@ -89,7 +91,7 @@ export interface RouteRef {
   number: number;
 }
 
-/** 字幕にするイベント。DOM の Event と紛れないよう、こちらは RideEvent と呼ぶ。 */
+/** イベント。DOM の Event と紛れないよう、こちらは RideEvent と呼ぶ。 */
 export interface RideEvent {
   id: string;
   kind: EventKind;
@@ -98,6 +100,8 @@ export interface RideEvent {
   route_m: number;
   time_ms: number | null;
   status: EventStatus;
+  /** 字幕にしない。時刻を確定してあれば、字幕にしなくても時刻推定の基準になる */
+  hidden?: boolean;
   detail: {
     routes?: RouteRef[];
     end_m?: number;
@@ -107,6 +111,8 @@ export interface RideEvent {
     camera_ms?: number;
     /** 位置ではなく時刻が分かっているイベント */
     by_time?: boolean;
+    /** 経由点のイベントの、その経由点の位置 */
+    at?: LonLat;
   };
 }
 

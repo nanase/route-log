@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use routelog_core::RouteClass;
 use routelog_core::geo::{self, LonLat};
-use routelog_core::{EventStatus, RouteClass};
 use routelog_geo::{BBox, GeoData, Options, Prepared, Road, SnapOptions};
 
 /// 始点にいちばん近い way から、端が一致する way を行き先へ向けてつないでいく。
@@ -150,11 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         events.len()
     );
     for event in &events {
-        let hidden = if event.status == EventStatus::Hidden {
-            "（非表示）"
-        } else {
-            ""
-        };
+        let hidden = if event.hidden { "（非表示）" } else { "" };
         let end = event
             .detail
             .end_m

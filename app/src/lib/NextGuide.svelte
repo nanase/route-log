@@ -6,7 +6,7 @@
   import type { RideEvent } from "./types";
 
   /**
-   * 次に確定するイベントの案内と、確定の操作。動画のすぐ下に置く。
+   * 次の候補のイベントの案内と、確定の操作。動画のすぐ下に置く。
    *
    * 動画が無ければ、動画の位置では確定できない。時刻を一覧で手で入れることを案内する。
    */
@@ -21,7 +21,7 @@
     onundo,
     onadd,
   }: {
-    /** 次に確定する相手。無ければ null */
+    /** 次の候補。無ければ null */
     target: RideEvent | null;
     /** イベントの数 */
     count: number;
@@ -50,10 +50,10 @@
 <section class:done={confirmed}>
   <div class="what">
     {#if target === null}
-      <span class="lead">次に確定する</span>
+      <span class="lead">次の候補</span>
       {#if count === 0}
         <span class="name none">イベントがまだありません</span>
-        <span class="time">「経路を入れる」で経路を引くと、ここに出ます</span>
+        <span class="time">「経路入力」で経路を引くと、ここに出ます</span>
       {:else if !hasVideo}
         <span class="name none">動画がありません</span>
         <span class="time">時刻は、一覧で手で入れます</span>
@@ -62,7 +62,9 @@
         <span class="time">一覧で選ぶと、確定し直せます</span>
       {/if}
     {:else}
-      <span class="lead">{confirmed ? "選んでいる（確定済み）" : hasVideo ? "次に確定する" : "選んでいる"}</span>
+      <span class="lead">
+        {confirmed ? "選んでいる（確定済み）" : hasVideo ? "次の候補" : "選んでいる"}{#if target.hidden}・字幕なし{/if}
+      </span>
       <span class="name">
         <KindTag kind={target.kind} />
         {#if showKind}<span>{KINDS[target.kind]}</span>{/if}
@@ -85,9 +87,9 @@
       class="btn primary confirm"
       onclick={onconfirm}
       disabled={target === null || !hasVideo}
-      title={hasVideo ? "" : "動画が無いときは、一覧で時刻を手で入れます"}
+      title={hasVideo ? "動画のいまの位置の時刻で確定する" : "動画が無いときは、一覧で時刻を手で入れます"}
     >
-      {confirmed ? "いまの位置で確定し直す" : "いまの位置で確定"}<kbd>Enter</kbd>
+      {confirmed ? "時刻を確定し直す" : "時刻を確定"}<kbd>Enter</kbd>
     </button>
     <div class="more">
       <button type="button" class="btn" onclick={() => onmove(-1)} title="前のイベントへ">前<kbd>P</kbd></button>

@@ -38,7 +38,8 @@
    * - Shift を押しながら経由点をクリックすると、次の経由点までの結び方を吸着と直線で切り替える
    * - 経由点をクリックすると選び、結び方の切り替えと削除のボタンをそばに出す
    *
-   * `editable` でなければ、経路は見るだけになる。時刻を確定するときに使う。
+   * `editable` でなければ、経路は見るだけになる。時刻入力のときに使う。経由点の丸は小さく出し、
+   * 押すと `onwaypoint` に知らせる。
    *
    * 操作の結果は、変えた後の経路ではなく、経路に当てる編集（`PathEdit`）として `onedit` に渡す。
    * 点を道へ寄せるのを待つ間に、次の操作や保存の応答で経路が変わるからである。
@@ -57,9 +58,11 @@
     snap = false,
     canSnap = false,
     selected = null,
+    timed = [],
     pad = { top: 60, right: 60, bottom: 60, left: 60 },
     onsnap,
     onselect,
+    onwaypoint,
     onedit,
   }: {
     path: Path;
@@ -72,7 +75,7 @@
     basemap?: Basemap;
     /** イベントの位置。地図に、種類の色の点で出す */
     marks?: { at: LonLat; kind: EventKind; hidden: boolean }[];
-    /** 名前を添えて目立たせるイベント。次に確定する相手か、一覧で選んだもの */
+    /** 名前を添えて目立たせるイベント。次の候補か、一覧で選んだもの */
     callout?: { at: LonLat; kind: EventKind; label: string; note: string } | null;
     /** 動画のいまの時刻にいると推定される位置 */
     here?: LonLat | null;
@@ -84,11 +87,15 @@
     canSnap?: boolean;
     /** 選んでいる経由点の番号 */
     selected?: number | null;
+    /** 通過時刻を確定してある経由点の番号。見るだけのときに、丸を確定の色にする */
+    timed?: number[];
     /** 浮かせた板に隠れる幅（px）。経路の全体を出すときに、ここを避ける */
     pad?: { top: number; right: number; bottom: number; left: number };
     /** 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。近くに道が無ければ null を返す */
     onsnap?: (at: LonLat, radiusM: number) => Promise<LonLat | null>;
     onselect?: (index: number | null) => void;
+    /** 見るだけのときに、経由点の丸を押した */
+    onwaypoint?: (index: number) => void;
     /**
      * 経路を変える操作を、した順に 1 つずつ経路に入れてもらう。
      *
@@ -241,10 +248,11 @@
     catchUp();
   }
 
-  function handle(kind: string, at: LonLat, label = "") {
+  function handle(kind: string, at: LonLat, label = "", title = "") {
     const element = document.createElement("div");
     element.className = `handle ${kind}`;
     element.textContent = label;
+    element.title = title;
     let onshiftclick: (() => void) | undefined;
     let onplainclick: (() => void) | undefined;
     // 丸の上のクリックで、地図に経由点を足さない。
@@ -342,9 +350,12 @@
         .filter(Boolean)
         .join(" ");
     if (!editable) {
-      // 見るだけのときは、経由点を小さく出す。つかめないし、押しても何も起きない。
+      // 見るだけのときは、経由点を小さく出す。つかめない。押すと、そこを通った時刻を入れる相手になる。
       current.waypoints.forEach((waypoint, index) => {
-        handle(`${waypointClass(index)} fixed`, [waypoint.lon, waypoint.lat], String(index + 1));
+        const state = timed.includes(index) ? "fixed timed" : "fixed";
+        const title = `経由点 ${index + 1}。押すと、ここを通った時刻を入力できます`;
+        const fixed = handle(`${waypointClass(index)} ${state}`, [waypoint.lon, waypoint.lat], String(index + 1), title);
+        fixed.onclick(() => onwaypoint?.(index));
       });
       return;
     }
@@ -547,10 +558,12 @@
     };
   });
 
+  // 時刻を確定してある経由点の並び。配列は保存のたびに作り直されるので、中身で比べる。
+  const timedKey = $derived(timed.join(","));
   $effect(() => {
     if (!ready) return;
-    // 経路のほか、選んでいる経由点と、編集できるかどうかでも、丸の見た目が変わる。
-    void [path, selected, editable];
+    // 経路のほか、選んでいる経由点、編集できるかどうか、時刻を確定してあるかでも、丸の見た目が変わる。
+    void [path, selected, editable, timedKey];
     untrack(render);
   });
 
@@ -915,13 +928,23 @@
     line-height: 23px;
   }
   .map :global(.handle.waypoint.fixed) {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border-width: 2px;
-    font-size: 9px;
-    line-height: 12px;
-    cursor: default;
-    pointer-events: none;
+    font-size: 10px;
+    line-height: 14px;
+    cursor: pointer;
+  }
+  .map :global(.handle.waypoint.fixed:hover) {
+    box-shadow:
+      0 0 0 4px rgba(31, 79, 163, 0.25),
+      0 1px 3px rgba(26, 29, 33, 0.35);
+  }
+  /* 通過時刻を確定してある経由点は、確定の緑にする。 */
+  .map :global(.handle.waypoint.fixed.timed) {
+    border-color: #fff;
+    background: var(--ok);
+    color: #fff;
   }
   .map :global(.handle.vertex) {
     width: 14px;

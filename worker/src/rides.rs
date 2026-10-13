@@ -115,6 +115,10 @@ pub async fn get(env: &Env, id: &str) -> Reply {
 ///
 /// すでにある走行は、`If-Match` がサーバの持つ更新時刻と同じときだけ置き換える。別の場所で
 /// 書き換えられた走行を、古い内容で上書きしないためである。
+///
+/// 経由点とイベントは、変わった行だけを書く。アプリは編集のたびに走行を丸ごと送ってくるので、
+/// 全部を消して入れ直すと、D1 の書き込みの行数が、編集の回数にイベントの数を掛けただけ増える。
+/// 書いた行数は、確かめられるよう応答に入れて返す。
 pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
     let doc: RideDocument = req
         .json()
@@ -148,6 +152,9 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
 
     // 経由点とイベントは配列を JSON で 1 つの値として渡し、json_each で行に開く。
     // 1 行ずつ入れると、1 回の呼び出しで使えるクエリの数に当たる。
+    //
+    // 送られてきた中に無い行を消し、ある行は、中身が違うときだけ書き換える。SELECT のあとの
+    // `WHERE true` は、続く ON CONFLICT を結合の条件と読み違えさせないために要る。
     let ride = &doc.ride;
     let statements = vec![
         db.prepare(
@@ -167,29 +174,49 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
             ride.created_at.as_str().into(),
             ride.updated_at.as_str().into(),
         ])?,
-        db.prepare("DELETE FROM waypoints WHERE ride_id = ?1")
-            .bind(&[id.into()])?,
+        db.prepare("DELETE FROM waypoints WHERE ride_id = ?1 AND seq >= json_array_length(?2)")
+            .bind(&[id.into(), json(&doc.waypoints)?])?,
         db.prepare(
             "INSERT INTO waypoints (ride_id, seq, lon, lat, segment_mode) \
              SELECT ?1, key, json_extract(value, '$.lon'), json_extract(value, '$.lat'), \
-             json_extract(value, '$.segment_mode') FROM json_each(?2)",
+             json_extract(value, '$.segment_mode') FROM json_each(?2) WHERE true \
+             ON CONFLICT(ride_id, seq) DO UPDATE SET lon = excluded.lon, lat = excluded.lat, \
+             segment_mode = excluded.segment_mode \
+             WHERE waypoints.lon IS NOT excluded.lon OR waypoints.lat IS NOT excluded.lat \
+             OR waypoints.segment_mode IS NOT excluded.segment_mode",
         )
         .bind(&[id.into(), json(&doc.waypoints)?])?,
-        db.prepare("DELETE FROM events WHERE ride_id = ?1")
-            .bind(&[id.into()])?,
+        db.prepare(
+            "DELETE FROM events WHERE ride_id = ?1 \
+             AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?2))",
+        )
+        .bind(&[id.into(), json(&doc.events)?])?,
+        // ほかの走行が同じ ID のイベントを持っていても、それは書き換えない。
         db.prepare(
             "INSERT INTO events (id, ride_id, seq, kind, label, route_m, time_ms, status, json) \
              SELECT json_extract(value, '$.id'), ?1, key, json_extract(value, '$.kind'), \
              json_extract(value, '$.label'), json_extract(value, '$.route_m'), \
              json_extract(value, '$.time_ms'), json_extract(value, '$.status'), value \
-             FROM json_each(?2)",
+             FROM json_each(?2) WHERE true \
+             ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, kind = excluded.kind, \
+             label = excluded.label, route_m = excluded.route_m, time_ms = excluded.time_ms, \
+             status = excluded.status, json = excluded.json \
+             WHERE events.ride_id = excluded.ride_id \
+             AND (events.seq IS NOT excluded.seq OR events.json IS NOT excluded.json)",
         )
         .bind(&[id.into(), json(&doc.events)?])?,
     ];
-    db.batch(statements).await?;
-    Ok(Response::from_json(
-        &serde_json::json!({ "updated_at": ride.updated_at }),
-    )?)
+    let mut rows_written = 0;
+    for result in db.batch(statements).await? {
+        rows_written += result
+            .meta()?
+            .and_then(|meta| meta.rows_written)
+            .unwrap_or(0);
+    }
+    Ok(Response::from_json(&serde_json::json!({
+        "updated_at": ride.updated_at,
+        "rows_written": rows_written,
+    }))?)
 }
 
 pub async fn delete(env: &Env, id: &str) -> Reply {

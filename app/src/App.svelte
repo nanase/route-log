@@ -13,7 +13,10 @@
     nextConfirmable,
     patch,
     positionAt,
+    setHidden,
     unconfirm,
+    waypointEvent,
+    waypointEventAt,
   } from "./lib/events";
   import { pointAt } from "./lib/geo";
   import Icon from "./lib/Icon.svelte";
@@ -39,6 +42,7 @@
   import TopBar from "./lib/TopBar.svelte";
   import type {
     Config,
+    LonLat,
     RideDocument,
     RideEvent,
     RideSummary,
@@ -56,6 +60,7 @@
     type Notice,
     remembered,
     type SaveState,
+    startDate,
   } from "./lib/ui";
 
   /** 保存を待つ時間。続けて編集している間は書かない */
@@ -68,6 +73,15 @@
   /** 画面の好みを覚えておく場所 */
   const HINTS_KEY = "routelog.hints";
   const BASEMAP_KEY = "routelog.basemap";
+  const LAST_RIDE_KEY = "routelog.last-ride";
+  const SIDE_KEY = "routelog.side-width";
+  /** 時刻入力のときの、動画と一覧の列の幅（px）。動画は、この幅いっぱいに出る */
+  const SIDE_DEFAULT = 520;
+  const SIDE_MIN = 420;
+  /** 動画と一覧の列を広げても、地図に残す幅（px）。上の帯が収まる幅にする */
+  const MAP_MIN = 540;
+  /** 動画のほかに、縦に要る高さ（px）。タイムライン、再生の操作、次の候補、一覧の数行 */
+  const BESIDE_VIDEO = 416;
 
   /** 自動の確認の対象。`undefined` は問い合わせ中 */
   let check = $state<
@@ -85,20 +99,22 @@
   let routeMap = $state<RouteMap>();
   let ridePanel = $state<RidePanel>();
   let timelineBar = $state<TimelineBar>();
-  /** いまの作業。経路を入れるか、動画を見て時刻を確定するか */
+  /** いまの作業。経路入力か、動画を見ながらの時刻入力か */
   let mode = $state<Mode>("route");
   let settingsOpen = $state(false);
   let ridesOpen = $state(false);
   /** 操作の手がかりを出しているか */
   let hintsShown = $state(remembered(HINTS_KEY, ["on", "off"], "on") === "on");
   let basemap = $state<Basemap>(remembered(BASEMAP_KEY, ["pale", "std", "photo"], "pale"));
+  /** 動画と一覧の列の幅。境目をドラッグして変える */
+  let sideWidth = $state(Number(localStorage.getItem(SIDE_KEY)) || SIDE_DEFAULT);
   /** 道路の線を地図に重ねるか */
   let showRoads = $state(true);
-  /** 時刻を確定するとき、地図が現在位置を追うか */
+  /** 時刻入力のとき、地図が現在位置を追うか */
   let follow = $state(true);
   /** 選んでいる経由点の番号 */
   let selectedWaypoint = $state<number | null>(null);
-  /** 経路を入れるときに、一覧で選んで地図で目立たせているイベント */
+  /** 経路入力のときに、一覧で選んで地図で目立たせているイベント */
   let focusedId = $state<string | null>(null);
   let config = $state<Config>({ video_dir: null, road_data_dir: null, geo_data_dir: null });
   let videoState = $state<FolderState>("none");
@@ -128,7 +144,7 @@
   let extractNeeded = false;
   /** 動画の再生位置の実時刻 */
   let nowMs = $state(0);
-  /** 人が選んだ、次に確定する相手。選んでいなければ推定時刻から決める */
+  /** 人が選んだ、次の候補。選んでいなければ推定時刻から決める */
   let chosenId = $state<string | null>(null);
   /** 一覧で、直す欄を開いているイベント */
   let selectedId = $state<string | null>(null);
@@ -185,13 +201,27 @@
     const routeM = positionAt(knotsOf(events), nowMs);
     return routeM === null ? null : pointAt(routeLine, routeM);
   });
+  // 経由点のイベントは、地図に経由点の丸があるので、点を重ねない。
   const marks = $derived(
     events.flatMap((event) => {
-      const at = pointAt(routeLine, event.route_m);
-      return at === null ? [] : [{ at, kind: event.kind, hidden: event.status === "hidden" }];
+      const at = event.kind === "waypoint" ? null : pointAt(routeLine, event.route_m);
+      return at === null ? [] : [{ at, kind: event.kind, hidden: event.hidden === true }];
     }),
   );
-  /** 地図で名前を添えるイベント。時刻を確定するときは次の相手、経路を入れるときは一覧で選んだもの */
+  /** 経由点ごとの、そこを通った時刻を持つイベント。始まりと終わりは出発と到着で、途中は作ってあれば */
+  const waypointEvents = $derived.by(() => {
+    const waypoints = doc?.waypoints ?? [];
+    return waypoints.map((waypoint, index) => {
+      if (index === 0) return events.find((event) => event.kind === "departure") ?? null;
+      if (index === waypoints.length - 1) return events.find((event) => event.kind === "arrival") ?? null;
+      return waypointEventAt(events, [waypoint.lon, waypoint.lat]);
+    });
+  });
+  /** 通過時刻を確定してある経由点の番号 */
+  const timedWaypoints = $derived(
+    waypointEvents.flatMap((event, index) => (event?.status === "confirmed" ? [index] : [])),
+  );
+  /** 地図で名前を添えるイベント。時刻入力のときは次の候補、経路入力のときは一覧で選んだもの */
   const callout = $derived.by(() => {
     const event = mode === "confirm" ? target : (events.find((e) => e.id === focusedId) ?? null);
     const at = event === null ? null : pointAt(routeLine, event.route_m);
@@ -235,13 +265,22 @@
     // クラウドとの突き合わせは裏で行い、画面を出すのを待たせない。
     void sync.start();
     config = await invoke<Config>("get_config");
+    // 前に開いていた走行に記録があれば、動画フォルダを読むのを待たずに開く。
+    const last = localStorage.getItem(LAST_RIDE_KEY);
+    if (stored.some((ride) => ride.ride_date === last)) await select(last as string);
     if (config.road_data_dir) await loadRoads(config.road_data_dir);
     if (config.geo_data_dir) await loadGeo(config.geo_data_dir);
     if (config.video_dir) await loadVideos(config.video_dir);
-    // 動画が無くても、記録のある走行があれば、いちばん新しいものを開いて始める。
-    if (date === null && dates.length > 0) await select(dates[0]);
+    // 動画が無くても、記録のある走行があれば、それを開いて始める。
+    await openFirst();
     booted = true;
   });
+
+  /** 何も開いていなければ、前に開いていた走行を開く。それがもう無ければ、いちばん新しいものを開く。 */
+  async function openFirst() {
+    const first = startDate(localStorage.getItem(LAST_RIDE_KEY), dates);
+    if (date === null && first !== undefined) await select(first);
+  }
 
   /** エラーか注意を、上の帯の下に出す。同じ事柄の知らせがあれば置き換える。 */
   function report(notice: Notice) {
@@ -279,7 +318,7 @@
           detail: scan.skipped[0].reason,
         });
       }
-      if (date === null && dates.length > 0) await select(dates[0]);
+      await openFirst();
     } catch (e) {
       videoState = "error";
       report({ key: "video", level: "error", title: "動画フォルダを読めません。", detail: String(e), action: repick("video") });
@@ -353,6 +392,8 @@
     const names = await invoke<string[]>("get_excluded_videos", { date: next });
     doc = loaded;
     date = next;
+    // 次に起動したときに、同じ走行から始められるようにする。
+    localStorage.setItem(LAST_RIDE_KEY, next);
     excludedNames = names;
     chosenId = null;
     selectedId = null;
@@ -558,7 +599,7 @@
     return edit((current) => ({ ...current, ride: { ...current.ride, title } }));
   }
 
-  /** 一覧で選んだイベントを次に確定する相手にして、地図と動画をそこへ動かす。 */
+  /** 一覧で選んだイベントを次の候補にして、地図と動画をそこへ動かす。 */
   function choose(event: RideEvent) {
     chosenId = event.id;
     const at = pointAt(routeLine, event.route_m);
@@ -566,7 +607,7 @@
     if (event.time_ms !== null) void player?.seek(event.time_ms);
   }
 
-  /** 一覧の行を押した。次に確定する相手にして、直す欄を開く。開いている行なら、欄を閉じる。 */
+  /** 一覧の行を押した。次の候補にして、直す欄を開く。開いている行なら、欄を閉じる。 */
   function selectEvent(event: RideEvent) {
     if (selectedId === event.id) {
       selectedId = null;
@@ -576,7 +617,61 @@
     choose(event);
   }
 
-  /** 経路を入れるときに、一覧で選んだイベントの位置を地図に出す。もう一度選ぶと、目立たせるのをやめる。 */
+  /**
+   * 時刻入力のときに、地図の経由点を押した。その経由点を、次の候補にする。
+   *
+   * 経由点を通った時刻を入れるためのイベントを、無ければ作る。字幕にはしない。押すのは、動画が
+   * そこを通るのを見たときなので、一覧の行を押したときと違って、動画は動かさない。
+   */
+  function chooseWaypoint(index: number) {
+    const waypoint = doc?.waypoints[index];
+    if (waypoint === undefined) return;
+    const existing = waypointEvents[index];
+    if (existing !== null) {
+      chosenId = existing.id;
+      return;
+    }
+    const at: LonLat = [waypoint.lon, waypoint.lat];
+    const made = waypointEvent(at);
+    chosenId = made.id;
+    void editEvents((current) => (waypointEventAt(current, at) === null ? [...current, made] : current));
+  }
+
+  /** まとめて選んだイベントを、字幕なし（`hidden` が真）か字幕ありにする。 */
+  function hideEvents(ids: string[], hidden: boolean) {
+    return editEvents((current) => current.map((event) => (ids.includes(event.id) ? setHidden(event, hidden) : event)));
+  }
+
+  /** 動画と一覧の列に取れる、いちばん広い幅。地図と、一覧の数行の場所を残す。 */
+  const sideMax = () =>
+    Math.max(SIDE_MIN, Math.min(window.innerWidth - MAP_MIN, ((window.innerHeight - BESIDE_VIDEO) * 16) / 9));
+
+  /** 動画と一覧の列の境目をドラッグして、幅を変える。動画は、列の幅に合わせて大きくなる。 */
+  function resizeSide(event: PointerEvent) {
+    if (event.button !== 0) return;
+    // 字を選び始めないようにする。
+    event.preventDefault();
+    const move = (moved: PointerEvent) => {
+      sideWidth = Math.round(Math.min(Math.max(window.innerWidth - moved.clientX, SIDE_MIN), sideMax()));
+    };
+    // 境目は細いので、動かす先は窓の全体で受ける。
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      localStorage.setItem(SIDE_KEY, String(sideWidth));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }
+
+  function resetSide() {
+    sideWidth = SIDE_DEFAULT;
+    localStorage.setItem(SIDE_KEY, String(sideWidth));
+  }
+
+  /** 経路入力のときに、一覧で選んだイベントの位置を地図に出す。もう一度選ぶと、目立たせるのをやめる。 */
   function focusEvent(event: RideEvent) {
     if (focusedId === event.id) {
       focusedId = null;
@@ -620,7 +715,7 @@
    */
   const videoNow = () => (timeline === null || player == null ? null : player.now());
 
-  /** 次に確定する相手を、動画のいまの位置の時刻で確定する。 */
+  /** 次の候補を、動画のいまの位置の時刻で確定する。 */
   function confirmTarget() {
     const realMs = videoNow();
     if (realMs === null || target === null || doc === null) return;
@@ -650,7 +745,7 @@
     void editEvents((current) => [...current, custom]);
   }
 
-  /** 次に確定する相手を隣のイベントへ移し、動画をその時刻へ動かす。 */
+  /** 次の候補を隣のイベントへ移し、動画をその時刻へ動かす。 */
   function move(step: 1 | -1) {
     const next = neighbor(events, target?.id ?? chosenId, step);
     if (next !== null) choose(next);
@@ -1037,7 +1132,7 @@
 {#if check?.file}
   <PlaybackCheck target={check.file} />
 {:else if check !== undefined}
-  <main class={mode}>
+  <main class={mode} style:--side="{sideWidth}px">
     <div class="map" style:--map-left="{scaleLeft}px" style:--map-right="{pad.right - 12}px">
       <RouteMap
         bind:this={routeMap}
@@ -1054,9 +1149,11 @@
         snap={snapNew && geoReady}
         canSnap={geoReady}
         selected={selectedWaypoint}
+        timed={timedWaypoints}
         {pad}
         onsnap={(at, radiusM) => invoke<[number, number] | null>("snap_point", { point: at, radiusM })}
         onselect={(index) => (selectedWaypoint = index)}
+        onwaypoint={chooseWaypoint}
         onedit={editPath}
       />
       <div class="overlay">
@@ -1126,6 +1223,13 @@
       </div>
     </div>
     <div class="side">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="grip"
+        title="ドラッグで、動画と一覧の幅を変える。ダブルクリックで元の幅に戻す"
+        onpointerdown={resizeSide}
+        ondblclick={resetSide}
+      ></div>
       {#if timeline !== null}
         <Player
           bind:this={player}
@@ -1170,6 +1274,7 @@
         rideDate={date ?? ""}
         onselect={selectEvent}
         onchange={(id, change) => editEvents((current) => patch(current, id, change))}
+        onhide={hideEvents}
         onremove={(id) => editEvents((current) => current.filter((event) => event.id !== id))}
         onextract={geoReady && doc !== null ? extractAgain : null}
       />
@@ -1239,13 +1344,16 @@
     display: grid;
     height: 100vh;
   }
-  /* 経路を入れるときは、地図を画面いっぱいに置く。 */
+  /* 経路入力のときは、地図を画面いっぱいに置く。 */
   main.route {
     grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   }
-  /* 時刻を確定するときは、地図が左、動画と一覧が右、タイムラインが下に全幅。 */
+  /*
+   * 時刻入力のときは、地図が左、動画と一覧が右、タイムラインが下に全幅。右の列の幅は、境目を
+   * ドラッグして変える。窓を狭めても、地図の幅が残るようにする。
+   */
   main.confirm {
-    grid-template: minmax(0, 1fr) 96px / minmax(0, 1fr) 520px;
+    grid-template: minmax(0, 1fr) 96px / minmax(0, 1fr) clamp(420px, var(--side), max(420px, 100vw - 540px));
   }
   .map {
     position: relative;
@@ -1350,6 +1458,7 @@
     margin: 0;
   }
   .side {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -1357,11 +1466,26 @@
     border-left: 1px solid var(--line);
     background: var(--surface);
   }
+  /* 地図との境目。ドラッグすると、右の列の幅が変わる。 */
+  .grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    z-index: 2;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .grip:hover,
+  .grip:active {
+    background: linear-gradient(90deg, transparent 2px, var(--primary) 2px 5px, transparent 5px);
+  }
   .timeline {
     grid-column: 1 / -1;
     min-width: 0;
   }
-  /* 経路を入れる間も動画は読み込んだままにして、戻ったときに同じ位置から続けられるようにする。 */
+  /* 経路入力の間も動画は読み込んだままにして、戻ったときに同じ位置から続けられるようにする。 */
   main.route .side,
   main.route .timeline {
     display: none;
@@ -1374,6 +1498,7 @@
     justify-content: center;
     gap: 10px;
     aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 416px);
     background: linear-gradient(180deg, #3a4552 0%, #262d36 62%, var(--video-ground) 100%);
     color: #d5dbe2;
   }

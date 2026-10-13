@@ -3,7 +3,11 @@
 //! 時刻を確定したイベントを基準にして、その間を距離で線形に補間する。
 
 use crate::event::{Event, EventDetail, EventKind, EventStatus};
-use crate::ride::RideDocument;
+use crate::geo;
+use crate::ride::{RideDocument, Waypoint};
+
+/// 経由点を動かしても、同じ経由点のイベントとみなす距離の上限（m）。
+pub const WAYPOINT_KEEP_M: f64 = 30.0;
 
 /// 時刻推定の基準。経路の上の位置と、そこを通った時刻の組。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,6 +76,7 @@ fn endpoint(kind: EventKind, label: &str, route_m: f64) -> Event {
         route_m,
         time_ms: None,
         status: EventStatus::Estimated,
+        hidden: false,
         detail: EventDetail::default(),
     }
 }
@@ -94,9 +99,51 @@ fn ensure_endpoints(events: &mut Vec<Event>, length_m: f64) {
     }
 }
 
+/// 経由点のイベントに付ける名前。番号は、地図の丸に書く番号と同じにする。
+fn waypoint_label(index: usize) -> String {
+    format!("経由点 {}", index + 1)
+}
+
+/// 経由点のイベントを、いまの経由点に合わせる。
+///
+/// イベントが覚えている位置にいちばん近い経由点を、そのイベントの経由点とみなし、位置と、
+/// 人が直していない名前を、その経由点のものにする。経由点を消したか、遠くへ動かしたイベントは
+/// 消す。通った場所が変わったので、確定した時刻も当てにならない。
+fn place_waypoints(events: &mut Vec<Event>, waypoints: &[Waypoint], distances: &[f64]) {
+    let mut taken = vec![false; waypoints.len()];
+    events.retain_mut(|event| {
+        if event.kind != EventKind::Waypoint {
+            return true;
+        }
+        let nearest = event.detail.at.and_then(|at| {
+            waypoints
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !taken[*i])
+                .map(|(i, w)| (i, geo::distance_m(at, [w.lon, w.lat])))
+                .filter(|(_, distance)| *distance <= WAYPOINT_KEEP_M)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+        });
+        let Some((i, _)) = nearest else {
+            return false;
+        };
+        taken[i] = true;
+        let name = waypoint_label(i);
+        let renamed = !event.label.is_empty()
+            && event.detail.extracted_label.as_deref() != Some(event.label.as_str());
+        if !renamed {
+            event.label = name.clone();
+        }
+        event.detail.extracted_label = Some(name);
+        event.detail.at = Some([waypoints[i].lon, waypoints[i].lat]);
+        event.route_m = distances[i];
+        true
+    });
+}
+
 /// イベントの時刻と位置を、いまの経路・確定した時刻・時計の補正値に合わせて計算し直す。
 ///
-/// 1. 経路の両端に出発と到着を置く
+/// 1. 経路の両端に出発と到着を置く。経由点のイベントを、いまの経由点の位置に置く
 /// 2. 動画で確定した時刻を、カメラの時刻と時計の補正値から求め直す
 /// 3. 時刻だけが分かっているイベントの位置を、時刻から求める
 /// 4. 確定していないイベントの時刻を推定する
@@ -104,9 +151,11 @@ fn ensure_endpoints(events: &mut Vec<Event>, length_m: f64) {
 /// 位置が先なのに時刻が後になっている、確定済みのイベントの ID を返す。
 pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
     let length_m = doc.length_m();
+    let distances = doc.waypoint_distances();
     let clock_offset_ms = doc.ride.clock_offset_ms;
     let events = &mut doc.events;
     ensure_endpoints(events, length_m);
+    place_waypoints(events, &doc.waypoints, &distances);
 
     for event in events.iter_mut() {
         if let (EventStatus::Confirmed, Some(camera_ms)) = (event.status, event.detail.camera_ms) {
@@ -150,10 +199,22 @@ pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
     conflicts
 }
 
+/// 推定した時刻を消す。推定は、経路と確定した時刻から `refresh` で求め直せる。
+///
+/// クラウドへ送る前に使う。時刻を 1 つ確定すると、まわりのイベントの推定がみな動く。推定まで
+/// 送ると、確定のたびに、多くのイベントを書き換えさせることになる。
+pub fn clear_estimates(doc: &mut RideDocument) {
+    for event in &mut doc.events {
+        if event.status == EventStatus::Estimated {
+            event.time_ms = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ride::{Ride, Route, SegmentMode, Waypoint};
+    use crate::ride::{Ride, Route, SegmentMode};
 
     fn knot(route_m: f64, time_s: i64) -> Knot {
         Knot {
@@ -214,6 +275,7 @@ mod tests {
                 Some(_) => EventStatus::Confirmed,
                 None => EventStatus::Estimated,
             },
+            hidden: false,
             detail: EventDetail::default(),
         }
     }
@@ -366,6 +428,38 @@ mod tests {
     }
 
     #[test]
+    fn estimates_can_be_dropped_and_worked_out_again() {
+        let mut memo = event("memo", EventKind::Custom, 0.0, Some(100));
+        memo.detail.by_time = true;
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(0)),
+                memo,
+                event("x", EventKind::Tunnel, 3000.0, None),
+                event("a", EventKind::Arrival, 4000.0, Some(400)),
+            ],
+        );
+        refresh(&mut doc);
+        let full = doc.clone();
+
+        clear_estimates(&mut doc);
+        // 確定した時刻は残る。推定だけが消える。
+        assert_eq!(
+            times(&doc),
+            [
+                ("d", Some(0)),
+                ("memo", Some(100)),
+                ("x", None),
+                ("a", Some(400))
+            ]
+        );
+        refresh(&mut doc);
+        assert_eq!(doc, full);
+    }
+
+    #[test]
     fn an_estimate_that_lost_its_knots_is_cleared() {
         let mut stale = event("x", EventKind::Tunnel, 1000.0, None);
         stale.time_ms = Some(123_000);
@@ -407,6 +501,116 @@ mod tests {
         assert_eq!(memo.route_m.round(), 1000.0);
         // 手動のイベントを基準にしていれば、x は 100 秒と 400 秒の間で補間されて 300 秒より後になる。
         assert_eq!(times(&doc)[2], ("x", Some(300)));
+    }
+
+    #[test]
+    fn a_hidden_event_with_a_confirmed_time_is_still_a_knot() {
+        let mut silent = event("m", EventKind::Tunnel, 2000.0, Some(300));
+        silent.hidden = true;
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(0)),
+                event("x", EventKind::Bridge, 1000.0, None),
+                silent,
+                event("a", EventKind::Arrival, 4000.0, Some(400)),
+            ],
+        );
+        refresh(&mut doc);
+        assert_eq!(times(&doc)[1], ("x", Some(150)));
+        assert_eq!(times(&doc)[2], ("m", Some(300)));
+    }
+
+    /// 赤道の上を東へ、1000 m ごとに経由点を置いた経路。
+    fn with_waypoints(count: usize, events: Vec<Event>) -> RideDocument {
+        let mut doc = document(0.0, 0, events);
+        doc.waypoints = (0..count)
+            .map(|i| Waypoint {
+                lon: i as f64 * 1000.0 / 111_195.08,
+                lat: 0.0,
+                segment_mode: SegmentMode::Straight,
+            })
+            .collect();
+        doc.route.segments = vec![vec![]; count.saturating_sub(1)];
+        doc
+    }
+
+    fn at_waypoint(id: &str, doc: &RideDocument, index: usize, time_s: Option<i64>) -> Event {
+        let mut event = event(id, EventKind::Waypoint, 0.0, time_s);
+        event.label = String::new();
+        event.hidden = true;
+        event.detail.at = Some([doc.waypoints[index].lon, doc.waypoints[index].lat]);
+        event
+    }
+
+    #[test]
+    fn a_waypoint_event_sits_on_its_waypoint_and_can_be_a_knot() {
+        let mut doc = with_waypoints(4, vec![]);
+        let timed = at_waypoint("w", &doc, 2, Some(250));
+        doc.events = vec![
+            event("d", EventKind::Departure, 0.0, Some(0)),
+            event("x", EventKind::Tunnel, 1000.0, None),
+            timed,
+        ];
+        refresh(&mut doc);
+        let waypoint = doc.events.iter().find(|e| e.id == "w").unwrap();
+        assert_eq!(
+            (waypoint.label.as_str(), waypoint.route_m.round()),
+            ("経由点 3", 2000.0)
+        );
+        // 経由点の時刻が基準になり、手前のトンネルの推定が出る。
+        assert_eq!(times(&doc)[1], ("x", Some(125)));
+    }
+
+    #[test]
+    fn a_waypoint_event_follows_its_waypoint_and_goes_away_with_it() {
+        let mut doc = with_waypoints(4, vec![]);
+        let mut named = at_waypoint("n", &doc, 1, None);
+        named.label = "役場前の交差点".into();
+        doc.events = vec![named, at_waypoint("w", &doc, 2, Some(250))];
+        refresh(&mut doc);
+
+        // 手前に経由点を足すと番号がずれる。人が付けた名前は残り、付けていない名前は番号に合わせる。
+        let first = doc.waypoints[0].clone();
+        doc.waypoints.insert(
+            1,
+            Waypoint {
+                lon: first.lon + 500.0 / 111_195.08,
+                ..first
+            },
+        );
+        doc.route.segments.push(vec![]);
+        // 20 m だけ動かした経由点は、同じ経由点として扱う。
+        doc.waypoints[3].lon += 20.0 / 111_195.08;
+        refresh(&mut doc);
+        let found: Vec<_> = doc
+            .events
+            .iter()
+            .filter(|e| e.kind == EventKind::Waypoint)
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.label.as_str(),
+                    e.route_m.round(),
+                    e.time_ms,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("n", "役場前の交差点", 1000.0, None),
+                ("w", "経由点 4", 2020.0, Some(250_000))
+            ]
+        );
+
+        // 経由点を消すと、そのイベントも消える。
+        doc.waypoints.remove(3);
+        doc.route.segments.pop();
+        refresh(&mut doc);
+        assert!(doc.events.iter().all(|e| e.id != "w"));
+        assert!(doc.events.iter().any(|e| e.id == "n"));
     }
 
     #[test]

@@ -6,7 +6,7 @@
   import type { RideEvent, SegmentMode } from "./types";
 
   /**
-   * 経路を入れるときに、地図の右に浮かせる一覧。上に経由点、下に経路から出たイベントを並べる。
+   * 経路入力のときに、地図の右に浮かせる一覧。上に経由点、下に経路から出たイベントを並べる。
    */
   let {
     path,
@@ -80,7 +80,7 @@
   </header>
   <div class="events">
     {#each events as event (event.id)}
-      {@const hidden = event.status === "hidden"}
+      {@const hidden = event.hidden === true}
       <button
         type="button"
         class="row event"
@@ -91,7 +91,7 @@
         <span class="mono at">{km(event.route_m)}</span>
         <KindTag kind={event.kind} faded={hidden} />
         <span class="name"><EventName {event} /></span>
-        {#if hidden}<span class="off"><StatusMark status="hidden" />字幕にしない</span>{/if}
+        {#if hidden}<span class="off"><StatusMark status={event.status} hidden />字幕なし</span>{/if}
       </button>
     {:else}
       {#if !canExtract}

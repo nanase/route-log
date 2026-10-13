@@ -6,7 +6,12 @@
   import { clock, hms } from "./time";
   import type { Position, Timeline } from "./types";
 
-  /** 分割された動画を、実時刻の 1 本の軸として再生する。 */
+  /**
+   * 分割された動画を、実時刻の 1 本の軸として再生する。
+   *
+   * 動画の上には、ブラウザの操作の帯（再生、シーク、音量、全画面）も出す。帯のシークが届くのは、
+   * いま読んでいるファイルの中だけである。ファイルをまたいで動くには、下のタイムラインを使う。
+   */
   let {
     timeline,
     muted = false,
@@ -125,6 +130,23 @@
     }
   }
 
+  /** 動画の上の操作の帯で再生された。倍率の表示を合わせる。逆再生の最中なら、やめる。 */
+  function onplay() {
+    if (rate > 0) return;
+    clearInterval(reverseTimer);
+    reverseTimer = undefined;
+    rate = video.playbackRate;
+  }
+
+  /**
+   * 動画の上の操作の帯で止められた。倍率の表示を合わせる。
+   *
+   * ファイルを替える間と、ファイルの終わりに着いたときにも止まるが、それは次のファイルへ続く。
+   */
+  function onpause() {
+    if (rate > 0 && pending === null && !video.ended) rate = 0;
+  }
+
   export const play = () => setRate(1);
   export const pause = () => setRate(0);
   /** 再生位置の実時刻。画面の表示より新しい */
@@ -166,7 +188,18 @@
 <section>
   <div class="screen">
     <!-- svelte-ignore a11y_media_has_caption -->
-    <video bind:this={video} {muted} {onloadedmetadata} {ontimeupdate} onended={() => next(rate > 0)}></video>
+    <video
+      bind:this={video}
+      {muted}
+      controls
+      controlslist="nodownload noplaybackrate noremoteplayback"
+      disablepictureinpicture
+      {onloadedmetadata}
+      {ontimeupdate}
+      {onplay}
+      {onpause}
+      onended={() => next(rate > 0)}
+    ></video>
     <div class="chip now">
       <span class="mono clock">{clock(realMs)}</span>
       <span class="mono where" title={current?.name ?? ""}>
@@ -218,9 +251,11 @@
     flex: none;
     flex-direction: column;
   }
+  /* 横幅に合わせて大きくなる。一覧の場所が無くならないよう、高さには上限を置く。 */
   .screen {
     position: relative;
     aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 416px);
     background: linear-gradient(180deg, #3a4552 0%, #262d36 62%, var(--video-ground) 100%);
   }
   video {
@@ -234,6 +269,7 @@
   .chip {
     position: absolute;
     top: 10px;
+    z-index: 1;
     padding: 4px 8px;
     border-radius: var(--radius-control);
     background: var(--video-chip);

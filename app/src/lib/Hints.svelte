@@ -2,7 +2,7 @@
   import Icon from "./Icon.svelte";
 
   /**
-   * 経路を入れるときの、操作の手がかり。地図の左下に浮かせ、? キーで出し入れする。
+   * 経路入力のときの、操作の手がかり。地図の左下に浮かせ、? キーで出し入れする。
    */
   let { shown, ontoggle }: { shown: boolean; ontoggle: () => void } = $props();
 

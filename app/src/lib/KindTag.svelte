@@ -8,7 +8,7 @@
     faded = false,
   }: {
     kind: EventKind;
-    /** 字幕にしないものは薄くする */
+    /** 字幕なしのものは薄くする */
     faded?: boolean;
   } = $props();
 

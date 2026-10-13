@@ -57,7 +57,7 @@
   <div class="rule"></div>
   <div class="seg" role="group" aria-label="作業の切り替え">
     <button type="button" class:on={mode === "route"} aria-pressed={mode === "route"} onclick={() => onmode("route")}>
-      <span class="mono">1</span>経路を入れる
+      <span class="mono">1</span>経路入力
     </button>
     <button
       type="button"
@@ -65,7 +65,7 @@
       aria-pressed={mode === "confirm"}
       onclick={() => onmode("confirm")}
     >
-      <span class="mono">2</span>時刻を確定する
+      <span class="mono">2</span>時刻入力
     </button>
   </div>
   <div class="space"></div>

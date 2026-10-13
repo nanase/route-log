@@ -9,12 +9,20 @@ import {
   nextConfirmable,
   patch,
   positionAt,
+  setHidden,
   unconfirm,
+  waypointEvent,
+  waypointEventAt,
 } from "./events";
 import type { EventStatus, RideEvent } from "./types";
 
 function event(id: string, route_m: number, status: EventStatus, time_s: number | null = null): RideEvent {
   return { id, kind: "tunnel", label: id, route_m, time_ms: time_s === null ? null : time_s * 1000, status, detail: {} };
+}
+
+/** 字幕にしないイベント。 */
+function silent(id: string, route_m: number, status: EventStatus = "estimated", time_s: number | null = null): RideEvent {
+  return { ...event(id, route_m, status, time_s), hidden: true };
 }
 
 const ids = (events: (RideEvent | null)[]) => events.map((e) => e?.id ?? null);
@@ -44,12 +52,20 @@ describe("いまの位置", () => {
 
   test("基準になるのは、確定していて時刻から置いたものでないイベントだけ", () => {
     const memo: RideEvent = { ...event("memo", 300, "confirmed", 30), detail: { by_time: true } };
-    const events = [event("d", 0, "confirmed", 0), memo, event("x", 500, "estimated", 50), event("h", 600, "hidden", 60)];
+    const events = [event("d", 0, "confirmed", 0), memo, event("x", 500, "estimated", 50), silent("h", 600, "estimated", 60)];
     expect(knotsOf(events)).toEqual([{ route_m: 0, time_ms: 0 }]);
+  });
+
+  test("字幕にしないイベントも、確定していれば基準になる", () => {
+    const events = [event("d", 0, "confirmed", 0), silent("w", 600, "confirmed", 60)];
+    expect(knotsOf(events)).toEqual([
+      { route_m: 0, time_ms: 0 },
+      { route_m: 600, time_ms: 60_000 },
+    ]);
   });
 });
 
-describe("次に確定する相手", () => {
+describe("次の候補", () => {
   test("推定の無いうちは、位置の順で最初の未確定のもの", () => {
     const events = [event("d", 0, "estimated"), event("x", 500, "estimated")];
     expect(defaultTarget(events, 0)?.id).toBe("d");
@@ -68,22 +84,27 @@ describe("次に確定する相手", () => {
     expect(defaultTarget(events, 90_000)).toBeNull();
   });
 
-  test("字幕にしないものと、時刻から置いたものは相手にしない", () => {
+  test("字幕にしないものと、時刻から置いたものは、自動では候補にしない", () => {
     const memo: RideEvent = { ...event("memo", 100, "estimated"), detail: { by_time: true } };
-    const events = [event("h", 0, "hidden"), memo, event("x", 500, "estimated")];
+    const events = [silent("h", 0), memo, event("x", 500, "estimated")];
     expect(defaultTarget(events, 0)?.id).toBe("x");
   });
 
   test("確定したら、その後ろの未確定のものへ進む", () => {
-    const events = [event("d", 0, "confirmed", 0), event("h", 100, "hidden"), event("x", 500, "estimated")];
+    const events = [event("d", 0, "confirmed", 0), silent("h", 100), event("x", 500, "estimated")];
     expect(nextConfirmable(events, "d")?.id).toBe("x");
     expect(nextConfirmable(events, "x")).toBeNull();
   });
 
   test("隣へ移るときは、字幕にしないものを飛ばす", () => {
-    const events = [event("d", 0, "confirmed", 0), event("h", 100, "hidden"), event("x", 500, "estimated")];
+    const events = [event("d", 0, "confirmed", 0), silent("h", 100), event("x", 500, "estimated")];
     expect(ids([neighbor(events, "d", 1), neighbor(events, "x", -1), neighbor(events, "x", 1)])).toEqual(["x", "d", null]);
     expect(ids([neighbor(events, null, 1), neighbor(events, null, -1)])).toEqual(["d", null]);
+  });
+
+  test("字幕にしないものを選んでいるときは、そこから隣へ移る", () => {
+    const events = [event("d", 0, "confirmed", 0), silent("h", 100), event("x", 500, "estimated")];
+    expect(ids([neighbor(events, "h", 1), neighbor(events, "h", -1)])).toEqual(["x", "d"]);
   });
 });
 
@@ -113,6 +134,23 @@ describe("確定", () => {
     const back = unconfirm(confirmOnVideo(event("x", 500, "estimated"), 100_000, 0));
     expect(back).toMatchObject({ status: "estimated", time_ms: null });
     expect("camera_ms" in back.detail).toBe(false);
+  });
+
+  test("字幕にしないことにしても、確定した時刻は残る", () => {
+    const confirmed = confirmOnVideo(event("x", 500, "estimated"), 100_000, 30_000);
+    const hidden = setHidden(confirmed, true);
+    expect(hidden).toMatchObject({ status: "confirmed", time_ms: 100_000, hidden: true, detail: { camera_ms: 70_000 } });
+    const back = setHidden(hidden, false);
+    expect("hidden" in back).toBe(false);
+    expect(back).toEqual(confirmed);
+  });
+
+  test("経由点のイベントは、字幕にしないものとして作り、位置で見分ける", () => {
+    const made = waypointEvent([138.5, 36.5]);
+    expect(made).toMatchObject({ kind: "waypoint", status: "estimated", hidden: true, detail: { at: [138.5, 36.5] } });
+    const events = [event("x", 500, "estimated"), made];
+    expect(waypointEventAt(events, [138.5, 36.5])?.id).toBe(made.id);
+    expect(waypointEventAt(events, [138.5, 36.6])).toBeNull();
   });
 
   test("手動のイベントは、時刻から置く印を持つ", () => {

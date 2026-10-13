@@ -1,6 +1,6 @@
 <script lang="ts">
   import EventName from "./EventName.svelte";
-  import { confirmTyped, unconfirm } from "./events";
+  import { confirmTyped, setHidden, unconfirm } from "./events";
   import Icon from "./Icon.svelte";
   import { KIND_ORDER, KINDS } from "./kinds";
   import KindTag from "./KindTag.svelte";
@@ -10,8 +10,11 @@
   import { remembered } from "./ui";
 
   /**
-   * イベントの一覧。行を押すと、そのイベントが「次に確定する相手」になり、名前・時刻・
-   * 字幕に出すかどうかを直す欄が開く。状態・種類・名前で絞り込める。
+   * イベントの一覧。行を押すと、そのイベントが「次の候補」になり、名前・時刻・字幕に出すか
+   * どうかを直す欄が開く。状態・種類・名前で絞り込める。
+   *
+   * 行の左のチェックでいくつか選ぶと、字幕に出すかどうかをまとめて切り替えられる。Shift を
+   * 押しながらチェックすると、前にチェックした行からそこまでを選ぶ。
    */
   let {
     events,
@@ -22,11 +25,12 @@
     rideDate,
     onselect,
     onchange,
+    onhide,
     onremove,
     onextract,
   }: {
     events: RideEvent[];
-    /** 次に確定する相手 */
+    /** 次の候補 */
     targetId: string | null;
     /** 直す欄を開いているイベント */
     selectedId: string | null;
@@ -38,6 +42,8 @@
     rideDate: string;
     onselect: (event: RideEvent) => void;
     onchange: (id: string, change: (event: RideEvent) => RideEvent) => void;
+    /** 選んだイベントを、まとめて字幕なし（`hidden` が真）か字幕ありにする */
+    onhide: (ids: string[], hidden: boolean) => void;
     onremove: (id: string) => void;
     /** 抽出し直す。判定用データを開いていなければ null */
     onextract: (() => void) | null;
@@ -50,8 +56,10 @@
     all: "すべて",
     pending: "未確定",
     confirmed: "確定",
-    hidden: "字幕にしない",
+    hidden: "字幕なし",
   };
+  /** 人が消せる種類。経路から抽出したものは、消しても次の抽出で戻るので、字幕なしにして隠す */
+  const REMOVABLE: EventKind[] = ["custom", "waypoint"];
   const FILTER_KEY = "routelog.event-filter";
 
   let rows: HTMLDivElement;
@@ -59,12 +67,16 @@
   /** 出す種類。空なら、どの種類も出す */
   let kinds = $state<EventKind[]>([]);
   let query = $state("");
+  /** チェックを入れているイベントの ID */
+  let checked = $state.raw<ReadonlySet<string>>(new Set());
+  /** 最後にチェックを切り替えた行。Shift を押しながらのチェックは、ここからの範囲を選ぶ */
+  let anchorId: string | null = null;
 
   const matches: Record<Filter, (event: RideEvent) => boolean> = {
     all: () => true,
-    pending: (event) => event.status === "estimated",
+    pending: (event) => event.status === "estimated" && !event.hidden,
     confirmed: (event) => event.status === "confirmed",
-    hidden: (event) => event.status === "hidden",
+    hidden: (event) => event.hidden === true,
   };
   const counts = $derived(
     Object.fromEntries(FILTERS.map((name) => [name, events.filter(matches[name]).length])) as Record<Filter, number>,
@@ -81,6 +93,49 @@
     );
   });
   const narrowed = $derived(filter !== "all" || kinds.length > 0 || query.trim() !== "");
+  /** チェックを入れていて、いまもあるイベント。抽出し直して消えたものは数えない */
+  const picked = $derived(events.filter((event) => checked.has(event.id)).map((event) => event.id));
+  /** 出している行に、チェックがいくつ入っているか */
+  const pickedShown = $derived(shown.filter((event) => checked.has(event.id)).length);
+
+  /** 行のチェックを切り替える。Shift を押していれば、前に切り替えた行からここまでを同じにする。 */
+  function check(event: RideEvent, on: boolean, range: boolean) {
+    const ids = shown.map((row) => row.id);
+    const [from, to] = [ids.indexOf(anchorId ?? ""), ids.indexOf(event.id)];
+    const span = range && from >= 0 ? ids.slice(Math.min(from, to), Math.max(from, to) + 1) : [event.id];
+    const next = new Set(checked);
+    for (const id of span) {
+      if (on) next.add(id);
+      else next.delete(id);
+    }
+    checked = next;
+    anchorId = event.id;
+  }
+
+  /** 出している行のすべてに、チェックを入れるか外す。 */
+  function checkShown(on: boolean) {
+    const next = new Set(checked);
+    for (const event of shown) {
+      if (on) next.add(event.id);
+      else next.delete(event.id);
+    }
+    checked = next;
+    anchorId = null;
+  }
+
+  function uncheckAll() {
+    checked = new Set();
+    anchorId = null;
+  }
+
+  /** チェックを入れたイベントを、まとめて字幕なしか字幕ありにする。済んだら、チェックを外す。 */
+  function hidePicked(hidden: boolean) {
+    onhide(picked, hidden);
+    uncheckAll();
+  }
+
+  /** チェックの欄を押したあとも、Space が動画の再生に届くようにする。 */
+  const release = (input: HTMLInputElement) => input.blur();
 
   function warning(event: RideEvent): { short: string; long: string } | null {
     if (conflicts.includes(event.id)) {
@@ -88,7 +143,7 @@
     }
     const time = event.time_ms;
     const stopped = time !== null && gaps.some((gap) => gap.start_ms <= time && time < gap.end_ms);
-    return stopped && event.status === "estimated"
+    return stopped && event.status === "estimated" && !event.hidden
       ? { short: "録画停止の間", long: "推定時刻が録画停止の間にあります" }
       : null;
   }
@@ -113,7 +168,7 @@
     query = "";
   }
 
-  // 次の相手が動画に合わせて進んでも、その行が見えているようにする。
+  // 次の候補が動画に合わせて進んでも、その行が見えているようにする。
   $effect(() => {
     if (targetId === null) return;
     rows.querySelector(`[data-id="${CSS.escape(targetId)}"]`)?.scrollIntoView({ block: "nearest" });
@@ -148,6 +203,19 @@
     {/if}
   </header>
   <div class="narrow">
+    <input
+      type="checkbox"
+      class="pick"
+      aria-label="出している行をすべて選ぶ"
+      title="出している行をすべて選ぶ"
+      disabled={shown.length === 0}
+      checked={shown.length > 0 && pickedShown === shown.length}
+      indeterminate={pickedShown > 0 && pickedShown < shown.length}
+      onchange={(e) => {
+        checkShown(e.currentTarget.checked);
+        release(e.currentTarget);
+      }}
+    />
     <label class="search">
       <Icon name="search" size={14} />
       <input type="search" placeholder="名前で探す" aria-label="名前で探す" bind:value={query} />
@@ -168,25 +236,48 @@
       {/each}
     </div>
   </div>
+  {#if picked.length > 0}
+    <div class="bulk" role="group" aria-label="選んだイベントをまとめて切り替える">
+      <b>{picked.length} 件を選択</b>
+      <span class="space"></span>
+      <button type="button" class="btn small" onclick={() => hidePicked(false)}>字幕あり</button>
+      <button type="button" class="btn small" onclick={() => hidePicked(true)}>
+        <StatusMark status="estimated" hidden />字幕なし
+      </button>
+      <button type="button" class="btn small ghost" onclick={uncheckAll}>選択をやめる</button>
+    </div>
+  {/if}
 
   <div class="rows" bind:this={rows}>
     {#each shown as event (event.id)}
       {@const warn = warning(event)}
       {@const target = event.id === targetId}
       {@const selected = event.id === selectedId}
-      <div class="item" class:selected>
+      {@const hidden = event.hidden === true}
+      <div class="item" class:selected class:target>
+        <div class="line">
+        <input
+          type="checkbox"
+          class="pick"
+          aria-label="{event.label || KINDS[event.kind]}を選ぶ"
+          checked={checked.has(event.id)}
+          onclick={(e) => {
+            check(event, e.currentTarget.checked, e.shiftKey);
+            release(e.currentTarget);
+          }}
+        />
         <button
           type="button"
           class="row {event.status}"
-          class:target
+          class:hidden
           data-id={event.id}
           aria-expanded={selected}
           onclick={() => onselect(event)}
         >
-          <StatusMark status={event.status} />
+          <StatusMark status={event.status} {hidden} />
           <span class="mono time">{event.time_ms === null ? "--:--:--" : clock(event.time_ms)}</span>
           <span class="mono km">{(event.route_m / 1000).toFixed(1)}</span>
-          <KindTag kind={event.kind} faded={event.status === "hidden"} />
+          <KindTag kind={event.kind} faded={hidden} />
           <span class="name"><EventName {event} /></span>
           <span class="tail">
             {#if warn !== null}
@@ -195,6 +286,7 @@
             {#if target && event.status !== "confirmed"}<span class="next">次</span>{/if}
           </span>
         </button>
+        </div>
         {#if selected}
           <div class="edit">
             <label>
@@ -224,24 +316,27 @@
             {#if event.status === "confirmed"}
               <button type="button" class="btn" onclick={() => onchange(event.id, unconfirm)}>確定を外す</button>
             {/if}
-            {#if event.status === "hidden"}
+            <!-- 字幕なしにしても、確定した時刻は残り、時刻推定の基準になる。 -->
+            <div class="seg" role="group" aria-label="字幕に出すか">
               <button
                 type="button"
-                class="btn"
-                onclick={() => onchange(event.id, (c) => ({ ...c, status: "estimated" }))}
+                class:on={!hidden}
+                aria-pressed={!hidden}
+                onclick={() => onchange(event.id, (c) => setHidden(c, false))}
               >
-                字幕に出す
+                字幕あり
               </button>
-            {:else}
               <button
                 type="button"
-                class="btn"
-                onclick={() => onchange(event.id, (c) => ({ ...unconfirm(c), status: "hidden" }))}
+                class:on={hidden}
+                aria-pressed={hidden}
+                title="字幕には出さない。確定した時刻は残り、前後の時刻の推定に使う"
+                onclick={() => onchange(event.id, (c) => setHidden(c, true))}
               >
-                <StatusMark status="hidden" />字幕にしない
+                字幕なし
               </button>
-            {/if}
-            {#if event.kind === "custom"}
+            </div>
+            {#if REMOVABLE.includes(event.kind)}
               <button type="button" class="btn remove" onclick={() => onremove(event.id)}>
                 <Icon name="trash" size={14} />消す
               </button>
@@ -255,7 +350,7 @@
         {#if events.length === 0}
           {onextract === null
             ? "判定データを選ぶと、経路からイベントを抽出します。"
-            : "経路を入れると、ここにイベントが出ます。"}
+            : "経路を入力すると、ここにイベントが出ます。"}
         {:else}
           当てはまるイベントはありません。
           {#if narrowed}<button type="button" class="link" onclick={clear}>絞り込みをやめる</button>{/if}
@@ -311,8 +406,29 @@
     display: flex;
     flex: none;
     align-items: center;
-    gap: 10px;
-    padding: 0 12px 6px;
+    gap: 8px;
+    padding: 0 12px 6px 10px;
+  }
+  /* 行を選ぶチェック */
+  .pick {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+  }
+  /* 選んだイベントをまとめて切り替える帯 */
+  .bulk {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    box-sizing: border-box;
+    height: 34px;
+    padding: 0 8px 0 12px;
+    border-top: 1px solid var(--primary-line);
+    border-bottom: 1px solid var(--primary-line);
+    background: var(--primary-softer);
+    white-space: nowrap;
   }
   .search {
     display: flex;
@@ -373,28 +489,34 @@
   .item.selected {
     box-shadow: inset 0 0 0 1px var(--primary);
   }
+  .line {
+    display: flex;
+    align-items: center;
+    padding-left: 10px;
+  }
+  .line:hover {
+    background: var(--surface-2);
+  }
+  .item.target .line,
+  .item.selected .line {
+    background: var(--primary-soft);
+  }
+  .item.target .line {
+    box-shadow: inset 0 0 0 1px var(--primary);
+  }
   .row {
     display: grid;
+    flex: 1;
     grid-template-columns: 11px 62px 34px 18px minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    min-width: 0;
     height: var(--row);
-    padding: 0 12px;
+    padding: 0 12px 0 8px;
     border: 0;
     background: none;
     text-align: left;
     white-space: nowrap;
-  }
-  .row:hover {
-    background: var(--surface-2);
-  }
-  .row.target,
-  .item.selected .row {
-    background: var(--primary-soft);
-  }
-  .row.target {
-    box-shadow: inset 0 0 0 1px var(--primary);
   }
   .time,
   .km {
@@ -407,7 +529,7 @@
     color: var(--ink);
     font-weight: 700;
   }
-  .row.target.estimated .time {
+  .item.target .row.estimated .time {
     color: var(--ink);
   }
   .name {
@@ -415,13 +537,13 @@
     min-width: 0;
     overflow: hidden;
   }
-  .row.target .name,
+  .item.target .name,
   .item.selected .name {
     font-weight: 700;
   }
-  /* 字幕にしないものは、行を灰色にして、名前に取り消し線を引く。 */
+  /* 字幕なしのものは、行を灰色にして、名前に取り消し線を引く。確定した時刻は、濃いまま残す。 */
   .row.hidden,
-  .row.hidden .time,
+  .row.hidden.estimated .time,
   .row.hidden .km {
     color: var(--ink-4);
   }
@@ -482,6 +604,9 @@
     display: flex;
     gap: 6px;
     margin-left: auto;
+  }
+  .buttons .seg button {
+    padding: 0 10px;
   }
   .remove {
     color: var(--danger);

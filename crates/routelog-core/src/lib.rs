@@ -12,7 +12,7 @@ pub mod prefecture;
 pub mod ride;
 pub mod timeline;
 
-pub use estimate::{Knot, knots, position_at, refresh, time_at};
+pub use estimate::{Knot, clear_estimates, knots, position_at, refresh, time_at};
 pub use event::{Event, EventDetail, EventKind, EventStatus, RouteClass, RouteRef, carry_over};
 pub use prefecture::route_name;
 pub use ride::{Ride, RideDocument, Route, SegmentMode, Waypoint};

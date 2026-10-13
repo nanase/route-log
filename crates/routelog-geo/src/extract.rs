@@ -189,6 +189,7 @@ fn event(kind: EventKind, label: String, route_m: f64) -> Event {
         route_m,
         time_ms: None,
         status: EventStatus::Estimated,
+        hidden: false,
     }
 }
 
@@ -433,9 +434,7 @@ impl Prepared {
                 let mut event = event(kind, name.to_owned(), samples[start].route_m);
                 event.detail.end_m = Some(end_m);
                 let short = end_m - samples[start].route_m < options.structure_min_m;
-                if short || structure == Structure::Shed {
-                    event.status = EventStatus::Hidden;
-                }
+                event.hidden = short || structure == Structure::Shed;
                 event
             })
             .collect()
@@ -766,7 +765,7 @@ mod tests {
         );
         let bridge = events.iter().find(|e| e.kind == EventKind::Bridge).unwrap();
         assert_eq!(bridge.detail.end_m.map(|m| m.round()), Some(800.0));
-        assert_eq!(bridge.status, EventStatus::Estimated);
+        assert!(!bridge.hidden);
     }
 
     #[test]
@@ -780,7 +779,7 @@ mod tests {
         );
         let hidden: Vec<_> = events
             .iter()
-            .filter(|e| e.status == EventStatus::Hidden)
+            .filter(|e| e.hidden)
             .map(|e| e.label.as_str())
             .collect();
         assert_eq!(hidden, ["小さな橋", "四の岩覆道"]);

@@ -1,11 +1,11 @@
 /**
- * イベントの時刻の確定と、次に確定する相手の選び方。どれも元の値を変えない。
+ * イベントの時刻の確定と、次の候補の選び方。どれも元の値を変えない。
  *
  * 時刻の推定そのものは Rust 側（routelog-core の estimate）が保存のたびに行う。ここにあるのは、
  * 画面がその場で答えなければならないことだけである。
  */
 
-import type { RideEvent } from "./types";
+import type { LonLat, RideEvent } from "./types";
 
 /** 時刻推定の基準。経路の上の位置と、そこを通った時刻の組。 */
 export interface Knot {
@@ -33,11 +33,15 @@ export function positionAt(knots: Knot[], timeMs: number): number | null {
   return null;
 }
 
-/** 動画を見て確定する相手になれるイベント。字幕にしないものと、時刻から置いたものは除く。 */
-const confirmable = (event: RideEvent) => event.status === "estimated" && !event.detail.by_time;
+/**
+ * 次の候補として自動で出すイベント。字幕にしないものと、時刻から置いたものは除く。
+ *
+ * 字幕にしないものも、人が選べば確定できる。自動では出さないだけである。
+ */
+const confirmable = (event: RideEvent) => event.status === "estimated" && !event.hidden && !event.detail.by_time;
 
 /**
- * 何も選んでいないときに、次に確定する相手。
+ * 何も選んでいないときの、次の候補。
  *
  * 推定時刻がいまより後の最初のイベント。推定の無いうちは、位置の順で最初の未確定のイベント。
  */
@@ -52,13 +56,13 @@ export function defaultTarget(events: RideEvent[], nowMs: number): RideEvent | n
 
 /** 字幕にするイベントの中で、隣のもの。端では null。 */
 export function neighbor(events: RideEvent[], id: string | null, step: 1 | -1): RideEvent | null {
-  const shown = events.filter((event) => event.status !== "hidden");
+  const shown = events.filter((event) => !event.hidden || event.id === id);
   const index = shown.findIndex((event) => event.id === id);
   if (index < 0) return step === 1 ? (shown[0] ?? null) : null;
   return shown[index + step] ?? null;
 }
 
-/** そのイベントより後にある、次に確定する相手。 */
+/** そのイベントより後にある、次の候補。 */
 export function nextConfirmable(events: RideEvent[], id: string): RideEvent | null {
   const index = events.findIndex((event) => event.id === id);
   return events.slice(index + 1).find(confirmable) ?? null;
@@ -94,6 +98,36 @@ export function confirmTyped(event: RideEvent, timeMs: number): RideEvent {
 export function unconfirm(event: RideEvent): RideEvent {
   const { camera_ms: _, ...detail } = event.detail;
   return { ...event, status: "estimated", time_ms: null, detail };
+}
+
+/** 字幕にするかどうかを切り替える。確定した時刻は、そのまま残る。 */
+export function setHidden(event: RideEvent, hidden: boolean): RideEvent {
+  const { hidden: _, ...rest } = event;
+  return hidden ? { ...rest, hidden: true } : rest;
+}
+
+/**
+ * 経由点に時刻を入れるためのイベントを作る。字幕にはしない。
+ *
+ * 位置と名前は、Rust 側が経由点から決める。
+ */
+export function waypointEvent(at: LonLat): RideEvent {
+  return {
+    id: crypto.randomUUID(),
+    kind: "waypoint",
+    label: "",
+    route_m: 0,
+    time_ms: null,
+    status: "estimated",
+    hidden: true,
+    detail: { at },
+  };
+}
+
+/** その経由点のイベント。まだ作っていなければ null。 */
+export function waypointEventAt(events: RideEvent[], at: LonLat): RideEvent | null {
+  const same = (event: RideEvent) => event.detail.at?.[0] === at[0] && event.detail.at?.[1] === at[1];
+  return events.find((event) => event.kind === "waypoint" && same(event)) ?? null;
 }
 
 /** 動画のいまの位置に、手動のイベントを作る。位置は Rust 側が時刻から求める。 */

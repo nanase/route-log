@@ -92,7 +92,8 @@ try {
   check("UUID の形でない ID は 404", (await call("GET", "/api/rides/../secret")).status, 404);
 
   check("無い走行は 404", (await call("GET", `/api/rides/${ID}`)).status, 404);
-  check("新しい走行を置ける", await call("PUT", `/api/rides/${ID}`, { body: document("t1") }), { status: 200, body: { updated_at: "t1" } });
+  const placed = await call("PUT", `/api/rides/${ID}`, { body: document("t1") });
+  check("新しい走行を置ける", [placed.status, placed.body.updated_at], [200, "t1"]);
   check("置いたものがそのまま返る", (await call("GET", `/api/rides/${ID}`)).body, document("t1"));
   check("一覧に出る", (await call("GET", "/api/rides")).body.filter((r) => r.id === ID), [{ id: ID, title: "碓氷峠", ride_date: "2026-10-03", updated_at: "t1" }]);
 
@@ -105,6 +106,48 @@ try {
   const shorter = { ...document("t3"), waypoints: [], route: { segments: [] }, events: [] };
   check("経由点とイベントを空にできる", (await call("PUT", `/api/rides/${ID}`, { body: shorter, ifMatch: "t2" })).status, 200);
   check("空にしたものが返る", (await call("GET", `/api/rides/${ID}`)).body, shorter);
+
+  // 以前の形（字幕にしないことを状態で持つ）で置いても、いまの形で返る。
+  const hiddenEvent = (extra) => ({ id: "0199c0de-0000-7000-8000-0000000000e3", kind: "bridge", label: "小さな橋", route_m: 300, time_ms: null, ...extra, detail: {} });
+  const old = { ...shorter, ride: { ...shorter.ride, updated_at: "t3a" }, events: [hiddenEvent({ status: "hidden" })] };
+  check("以前の形のイベントを置ける", (await call("PUT", `/api/rides/${ID}`, { body: old, ifMatch: "t3" })).status, 200);
+  check("字幕にしないことが、状態とは別に返る", (await call("GET", `/api/rides/${ID}`)).body.events, [hiddenEvent({ status: "estimated", hidden: true })]);
+  const timed = { ...old, ride: { ...old.ride, updated_at: "t3b" }, events: [hiddenEvent({ status: "confirmed", hidden: true, time_ms: 1790000000000 })] };
+  check("字幕にしないまま、時刻を確定して置ける", (await call("PUT", `/api/rides/${ID}`, { body: timed, ifMatch: "t3a" })).status, 200);
+  check("確定した時刻と、字幕にしないことが、両方返る", (await call("GET", `/api/rides/${ID}`)).body.events, timed.events);
+
+  // 書く行は、変わったものだけにする。数は、走行の 1 行と、変わった経由点・イベントの行と、その索引。
+  const big = (updated_at, change = (events) => events) => ({
+    ride: { ...document(updated_at).ride },
+    waypoints: Array.from({ length: 40 }, (_, i) => ({ lon: 138 + i / 100, lat: 36, segment_mode: "straight" })),
+    route: { segments: Array.from({ length: 39 }, () => []) },
+    events: change(
+      Array.from({ length: 300 }, (_, i) => ({
+        id: `0199c0de-0000-7000-8000-${String(i).padStart(12, "0")}`,
+        kind: "tunnel",
+        label: `トンネル ${i}`,
+        route_m: i * 100,
+        time_ms: null,
+        status: "estimated",
+        detail: { end_m: i * 100 + 50, extracted_label: `トンネル ${i}` },
+      })),
+    ),
+  });
+  const written = async (body, ifMatch) => {
+    const response = await call("PUT", `/api/rides/${ID}`, { body, ifMatch });
+    return response.status === 200 ? response.body.rows_written : `status ${response.status}`;
+  };
+  const first = await written(big("t4"), "t3b");
+  const same = await written(big("t5"), "t4");
+  const confirmOne = (events) => events.map((e, i) => (i === 150 ? { ...e, status: "confirmed", time_ms: 1790000000000 } : e));
+  const one = await written(big("t6", confirmOne), "t5");
+  const dropOne = (events) => confirmOne(events).filter((_, i) => i !== 10);
+  const shifted = await written(big("t7", dropOne), "t6");
+  console.log(`     書いた行数: 初めて置く ${first}、何も変えずに置く ${same}、イベント 1 件を確定 ${one}、手前の 1 件を消す ${shifted}`);
+  check("何も変えずに置くと、ほとんど書かない", same <= 2, true);
+  check("イベント 1 件を確定しても、書くのは数行", one <= 6, true);
+  check("変えたものが返る", (await call("GET", `/api/rides/${ID}`)).body, big("t7", dropOne));
+  check("大きな走行を、空に戻せる", (await call("PUT", `/api/rides/${ID}`, { body: { ...shorter, ride: { ...shorter.ride, updated_at: "t3" } }, ifMatch: "t7" })).status, 200);
 
   const wrongId = { ...document("t4"), ride: { ...document("t4").ride, id: "0199c0de-0000-7000-8000-00000000000b" } };
   check("パスと中身の ID が違えば 400", (await call("PUT", `/api/rides/${ID}`, { body: wrongId, ifMatch: "t3" })).status, 400);

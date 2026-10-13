@@ -17,6 +17,7 @@ fn kind_name(kind: EventKind) -> &'static str {
         EventKind::Bridge => "bridge",
         EventKind::Tunnel => "tunnel",
         EventKind::MichiNoEki => "michi_no_eki",
+        EventKind::Waypoint => "waypoint",
         EventKind::Custom => "custom",
     }
 }
@@ -48,7 +49,7 @@ fn offset(ms: i64) -> String {
 pub fn csv(events: &[Event], timeline: &Timeline) -> String {
     let mut out = String::from(HEADER);
     out.push('\n');
-    for event in events.iter().filter(|e| e.status != EventStatus::Hidden) {
+    for event in events.iter().filter(|e| !e.hidden) {
         let position = event.time_ms.and_then(|t| timeline.locate(t));
         let routes: Vec<String> = event.detail.routes.iter().map(route_name).collect();
         let row = [
@@ -62,7 +63,7 @@ pub fn csv(events: &[Event], timeline: &Timeline) -> String {
             routes.join(";"),
             match event.status {
                 EventStatus::Confirmed => "confirmed",
-                _ => "estimated",
+                EventStatus::Estimated => "estimated",
             }
             .to_owned(),
         ];
@@ -127,6 +128,7 @@ mod tests {
             route_m: 0.0,
             time_ms,
             status,
+            hidden: false,
             detail: EventDetail::default(),
         }
     }
@@ -177,13 +179,16 @@ mod tests {
 
     #[test]
     fn hidden_events_are_left_out() {
+        // 時刻を確定してあっても、字幕にしないものは書き出さない。
+        let mut short = event(
+            EventKind::Bridge,
+            "短い橋",
+            at(5, 10, 0),
+            EventStatus::Confirmed,
+        );
+        short.hidden = true;
         let events = [
-            event(
-                EventKind::Bridge,
-                "短い橋",
-                at(5, 10, 0),
-                EventStatus::Hidden,
-            ),
+            short,
             event(
                 EventKind::Tunnel,
                 "白地トンネル",

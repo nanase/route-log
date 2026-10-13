@@ -14,12 +14,14 @@ interface PlayerHandle {
 interface MapHandle {
   jump(center: LonLat, zoom: number): void;
   click(at: LonLat): void;
+  /** その位置にいちばん近い丸を押す */
+  clickHandle(at: LonLat): void;
   idle(timeoutMs?: number): Promise<boolean>;
   snapshot(): Record<string, unknown>;
 }
 
 interface AppHandle {
-  /** 経路を入れる画面と、時刻を確定する画面を切り替える */
+  /** 経路入力の画面と、時刻入力の画面を切り替える */
   setMode(mode: Mode): void;
   /** その日付の走行を開き、記録が無ければ作る */
   create(rideDate: string): Promise<void>;
@@ -56,14 +58,14 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   const shown = () =>
     app
       .events()
-      .filter((e) => e.status !== "hidden")
+      .filter((e) => !e.hidden)
       .map((e) => `${e.time_ms === null ? "--:--:--" : clock(e.time_ms)} ${(e.route_m / 1000).toFixed(2)}km ${e.kind} ${e.label} ${e.status}`);
   const note = (step: string, expected: string, extra: Record<string, unknown> = {}) =>
     steps.push({ step, expected, events: shown(), target: targetLabel(), ...extra });
   const targetLabel = () => app.events().find((e) => e.id === app.target())?.label ?? null;
   const find = (kind: string) => app.events().find((e) => e.kind === kind);
 
-  // 碓氷峠。軽井沢町から安中市へ、県境をまたぐ線を引く。経路は、経路を入れる画面で引く。
+  // 碓氷峠。軽井沢町から安中市へ、県境をまたぐ線を引く。経路は、経路入力の画面で引く。
   app.setMode("route");
   map.jump([138.66, 36.35], 12);
   await map.idle();
@@ -75,14 +77,14 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   await sleep(500);
   app.setMode("confirm");
   await sleep(500);
-  note("線を引く", "出発・県境・市区町村境・到着が並び、どれも時刻が無い。次の相手は出発");
+  note("線を引く", "出発・県境・市区町村境・到着が並び、どれも時刻が無い。次の候補は出発");
 
   const start = timeline.spans[0].start_ms;
   await player.seek(start + 60_000);
   await sleep(1500);
   key("Enter");
   await app.settled();
-  note("1 分の所で Enter", `出発が ${clock(start + 60_000)} で確定し、次の相手が県境に移る`);
+  note("1 分の所で Enter", `出発が ${clock(start + 60_000)} で確定し、次の候補が県境に移る`);
 
   const arrival = find("arrival");
   if (arrival) app.choose(arrival.id);
@@ -97,10 +99,10 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
     here: map.snapshot().here,
   });
 
-  // 何も選んでいなければ、推定時刻がいまより後の最初のイベントが、次の相手になる。
+  // 何も選んでいなければ、推定時刻がいまより後の最初のイベントが、次の候補になる。
   await player.seek(expectedBoundary - 20_000);
   await sleep(1500);
-  note("県境の推定の 20 秒前へ", "次の相手が県境になる。案内に「あと 0:20」と出る", {
+  note("県境の推定の 20 秒前へ", "次の候補が県境になる。案内に「あと 0:20」と出る", {
     timeline: app.timeline()?.snapshot(),
   });
   const next = await invoke<string>("capture_check", { name: "next" }).catch((e) => `写せない: ${e}`);
@@ -127,7 +129,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
 
   key("p");
   await sleep(1500);
-  note("P", "次の相手が 1 つ前のイベントに移り、動画がその時刻へ動く", { now: clock(player.now()) });
+  note("P", "次の候補が 1 つ前のイベントに移り、動画がその時刻へ動く", { now: clock(player.now()) });
 
   await app.setClockOffsetSeconds(90);
   await app.settled();
@@ -171,6 +173,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   };
 
   const exported = app.message();
+  const text = (selector: string) => document.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() ?? null;
 
   // 走行に使わない動画を外すと、その動画の中の時刻は、CSV に動画の位置が出ない。
   const clips = () => Number(app.timeline()?.snapshot().clips ?? 0);
@@ -192,19 +195,125 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   });
   await toggle(first);
 
+  // 経由点を通った時刻。経路の途中に経由点を足し、時刻入力の画面で、地図のその丸を押して確定する。
+  const middle: LonLat = [138.66, 36.3525];
+  app.setMode("route");
+  map.jump([138.66, 36.35], 12);
+  await map.idle();
+  map.click(middle);
+  await sleep(800);
+  await app.settled();
+  app.setMode("confirm");
+  await sleep(500);
+  map.clickHandle(middle);
+  await sleep(300);
+  await app.settled();
+  const chosen = targetLabel();
+  await player.seek(start + 60_000 + 400_000);
+  await sleep(1500);
+  key("Enter");
+  await app.settled();
+  note(
+    "経路の途中に経由点を足し、時刻入力の画面で地図のその丸を押して、Enter",
+    `経由点 2 が次の候補になり、${clock(start + 460_000)} で確定する。字幕なしのまま。動画は、丸を押しても動かない`,
+    { chosen, waypoint: find("waypoint"), handles: map.snapshot().handles },
+  );
+
+  // 字幕なしにしても、確定した時刻は残る。一覧の行を開いて、切り替えのボタンを押す。
+  const row = (id: string | undefined) => document.querySelector<HTMLElement>(`.rows [data-id="${id}"]`);
+  const press = (root: ParentNode | null | undefined, name: string) =>
+    [...(root?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.trim() === name)?.click();
+  const departureRow = row(find("departure")?.id);
+  if (departureRow?.getAttribute("aria-expanded") !== "true") departureRow?.click();
+  await sleep(300);
+  press(departureRow?.closest(".item"), "字幕なし");
+  await app.settled();
+  note("出発の行を開いて「字幕なし」を押す", "出発が字幕なしになる。確定した時刻は残り、まわりの推定も変わらない", {
+    departure: find("departure"),
+    all: app.events().map((e) => `${e.time_ms === null ? "--:--:--" : clock(e.time_ms)} ${e.kind} ${e.status}${e.hidden ? " 字幕なし" : ""}`),
+  });
+
+  // いくつか選んで、まとめて字幕なしにする。2 つ目の行にチェックを入れ、Shift を押しながら 4 つ目に入れる。
+  const boxes = () => [...document.querySelectorAll<HTMLInputElement>(".rows .pick")];
+  const hiddenNow = () => app.events().map((e) => (e.hidden ? "なし" : "あり")).join(" ");
+  boxes()[1]?.click();
+  boxes()[3]?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+  await sleep(300);
+  const picked = text(".bulk b");
+  const bulk = await invoke<string>("capture_check", { name: "bulk" }).catch((e) => `写せない: ${e}`);
+  press(document.querySelector(".bulk"), "字幕なし");
+  await app.settled();
+  const afterHide = hiddenNow();
+  document.querySelector<HTMLInputElement>(".narrow .pick")?.click();
+  await sleep(300);
+  const pickedAll = text(".bulk b");
+  press(document.querySelector(".bulk"), "字幕あり");
+  await app.settled();
+  note("行を 2 つ目から 4 つ目まで選んで「字幕なし」、すべて選んで「字幕あり」", "3 件を選択と出て、その 3 件が字幕なしになる。すべて選んで戻すと、どれも字幕ありになる。確定した時刻は変わらない", {
+    picked,
+    afterHide,
+    pickedAll,
+    afterShow: hiddenNow(),
+    bulkLeft: text(".bulk b"),
+  });
+
+  // 動画の上の操作の帯。帯で再生・停止しても、倍率の表示が合う。
+  const video = document.querySelector<HTMLVideoElement>("video");
+  const rate = () => text(".chip.rate");
+  await video?.play();
+  await sleep(600);
+  const playing = rate();
+  video?.pause();
+  await sleep(300);
+  note("動画の上の操作の帯で再生し、止める", "controls が付いている。再生すると ×1、止めると 停止 と出る", {
+    controls: video?.controls ?? null,
+    playing,
+    paused: rate(),
+  });
+
+  // 動画と一覧の列の幅。境目を左へドラッグすると、動画が大きくなる。
+  const grip = document.querySelector<HTMLElement>(".grip");
+  const size = () => {
+    const screen = document.querySelector(".side .screen")?.getBoundingClientRect();
+    const side = document.querySelector(".side")?.getBoundingClientRect();
+    return `列 ${Math.round(side?.width ?? 0)}、動画 ${Math.round(screen?.width ?? 0)}x${Math.round(screen?.height ?? 0)}`;
+  };
+  const pointer = (type: string, target: EventTarget | null, clientX: number) =>
+    target?.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX, clientY: 300 }));
+  const sizeBefore = size();
+  const edge = grip?.getBoundingClientRect().left ?? 0;
+  pointer("pointerdown", grip, edge + 4);
+  pointer("pointermove", window, edge - 100);
+  await sleep(300);
+  const sizeWider = size();
+  pointer("pointermove", window, 100);
+  pointer("pointerup", window, 100);
+  await sleep(500);
+  const sizeWidest = size();
+  const wide = await invoke<string>("capture_check", { name: "wide" }).catch((e) => `写せない: ${e}`);
+  grip?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  await sleep(500);
+  note("境目を左へ 100 px、さらに窓の左端までドラッグし、ダブルクリックで戻す", "列と動画が広がる。広げすぎても、地図と一覧の場所が残る。ダブルクリックで元の幅に戻る", {
+    before: sizeBefore,
+    wider: sizeWider,
+    widest: sizeWidest,
+    reset: size(),
+    remembered: localStorage.getItem("routelog.side-width"),
+    window: `${window.innerWidth}x${window.innerHeight}`,
+  });
+
   // 動画の無い走行。動画の無い日付の走行を作り、経路を引いて、時刻を一覧で手で入れる。
   const errors: string[] = [];
   const caught = (event: ErrorEvent | PromiseRejectionEvent) =>
     errors.push(String("reason" in event ? event.reason : event.message));
   window.addEventListener("error", caught);
   window.addEventListener("unhandledrejection", caught);
-  const text = (selector: string) => document.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() ?? null;
   /** 一覧の行を押して直す欄を開き、時刻の欄に打ち込む。人がするのと同じ道を通す。 */
   const typeTime = async (id: string | undefined, value: string) => {
     const row = document.querySelector<HTMLElement>(`.rows [data-id="${id}"]`);
     if (row?.getAttribute("aria-expanded") !== "true") row?.click();
     await sleep(300);
-    const input = row?.parentElement?.querySelector<HTMLInputElement>('input[type="time"]');
+    const input = row?.closest(".item")?.querySelector<HTMLInputElement>('input[type="time"]');
     if (!input) return false;
     input.value = value;
     input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -224,7 +333,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   app.setMode("confirm");
   await sleep(800);
   note(
-    "動画の無い走行で、時刻を確定する画面を開く",
+    "動画の無い走行で、時刻入力の画面を開く",
     "一覧に出発・県境・市区町村境・到着が並ぶ。動画とタイムラインの場所に、動画が無いことと、時刻は一覧で手で入れられることが出る",
     { video: text(".no-video"), timeline: text(".timeline .empty"), guide: text(".side > section .what") },
   );
@@ -247,7 +356,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
 
   key("n");
   await sleep(500);
-  note("N", "次の相手が、出発の次のイベント（県境）に移る。エラーは出ない", { errors: [...errors] });
+  note("N", "次の候補が、出発の次のイベント（県境）に移る。エラーは出ない", { errors: [...errors] });
 
   const typedArrival = await typeTime(find("arrival")?.id, "09:20:00");
   note("到着の行を押して、時刻の欄に 09:20:00 を入れる", "到着が確定し、県境と市区町村境の推定が、出発と到着の間（09:07 ごろ）に出る", {
@@ -264,5 +373,5 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   window.removeEventListener("error", caught);
   window.removeEventListener("unhandledrejection", caught);
 
-  return { steps, transport, captures: [next, captured, empty, filled], csv, message: exported };
+  return { steps, transport, captures: [next, captured, bulk, wide, empty, filled], csv, message: exported };
 }

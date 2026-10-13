@@ -136,6 +136,29 @@ impl RideDocument {
     pub fn length_m(&self) -> f64 {
         geo::length_m(&self.line())
     }
+
+    /// 経由点ごとの、経路の始点からの距離（m）。
+    pub fn waypoint_distances(&self) -> Vec<f64> {
+        let mut distances = Vec::with_capacity(self.waypoints.len());
+        let mut total = 0.0;
+        let mut previous: Option<LonLat> = None;
+        for (i, waypoint) in self.waypoints.iter().enumerate() {
+            let vertices = self.route.segments.get(i).map_or(&[][..], Vec::as_slice);
+            for (n, point) in std::iter::once(&[waypoint.lon, waypoint.lat])
+                .chain(vertices)
+                .enumerate()
+            {
+                if let Some(from) = previous {
+                    total += geo::distance_m(from, *point);
+                }
+                if n == 0 {
+                    distances.push(total);
+                }
+                previous = Some(*point);
+            }
+        }
+        distances
+    }
 }
 
 #[cfg(test)]

@@ -111,7 +111,7 @@
   </header>
 
   <section class="folders">
-    <div class="lead"><b>フォルダ</b><span class="sub">初回に 1 度だけ選びます</span></div>
+    <div class="lead"><b>フォルダ</b></div>
     {#each folders as folder, i (folder.id)}
       {#if i > 0}<div class="rule"></div>{/if}
       <div class="folder">

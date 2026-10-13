@@ -201,7 +201,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     await until(() => app.events().length > 0);
     await sleep(500);
     note("県境をまたぐ線を引く", "県境と市区町村境のイベントが 1 件ずつできる", {
-      events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}`),
+      events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}${e.hidden ? " 字幕なし" : ""}`),
       message: app.message(),
     });
     const boundary = app.events().find((event) => event.kind === "pref_boundary");
@@ -226,7 +226,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     note("道に沿わせて 2 点を結ぶ", "線が道をたどり、頂点が 90 個ほどになる。国道 19 号の路線のイベントが出る", {
       points: line(app.path()).length,
       modes: app.path().waypoints.map((w) => w.segment_mode),
-      events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}`),
+      events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}${e.hidden ? " 字幕なし" : ""}`),
     });
     captures.push(await capture("snapped"));
     /** 道をたどった線。あとで、道の上の点を選ぶのに使う */

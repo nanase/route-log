@@ -1,6 +1,6 @@
 /** 画面の状態を表す型。Rust 側には無く、保存もしない。 */
 
-/** いまの作業。経路を入れるか、動画を見て時刻を確定するか。 */
+/** いまの作業。経路入力か、動画を見ながらの時刻入力か。 */
 export type Mode = "route" | "confirm";
 
 /** 保存済み、保存待ち（続けて編集している間）、保存中、保存できない。 */
@@ -49,6 +49,15 @@ export interface SyncRow {
   remote_updated_at: string | null;
   state: SyncState;
   action: SyncAction;
+}
+
+/**
+ * 何も開いていないときに開く日付。前に開いていた走行がまだあればそれ、無ければいちばん新しいもの。
+ *
+ * `dates` は新しい順。走行が 1 つも無ければ undefined。
+ */
+export function startDate(last: string | null, dates: string[]): string | undefined {
+  return last !== null && dates.includes(last) ? last : dates[0];
 }
 
 /** 次の起動でも使う、画面の好み。壊れていれば既定の値にする。 */

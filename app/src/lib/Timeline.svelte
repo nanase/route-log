@@ -33,7 +33,7 @@
     conflicts: string[];
     /** 動画の再生位置の実時刻 */
     nowMs: number;
-    /** 次に確定する相手 */
+    /** 次の候補 */
     targetId: string | null;
     onseek: (realMs: number) => void;
     onselect: (event: RideEvent) => void;
@@ -99,8 +99,9 @@
     events.flatMap((event) => {
       const time = event.time_ms;
       if (time === null || time < startMs || time > endMs) return [];
-      const warned = conflicts.includes(event.id) || (event.status === "estimated" && inGap(time, gaps));
-      return [{ event, time, warned }];
+      const hidden = event.hidden === true;
+      const warned = conflicts.includes(event.id) || (event.status === "estimated" && !hidden && inGap(time, gaps));
+      return [{ event, time, warned, hidden }];
     }),
   );
 
@@ -375,10 +376,11 @@
         {@const at = x(mark.time)}
         {#if at >= 0 && at <= width}
           {@const event = mark.event}
-          <div class="stem {event.status}" class:warned={mark.warned} style:left="{at}px"></div>
+          <div class="stem {event.status}" class:hidden={mark.hidden} class:warned={mark.warned} style:left="{at}px"></div>
           <button
             type="button"
             class="mark {event.status}"
+            class:hidden={mark.hidden}
             class:target={event.id === targetId}
             class:warned={mark.warned}
             style:left="{at}px"
@@ -629,12 +631,16 @@
     border-radius: 4px;
     background: none;
   }
-  /* 状態は、札のまわりの輪でも分ける。確定は緑、警告は橙、次の相手は白と青の二重。 */
+  /* 状態は、札のまわりの輪でも分ける。確定は緑、警告は橙、次の候補は白と青の二重。 */
   .mark.confirmed {
     box-shadow: 0 0 0 2px var(--ok);
   }
+  /* 字幕なしは薄くする。時刻を確定してあれば、基準として効いているので、少し濃く残す。 */
   .mark.hidden {
     opacity: 0.35;
+  }
+  .mark.hidden.confirmed {
+    opacity: 0.7;
   }
   .mark.warned {
     box-shadow: 0 0 0 2px var(--warn-ring);

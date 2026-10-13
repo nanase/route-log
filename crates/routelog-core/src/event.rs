@@ -1,6 +1,9 @@
-//! 字幕にするイベント。経路の上の位置と、そこを通った時刻を持つ。
+//! イベント。経路の上の位置と、そこを通った時刻を持つ。字幕にするものと、時刻の基準に
+//! するだけで字幕にしないものがある。
 
 use serde::{Deserialize, Serialize};
+
+use crate::geo::LonLat;
 
 /// 経路を引き直したとき、同じイベントとみなす位置のずれの上限（m）。
 pub const CARRY_OVER_M: f64 = 200.0;
@@ -16,13 +19,18 @@ pub enum EventKind {
     Bridge,
     Tunnel,
     MichiNoEki,
+    /// 経由点。人が時刻を入れたいと選んだ経由点にだけ作る。
+    Waypoint,
     Custom,
 }
 
 impl EventKind {
-    /// 経路から機械的に抽出する種類。残りは人が足す。
+    /// 経路から機械的に抽出する種類。残りは、経路の端と経由点に置くものと、人が足すもの。
     pub fn is_extracted(self) -> bool {
-        !matches!(self, Self::Departure | Self::Arrival | Self::Custom)
+        !matches!(
+            self,
+            Self::Departure | Self::Arrival | Self::Waypoint | Self::Custom
+        )
     }
 }
 
@@ -33,8 +41,6 @@ pub enum EventStatus {
     Estimated,
     /// 時刻を人が確定した。
     Confirmed,
-    /// 字幕にしない。
-    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -75,9 +81,13 @@ pub struct EventDetail {
     /// 位置ではなく時刻が分かっているイベント。位置は時刻から求め、時刻推定の基準にはしない。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub by_time: bool,
+    /// `waypoint`：その経由点の位置。経路を直しても、同じ経由点だと分かる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<LonLat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "Stored")]
 pub struct Event {
     /// UUIDv7。抽出したばかりで、まだ保存していないものは空。
     pub id: String,
@@ -88,16 +98,65 @@ pub struct Event {
     /// 通過時刻（Unix ミリ秒）。推定できないときは `None`。
     pub time_ms: Option<i64>,
     pub status: EventStatus,
+    /// 字幕にしない。時刻を確定してあれば、字幕にしなくても時刻推定の基準になる。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(default)]
     pub detail: EventDetail,
+}
+
+/// 保存してあるイベントの形。
+///
+/// 以前は「字幕にしない」を状態の 1 つとして持っていた。その形で保存したものも読めるよう、
+/// ここで受けて、いまの形に直す。
+#[derive(Deserialize)]
+struct Stored {
+    id: String,
+    kind: EventKind,
+    label: String,
+    route_m: f64,
+    time_ms: Option<i64>,
+    status: StoredStatus,
+    #[serde(default)]
+    hidden: bool,
+    #[serde(default)]
+    detail: EventDetail,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredStatus {
+    Estimated,
+    Confirmed,
+    Hidden,
+}
+
+impl From<Stored> for Event {
+    fn from(stored: Stored) -> Self {
+        Self {
+            id: stored.id,
+            kind: stored.kind,
+            label: stored.label,
+            route_m: stored.route_m,
+            time_ms: stored.time_ms,
+            status: match stored.status {
+                StoredStatus::Confirmed => EventStatus::Confirmed,
+                StoredStatus::Estimated | StoredStatus::Hidden => EventStatus::Estimated,
+            },
+            hidden: stored.hidden || stored.status == StoredStatus::Hidden,
+            detail: stored.detail,
+        }
+    }
 }
 
 /// 経路から抽出し直したイベントに、人が手を入れた結果を引き継ぐ。
 ///
 /// - 抽出したイベントは、同じ種類で、抽出したときの名前が同じで、位置が近い元のイベントが
-///   あれば、その ID・状態・時刻・人が直した名前を受け継ぐ。位置は新しい経路のものにする
-/// - 人が足したイベント（出発・到着・手動）は、そのまま残す
+///   あれば、その ID・状態・時刻・字幕にするかどうか・人が直した名前を受け継ぐ。位置は新しい
+///   経路のものにする
+/// - 抽出しないイベント（出発・到着・経由点・手動）は、そのまま残す
 /// - 受け継ぐ相手のいない元のイベントは消える
+/// - 名前の無い橋は、人が名前を付けていなければ捨てる。字幕にできず、一覧を埋めるだけになる
 ///
 /// 結果は位置の順に並ぶ。
 pub fn carry_over(existing: &[Event], extracted: Vec<Event>) -> Vec<Event> {
@@ -130,9 +189,11 @@ pub fn carry_over(existing: &[Event], extracted: Vec<Event>) -> Vec<Event> {
                 event.label = old.label.clone();
                 event.time_ms = old.time_ms;
                 event.status = old.status;
+                event.hidden = old.hidden;
             }
             event
         })
+        .filter(|event| event.kind != EventKind::Bridge || !event.label.is_empty())
         .collect();
     events.extend(existing.iter().filter(|e| !e.kind.is_extracted()).cloned());
     events.sort_by(|a, b| a.route_m.total_cmp(&b.route_m));
@@ -151,6 +212,7 @@ mod tests {
             route_m,
             time_ms: (status == EventStatus::Confirmed).then_some(1_000),
             status,
+            hidden: false,
             detail: EventDetail::default(),
         }
     }
@@ -206,7 +268,7 @@ mod tests {
             EventKind::Tunnel,
             "白地トンネル",
             1000.0,
-            EventStatus::Hidden,
+            EventStatus::Confirmed,
         )];
         let new = carry_over(
             &old,
@@ -225,7 +287,7 @@ mod tests {
             EventKind::Road,
             "国道19号",
             1000.0,
-            EventStatus::Hidden,
+            EventStatus::Confirmed,
         )];
         let new = carry_over(
             &old,
@@ -278,11 +340,59 @@ mod tests {
             EventStatus::Estimated,
         )];
         let mut short = extracted(EventKind::Bridge, "短い橋", 1000.0);
-        short.status = EventStatus::Hidden;
+        short.hidden = true;
         let new = carry_over(&old, vec![short]);
+        assert_eq!((new[0].id.as_str(), new[0].hidden), ("a", false));
+    }
+
+    #[test]
+    fn an_event_a_person_hid_stays_hidden_and_keeps_its_time() {
+        let mut old = event(
+            "a",
+            EventKind::Tunnel,
+            "白地トンネル",
+            1000.0,
+            EventStatus::Confirmed,
+        );
+        old.hidden = true;
+        let new = carry_over(
+            &[old],
+            vec![extracted(EventKind::Tunnel, "白地トンネル", 1010.0)],
+        );
         assert_eq!(
-            (new[0].id.as_str(), new[0].status),
-            ("a", EventStatus::Estimated)
+            (new[0].hidden, new[0].status, new[0].time_ms),
+            (true, EventStatus::Confirmed, Some(1_000))
+        );
+    }
+
+    #[test]
+    fn a_bridge_without_a_name_is_dropped_unless_a_person_named_it() {
+        let mut named = event(
+            "a",
+            EventKind::Bridge,
+            "名無しだった橋",
+            1000.0,
+            EventStatus::Estimated,
+        );
+        named.detail.extracted_label = Some(String::new());
+        let new = carry_over(
+            &[named],
+            vec![
+                extracted(EventKind::Bridge, "", 1000.0),
+                extracted(EventKind::Bridge, "", 5000.0),
+                extracted(EventKind::Tunnel, "", 6000.0),
+            ],
+        );
+        let kept: Vec<_> = new
+            .iter()
+            .map(|e| (e.kind, e.label.as_str(), e.route_m))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (EventKind::Bridge, "名無しだった橋", 1000.0),
+                (EventKind::Tunnel, "", 6000.0)
+            ]
         );
     }
 
@@ -290,22 +400,22 @@ mod tests {
     fn a_name_a_person_gave_survives_and_still_matches_next_time() {
         let old = [event(
             "a",
-            EventKind::Bridge,
+            EventKind::Tunnel,
             "",
             1000.0,
             EventStatus::Estimated,
         )];
-        let mut named = carry_over(&old, vec![extracted(EventKind::Bridge, "", 1000.0)]);
-        named[0].label = "名無しだった橋".into();
+        let mut named = carry_over(&old, vec![extracted(EventKind::Tunnel, "", 1000.0)]);
+        named[0].label = "名無しだったトンネル".into();
 
-        let again = carry_over(&named, vec![extracted(EventKind::Bridge, "", 1050.0)]);
+        let again = carry_over(&named, vec![extracted(EventKind::Tunnel, "", 1050.0)]);
         assert_eq!(
             (
                 again[0].id.as_str(),
                 again[0].label.as_str(),
                 again[0].route_m
             ),
-            ("a", "名無しだった橋", 1050.0)
+            ("a", "名無しだったトンネル", 1050.0)
         );
         assert_eq!(again[0].detail.extracted_label.as_deref(), Some(""));
     }
@@ -334,5 +444,22 @@ mod tests {
         assert!(json.contains(r#""kind":"michi_no_eki""#), "{json}");
         assert!(json.contains(r#""status":"estimated""#), "{json}");
         assert!(json.contains(r#""detail":{}"#), "{json}");
+        assert!(!json.contains("hidden"), "{json}");
+    }
+
+    #[test]
+    fn an_event_saved_with_the_hidden_status_is_read_as_hidden() {
+        let old = r#"{"id":"a","kind":"bridge","label":"小さな橋","route_m":1.0,"time_ms":null,"status":"hidden"}"#;
+        let event: Event = serde_json::from_str(old).unwrap();
+        assert_eq!((event.status, event.hidden), (EventStatus::Estimated, true));
+
+        // いまの形は、確定していても字幕にしないことを持てる。書いて読んでも変わらない。
+        let mut timed = extracted(EventKind::Waypoint, "経由点 2", 1.0);
+        timed.status = EventStatus::Confirmed;
+        timed.hidden = true;
+        timed.detail.at = Some([138.5, 36.5]);
+        let json = serde_json::to_string(&timed).unwrap();
+        assert!(json.contains(r#""hidden":true"#), "{json}");
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), timed);
     }
 }

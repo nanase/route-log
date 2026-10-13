@@ -425,6 +425,9 @@ pub enum Pushed {
 ///
 /// クラウドが別の場所で書き換えられていたら、送らずに `Conflict` を返す。`overwrite` なら、
 /// それでも手元の内容で置き換える。
+///
+/// 推定した時刻は送らない。クラウドは、変わったイベントの行だけを書く。推定まで送ると、時刻を
+/// 1 つ確定するたびに、まわりのイベントがみな変わったことになる。
 #[tauri::command]
 pub async fn sync_push(
     app: tauri::AppHandle,
@@ -433,7 +436,8 @@ pub async fn sync_push(
 ) -> Result<Pushed, String> {
     blocking(&app, move |app| {
         let api = Api::new(&app.state::<ConfigFile>())?;
-        let doc = app.state::<Store>().load(&id).map_err(|e| e.to_string())?;
+        let mut doc = app.state::<Store>().load(&id).map_err(|e| e.to_string())?;
+        routelog_core::clear_estimates(&mut doc);
         let synced = app.state::<Synced>();
         let mut outcome = api.put(&doc, synced.get(&id).as_deref())?;
         if let (Err(theirs), true) = (&outcome, overwrite) {
@@ -453,10 +457,14 @@ pub async fn sync_push(
 /// クラウドの走行を取ってくる。手元にはまだ置かない。置くのは `sync_apply` である。
 ///
 /// 取るのと置くのを分けてあるのは、画面の側が、編集の合間を選んで置くためである。
+///
+/// クラウドには推定した時刻が無いので、ここで求め直す。
 #[tauri::command]
 pub async fn sync_fetch(app: tauri::AppHandle, id: String) -> Result<RideDocument, String> {
     blocking(&app, move |app| {
-        Api::new(&app.state::<ConfigFile>())?.get(&id)
+        let mut doc = Api::new(&app.state::<ConfigFile>())?.get(&id)?;
+        routelog_core::refresh(&mut doc);
+        Ok(doc)
     })
     .await
 }
