@@ -154,6 +154,7 @@ D1 と R2 は、ダッシュボードか `wrangler d1 delete` / `wrangler r2 buc
 - 確かめたこと
   - `ACCESS_AUD` を置く前は、Worker がすべての要求を 403 で拒む
   - Access のアプリケーションを作ると、ヘッダの無い要求は Access のエラー画面（403）で止まる
+  - アプリから走行を 1 つ送ると、状態が「同じ」になる。本番の D1 と R2 に書けている
   - アプリにサービストークンを入れると、一覧を取れる。サービストークンのトークンは、持ち主を `common_name` に持つ
 - 初回のデプロイで出たエラー
   - `This Worker does not exist on your account. [code: 10007]` が出た。アップロードは済んでいて、もう一度 `wrangler deploy` を実行すると通った
