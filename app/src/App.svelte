@@ -55,6 +55,8 @@
   let doc = $state.raw<RideDocument | null>(null);
   /** 判定用データを開いてあるか */
   let geoReady = $state(false);
+  /** 新しく足す区間を、道に沿わせるか */
+  let snapNew = $state(false);
   /** 経路が変わっていて、次の保存でイベントを抽出し直すか */
   let extractNeeded = false;
   /** 動画の再生位置の実時刻 */
@@ -217,13 +219,14 @@
       const saved = await invoke<{
         updated_at: string;
         length_m: number;
+        route: RideDocument["route"];
         events: RideEvent[];
         conflicts: string[];
       }>("save_ride", { doc: saving, extract });
       lengthM = saved.length_m;
       // 保存を待つ間に編集が進んでいたら、返ってきたイベントは古い。次の保存に任せる。
       if (doc === saving) {
-        doc = { ...doc, events: saved.events };
+        doc = { ...doc, route: saved.route, events: saved.events };
         conflicts = saved.conflicts;
       }
       stored = stored.map((s) =>
@@ -398,6 +401,7 @@
         loadRoads: roadDir === "-" ? null : () => loadRoads(roadDir),
         loadGeo: check?.geo ? () => loadGeo(check!.geo!) : null,
         events: () => events,
+        setSnap: (on) => (snapNew = on),
         create: async (rideDate) => {
           newDate = rideDate;
           await createRide();
@@ -432,6 +436,11 @@
       <button type="button" onclick={() => pick("動画フォルダを選ぶ", loadVideos)}>動画フォルダを開く</button>
       <button type="button" onclick={() => pick("道路データのフォルダを選ぶ", loadRoads)}>道路データを開く</button>
       <button type="button" onclick={() => pick("判定データのフォルダを選ぶ", loadGeo)}>判定データを開く</button>
+      <label
+        title="新しく足す区間を、国道・都道府県道に沿わせます。Shift を押しながら経由点をクリックすると、区間ごとに切り替えられます"
+      >
+        <input type="checkbox" bind:checked={snapNew} disabled={!geoReady} />道に沿わせる
+      </label>
       <span class="message">{message}</span>
       {#if date !== null}
         <input
@@ -482,6 +491,7 @@
         {roads}
         {marks}
         {here}
+        snap={snapNew && geoReady}
         onchange={(path) => edit((current) => ({ ...current, ...path }))}
       />
     </div>
@@ -534,22 +544,29 @@
   header {
     grid-column: 1 / -1;
     display: flex;
-    gap: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
     align-items: center;
     font-size: 0.9rem;
   }
-  .message {
-    flex: 1;
+  /* 幅が足りなければ段を分ける。ボタンや欄の中では折り返さない。 */
+  header > :global(*) {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  header > .message {
+    flex: 1 1 4rem;
+    min-width: 4rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #555;
   }
-  label input {
+  label input[type="number"] {
     width: 5rem;
   }
   .title {
-    width: 14rem;
+    width: 11rem;
   }
   nav {
     display: flex;

@@ -4,9 +4,11 @@
 
 mod data;
 mod extract;
+mod snap;
 
 pub use data::{Area, BBox, GeoData, Road, Station, Structure};
 pub use extract::{Options, Prepared};
+pub use snap::SnapOptions;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

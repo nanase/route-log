@@ -24,6 +24,16 @@ export interface Piece {
 
 const point = (waypoint: Waypoint): LonLat => [waypoint.lon, waypoint.lat];
 
+/** 吸着の区間の線は Rust 側が引く。経由点が動いたら、古い線を捨てて引き直しを待つ。 */
+const stale = (path: Path, ...segments: number[]): Path => ({
+  ...path,
+  route: {
+    segments: path.route.segments.map((vertices, i) =>
+      segments.includes(i) && path.waypoints[i].segment_mode === "snap" ? [] : vertices,
+    ),
+  },
+});
+
 /** 区間の頂点を入れ替える。頂点があれば手修正、無ければ直線になる。 */
 const withSegment = (path: Path, segment: number, vertices: LonLat[]): Path => ({
   waypoints: path.waypoints.map((waypoint, i) =>
@@ -45,19 +55,31 @@ export function pieces(path: Path): Piece[] {
   });
 }
 
-/** 終わりに経由点を足す。直線で結ぶ。 */
-export function appendWaypoint(path: Path, at: LonLat): Path {
+/** 終わりに経由点を足す。手前の経由点からは `mode` で結ぶ。 */
+export function appendWaypoint(path: Path, at: LonLat, mode: "straight" | "snap" = "straight"): Path {
   const waypoint: Waypoint = { lon: at[0], lat: at[1], segment_mode: "straight" };
+  const last = path.waypoints.length - 1;
   return {
-    waypoints: [...path.waypoints, waypoint],
+    waypoints: [...path.waypoints.map((w, i) => (i === last ? { ...w, segment_mode: mode } : w)), waypoint],
     route: { segments: path.waypoints.length > 0 ? [...path.route.segments, []] : [] },
   };
 }
 
 export function moveWaypoint(path: Path, index: number, to: LonLat): Path {
-  return {
+  const moved = {
     ...path,
     waypoints: path.waypoints.map((waypoint, i) => (i === index ? { ...waypoint, lon: to[0], lat: to[1] } : waypoint)),
+  };
+  return stale(moved, index - 1, index);
+}
+
+/** 区間の結び方を、吸着と直線で切り替える。手で置いた頂点は捨てる。 */
+export function toggleSnap(path: Path, segment: number): Path {
+  if (segment < 0 || segment >= path.route.segments.length) return path;
+  const mode = path.waypoints[segment].segment_mode === "snap" ? "straight" : "snap";
+  return {
+    waypoints: path.waypoints.map((waypoint, i) => (i === segment ? { ...waypoint, segment_mode: mode } : waypoint)),
+    route: { segments: path.route.segments.map((vertices, i) => (i === segment ? [] : vertices)) },
   };
 }
 
@@ -69,8 +91,15 @@ export function removeWaypoint(path: Path, index: number): Path {
   const rest = waypoints.filter((_, i) => i !== index);
   if (index === 0) return { waypoints: rest, route: { segments: route.segments.slice(1) } };
   if (index === last) {
+    // 最後の経由点の結び方は使わない。直線に戻しておく。
     rest[last - 1] = { ...rest[last - 1], segment_mode: "straight" };
     return { waypoints: rest, route: { segments: route.segments.slice(0, -1) } };
+  }
+  // 前後のどちらかが吸着なら、1 つになった区間も吸着にして引き直す。
+  if (waypoints[index - 1].segment_mode === "snap" || waypoints[index].segment_mode === "snap") {
+    rest[index - 1] = { ...rest[index - 1], segment_mode: "snap" };
+    const segments = [...route.segments.slice(0, index - 1), [], ...route.segments.slice(index + 1)];
+    return { waypoints: rest, route: { segments } };
   }
   const merged = [...route.segments[index - 1], ...route.segments[index]];
   const segments = [...route.segments.slice(0, index - 1), merged, ...route.segments.slice(index + 1)];

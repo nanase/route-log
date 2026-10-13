@@ -15,6 +15,7 @@
     pieces,
     removeVertex,
     removeWaypoint,
+    toggleSnap,
   } from "./route";
   import type { LonLat, RoadData } from "./types";
 
@@ -24,6 +25,7 @@
    * - 地図をクリックすると、終わりに経由点を足す
    * - 経由点と頂点はドラッグで動かし、右クリックで消す
    * - 線の途中の小さな丸をドラッグすると、そこに頂点を足す
+   * - Shift を押しながら経由点をクリックすると、次の経由点までの結び方を吸着と直線で切り替える
    */
   let {
     path,
@@ -31,6 +33,7 @@
     roads = null,
     marks = [],
     here = null,
+    snap = false,
     onchange,
   }: {
     path: Path;
@@ -39,6 +42,8 @@
     roads?: RoadData | null;
     /** イベントの位置。地図に点で出す */
     marks?: { at: LonLat; label: string; hidden: boolean }[];
+    /** 新しく足す区間を、道に沿わせるか */
+    snap?: boolean;
     /** 動画のいまの時刻にいると推定される位置 */
     here?: LonLat | null;
     onchange: (path: Path) => void;
@@ -75,12 +80,16 @@
     (map?.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData(lineData(line(next)));
   }
 
-  function handle(kind: "waypoint" | "vertex" | "middle", at: LonLat, label = "") {
+  function handle(kind: "waypoint" | "waypoint snap" | "vertex" | "middle", at: LonLat, label = "") {
     const element = document.createElement("div");
     element.className = `handle ${kind}`;
     element.textContent = label;
     // 丸の上のクリックで、地図に経由点を足さない。
-    element.addEventListener("click", (event) => event.stopPropagation());
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (event.shiftKey) onshiftclick?.();
+    });
+    let onshiftclick: (() => void) | undefined;
     const marker = new maplibregl.Marker({ element, draggable: true }).setLngLat(at).addTo(map!);
     markers.push(marker);
     return {
@@ -89,6 +98,9 @@
         const to = (): LonLat => marker.getLngLat().toArray();
         marker.on("drag", () => draw(moved(to())));
         marker.on("dragend", () => onchange(moved(to())));
+      },
+      onshiftclick(changed: () => Path) {
+        onshiftclick = () => onchange(changed());
       },
       onremove(removed: () => Path) {
         element.addEventListener("contextmenu", (event) => {
@@ -104,13 +116,17 @@
     for (const marker of markers) marker.remove();
     markers = [];
     if (map === undefined) return;
+    // 吸着の区間の線は道が決めるので、頂点も、頂点を足す丸も出さない。
+    const snapped = (segment: number) => current.waypoints[segment].segment_mode === "snap";
     for (const piece of pieces(current)) {
+      if (snapped(piece.segment)) continue;
       const [from, to] = [map.project(piece.from), map.project(piece.to)];
       if (from.dist(to) < MIN_PIECE_PX) continue;
       const middle = map.unproject(from.add(to).div(2)).toArray();
       handle("middle", middle).ondrag((at) => insertVertex(current, piece.segment, piece.index, at));
     }
     current.route.segments.forEach((vertices, segment) => {
+      if (snapped(segment)) return;
       vertices.forEach((vertex, index) => {
         const vertexHandle = handle("vertex", vertex);
         vertexHandle.ondrag((to) => moveVertex(current, segment, index, to));
@@ -118,7 +134,9 @@
       });
     });
     current.waypoints.forEach((waypoint, index) => {
-      const waypointHandle = handle("waypoint", [waypoint.lon, waypoint.lat], String(index + 1));
+      const kind = waypoint.segment_mode === "snap" ? "waypoint snap" : "waypoint";
+      const waypointHandle = handle(kind, [waypoint.lon, waypoint.lat], String(index + 1));
+      waypointHandle.onshiftclick(() => toggleSnap(current, index));
       waypointHandle.ondrag((to) => moveWaypoint(current, index, to));
       waypointHandle.onremove(() => removeWaypoint(current, index));
     });
@@ -201,7 +219,9 @@
       });
       ready = true;
     });
-    created.on("click", (event) => onchange(appendWaypoint(path, event.lngLat.toArray())));
+    created.on("click", (event) => {
+      onchange(appendWaypoint(path, event.lngLat.toArray(), snap ? "snap" : "straight"));
+    });
     created.on("moveend", () => {
       localStorage.setItem(VIEW_KEY, JSON.stringify({ center: created.getCenter().toArray(), zoom: created.getZoom() }));
     });
@@ -327,6 +347,12 @@
     mouse("mouseup", to, canvas);
   }
 
+  /** `at` にいちばん近い丸を、Shift を押しながらクリックしたことにする。 */
+  export function shiftClick(at: LonLat) {
+    if (map === undefined || markers.length === 0) return;
+    nearest(at).getElement().dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+  }
+
   /** `at` にいちばん近い丸を右クリックしたことにする。 */
   export function rightClick(at: LonLat) {
     if (map === undefined || markers.length === 0) return;
@@ -383,6 +409,9 @@
     color: #fff;
     font: bold 11px/18px system-ui, sans-serif;
     text-align: center;
+  }
+  .map :global(.handle.waypoint.snap) {
+    background: #1c7ed6;
   }
   .map :global(.handle.vertex) {
     width: 14px;

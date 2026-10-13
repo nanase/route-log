@@ -9,6 +9,7 @@ import {
   pieces,
   removeVertex,
   removeWaypoint,
+  toggleSnap,
 } from "./route";
 import type { LonLat } from "./types";
 
@@ -20,7 +21,7 @@ const P: LonLat = [138.05, 36.05];
 const Q: LonLat = [138.15, 36.05];
 
 const empty: Path = { waypoints: [], route: { segments: [] } };
-const build = (...points: LonLat[]) => points.reduce(appendWaypoint, empty);
+const build = (...points: LonLat[]) => points.reduce((path, at) => appendWaypoint(path, at), empty);
 const modes = (path: Path) => path.waypoints.map((w) => w.segment_mode);
 
 describe("経由点", () => {
@@ -87,6 +88,41 @@ describe("頂点", () => {
     const path = build(A, B);
     insertVertex(path, 0, 0, P);
     expect(line(path)).toEqual([A, B]);
+  });
+});
+
+describe("吸着", () => {
+  /** A・B・C を吸着で結び、Rust 側が線を引いた後の経路。 */
+  const snapped = (): Path => ({
+    waypoints: [A, B, C].map(([lon, lat], i) => ({ lon, lat, segment_mode: i < 2 ? "snap" : "straight" })),
+    route: { segments: [[P], [Q]] },
+  });
+
+  test("吸着で足すと、手前の経由点からの結び方が吸着になる", () => {
+    const path = appendWaypoint(appendWaypoint(build(A), B, "snap"), C);
+    expect(modes(path)).toEqual(["snap", "straight", "straight"]);
+  });
+
+  test("切り替えると、線を捨てて結び方だけを変える", () => {
+    const straight = toggleSnap(snapped(), 0);
+    expect(modes(straight)).toEqual(["straight", "snap", "straight"]);
+    expect(straight.route.segments).toEqual([[], [Q]]);
+    expect(modes(toggleSnap(straight, 0))).toEqual(["snap", "snap", "straight"]);
+    expect(toggleSnap(snapped(), 2)).toEqual(snapped());
+  });
+
+  test("経由点を動かすと、その前後の吸着の線だけが引き直しを待つ", () => {
+    expect(moveWaypoint(snapped(), 0, D).route.segments).toEqual([[], [Q]]);
+    expect(moveWaypoint(snapped(), 1, D).route.segments).toEqual([[], []]);
+    // 手修正の区間の頂点は、経由点を動かしても残る。
+    const manual = insertVertex(build(A, B), 0, 0, P);
+    expect(moveWaypoint(manual, 0, D).route.segments).toEqual([[P]]);
+  });
+
+  test("途中の経由点を消すと、1 つになった区間も吸着で引き直す", () => {
+    const removed = removeWaypoint(snapped(), 1);
+    expect(modes(removed)).toEqual(["snap", "straight"]);
+    expect(removed.route.segments).toEqual([[]]);
   });
 });
 

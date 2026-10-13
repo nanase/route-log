@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use routelog_core::geo::{self, LonLat};
 use routelog_core::{EventStatus, RouteClass};
-use routelog_geo::{BBox, GeoData, Options, Prepared, Road};
+use routelog_geo::{BBox, GeoData, Options, Prepared, Road, SnapOptions};
 
 /// 始点にいちばん近い way から、端が一致する way を行き先へ向けてつないでいく。
 fn chain(roads: &[Road], number: u32, start: LonLat, toward: LonLat) -> Vec<LonLat> {
@@ -100,6 +100,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let prepared = Prepared::new(data, bbox);
     let built = started.elapsed();
+    // たどった線の上の 2 点を吸着で結び、たどった道のりと比べる。
+    let pick = |m: f64| {
+        let mut rest = m;
+        for pair in line.windows(2) {
+            rest -= geo::distance_m(pair[0], pair[1]);
+            if rest <= 0.0 {
+                return pair[1];
+            }
+        }
+        *line.last().unwrap()
+    };
+    let total_m = geo::length_m(&line);
+    let (from, to) = (pick(total_m * 0.1), pick(total_m * 0.3));
+    let started = Instant::now();
+    let first = prepared.snap(from, to, &SnapOptions::default());
+    let first_took = started.elapsed();
+    let started = Instant::now();
+    let second = prepared.snap(to, from, &SnapOptions::default());
+    println!(
+        "吸着 {:.5},{:.5} → {:.5},{:.5}: 直線 {:.0} m、たどった道のり {:.0} m、吸着 {} m（{} 点）、逆向き {} m。グラフ込み {first_took:?}、2 回目 {:?}",
+        from[0],
+        from[1],
+        to[0],
+        to[1],
+        geo::distance_m(from, to),
+        total_m * 0.2,
+        first
+            .as_ref()
+            .map_or("なし".into(), |l| format!("{:.0}", geo::length_m(l))),
+        first.as_ref().map_or(0, Vec::len),
+        second
+            .as_ref()
+            .map_or("なし".into(), |l| format!("{:.0}", geo::length_m(l))),
+        started.elapsed(),
+    );
+
     let started = Instant::now();
     let events = prepared.extract(&line, &Options::default());
     println!(

@@ -4,6 +4,7 @@
 //! 「どの市区町村の中か」を調べる。答えが変わった所がイベントになる。
 
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use routelog_core::geo::{self, LonLat};
 use routelog_core::{Event, EventDetail, EventKind, EventStatus, RouteRef, route_name};
@@ -11,6 +12,7 @@ use rstar::primitives::{GeomWithData, Line, Rectangle};
 use rstar::{PointDistance, RTree};
 
 use crate::data::{Area, BBox, GeoData, Structure};
+use crate::snap::{Graph, OnRoad, SnapOptions, usable};
 
 /// 緯度 1 度の長さ（m）。
 const M_PER_DEGREE: f64 = 111_195.08;
@@ -196,7 +198,9 @@ pub struct Prepared {
     bbox: BBox,
     plane: Plane,
     /// 道の線分（平面）と、その道の番号。
-    segments: RTree<GeomWithData<Line<Xy>, usize>>,
+    segments: RTree<GeomWithData<Line<Xy>, (usize, usize)>>,
+    /// 吸着に使う道のグラフ。初めて吸着するときに作る。
+    graph: OnceLock<Graph>,
     /// 面を囲む矩形（経度・緯度）と、その面の番号。
     areas: RTree<GeomWithData<Rectangle<LonLat>, usize>>,
 }
@@ -210,8 +214,9 @@ impl Prepared {
             .iter()
             .enumerate()
             .flat_map(|(road, r)| {
-                r.line.windows(2).map(move |pair| {
-                    GeomWithData::new(Line::new(plane.xy(pair[0]), plane.xy(pair[1])), road)
+                r.line.windows(2).enumerate().map(move |(segment, pair)| {
+                    let line = Line::new(plane.xy(pair[0]), plane.xy(pair[1]));
+                    GeomWithData::new(line, (road, segment))
                 })
             })
             .collect();
@@ -232,6 +237,7 @@ impl Prepared {
             bbox,
             plane,
             segments: RTree::bulk_load(segments),
+            graph: OnceLock::new(),
             areas: RTree::bulk_load(areas),
         }
     }
@@ -239,6 +245,41 @@ impl Prepared {
     /// 読んである範囲。経路がこの中に収まっていれば、読み直さずに使える。
     pub fn bbox(&self) -> BBox {
         self.bbox
+    }
+
+    /// 道の上の、その点にいちばん近い位置。吸着に使える道が `radius_m` 以内に無ければ `None`。
+    fn nearest(&self, graph: &Graph, point: LonLat, radius_m: f64) -> Option<OnRoad> {
+        let xy = self.plane.xy(point);
+        let segment = self
+            .segments
+            .locate_within_distance(xy, radius_m.powi(2))
+            .filter(|segment| usable(&self.data.roads[segment.data.0]))
+            .min_by(|a, b| {
+                a.geom()
+                    .distance_2(&xy)
+                    .total_cmp(&b.geom().distance_2(&xy))
+            })?;
+        let line = segment.geom();
+        let (dx, dy) = (line.to[0] - line.from[0], line.to[1] - line.from[1]);
+        let length2 = dx * dx + dy * dy;
+        let t = if length2 > 0.0 {
+            ((xy[0] - line.from[0]) * dx + (xy[1] - line.from[1]) * dy) / length2
+        } else {
+            0.0
+        };
+        graph.on_road(segment.data.0, segment.data.1, t)
+    }
+
+    /// 2 点の間を、道に沿って結ぶ線。両端は道の上の点になる。
+    ///
+    /// どちらかの近くに道が無いときと、道のりが直線距離に比べて長すぎるときは `None`。
+    pub fn snap(&self, from: LonLat, to: LonLat, options: &SnapOptions) -> Option<Vec<LonLat>> {
+        let graph = self.graph.get_or_init(|| Graph::new(&self.data.roads));
+        let a = self.nearest(graph, from, options.road_m)?;
+        let b = self.nearest(graph, to, options.road_m)?;
+        // 経由点から道までの分だけ、道のりは直線より長くなりうる。
+        let limit_m = geo::distance_m(from, to) * options.max_ratio + 2.0 * options.road_m;
+        graph.path(a, b, limit_m)
     }
 
     /// 経路の折れ線からイベントを抽出する。位置の順に並ぶ。ID は空で、時刻は無い。
@@ -282,9 +323,9 @@ impl Prepared {
                 continue;
             }
             let distance = line.distance_2(&sample.xy).sqrt();
-            match roads.iter_mut().find(|(road, _)| *road == segment.data) {
+            match roads.iter_mut().find(|(road, _)| *road == segment.data.0) {
                 Some(found) => found.1 = found.1.min(distance),
-                None => roads.push((segment.data, distance)),
+                None => roads.push((segment.data.0, distance)),
             }
         }
         roads.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -916,6 +957,139 @@ mod tests {
                 EventKind::Bridge
             ]
         );
+    }
+
+    fn length(line: &[LonLat]) -> f64 {
+        geo::length_m(line).round()
+    }
+
+    fn snapped(data: GeoData, from: LonLat, to: LonLat) -> Option<Vec<LonLat>> {
+        prepared(data).snap(from, to, &SnapOptions::default())
+    }
+
+    /// 東西の道（0〜1000 m）と、その東の端から北へ延びる道（0〜1000 m）。
+    fn corner() -> Vec<Road> {
+        vec![
+            road(
+                1,
+                vec![at(0.0, 0.0), at(500.0, 0.0), at(1000.0, 0.0)],
+                vec![national(19)],
+            ),
+            road(
+                2,
+                vec![at(1000.0, 0.0), at(1000.0, 1000.0)],
+                vec![prefectural(80)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn two_points_on_one_road_are_joined_along_it() {
+        let line = snapped(roads(corner()), at(100.0, 10.0), at(900.0, -10.0)).unwrap();
+        assert_eq!(length(&line), 800.0);
+        // 両端は道の上に寄り、途中の頂点も通る。
+        assert_eq!(line.len(), 3);
+        assert!((line[0][1] - ORIGIN[1]).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_line_turns_the_corner_where_two_roads_meet() {
+        let line = snapped(roads(corner()), at(100.0, 5.0), at(995.0, 800.0)).unwrap();
+        assert_eq!(length(&line), 900.0 + 800.0);
+        assert!(line.contains(&at(1000.0, 0.0)));
+    }
+
+    #[test]
+    fn it_works_in_either_direction() {
+        let line = snapped(roads(corner()), at(995.0, 800.0), at(100.0, 5.0)).unwrap();
+        assert_eq!(length(&line), 1700.0);
+        assert!((line[0][0] - at(1000.0, 800.0)[0]).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_road_that_ends_in_the_middle_of_another_is_a_junction() {
+        // 東西の道の途中（500 m）から、北へ延びる道。
+        let data = roads(vec![
+            road(
+                1,
+                vec![at(0.0, 0.0), at(500.0, 0.0), at(1000.0, 0.0)],
+                vec![national(19)],
+            ),
+            road(
+                2,
+                vec![at(500.0, 0.0), at(500.0, 600.0)],
+                vec![prefectural(80)],
+            ),
+        ]);
+        let line = snapped(data, at(200.0, 0.0), at(500.0, 400.0)).unwrap();
+        assert_eq!(length(&line), 300.0 + 400.0);
+    }
+
+    #[test]
+    fn a_detour_much_longer_than_the_straight_line_is_refused() {
+        // 東へ 1000 m、北へ 200 m、西へ 1000 m と折り返す道。
+        let hairpin = || {
+            roads(vec![
+                road(1, vec![at(0.0, 0.0), at(1000.0, 0.0)], vec![national(19)]),
+                road(
+                    2,
+                    vec![at(1000.0, 0.0), at(1000.0, 200.0)],
+                    vec![national(19)],
+                ),
+                road(
+                    3,
+                    vec![at(1000.0, 200.0), at(0.0, 200.0)],
+                    vec![national(19)],
+                ),
+            ])
+        };
+        // 直線なら 200 m の 2 点が、道では 2000 m 離れている。
+        assert_eq!(snapped(hairpin(), at(100.0, 0.0), at(100.0, 200.0)), None);
+        // 折り返しの近くなら、道のりは直線の 1.5 倍に収まる。
+        let near = snapped(hairpin(), at(950.0, 0.0), at(1000.0, 200.0));
+        assert_eq!(near.map(|l| length(&l)), Some(250.0));
+    }
+
+    #[test]
+    fn a_point_with_no_road_nearby_is_not_snapped() {
+        assert_eq!(
+            snapped(roads(corner()), at(100.0, 50.0), at(900.0, 0.0)),
+            None
+        );
+        assert_eq!(
+            snapped(roads(corner()), at(100.0, 0.0), at(900.0, 50.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn roads_a_small_bike_cannot_take_are_not_used() {
+        let mut motor = corner();
+        motor[1].motorroad = true;
+        assert_eq!(
+            snapped(roads(motor), at(100.0, 5.0), at(995.0, 800.0)),
+            None
+        );
+        let mut expressway = corner();
+        expressway[0].kind = "expressway".into();
+        assert_eq!(
+            snapped(roads(expressway), at(100.0, 5.0), at(900.0, 0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn roads_that_cross_without_sharing_a_point_are_not_joined() {
+        // 立体交差。線は交わるが、同じ点を持たない。
+        let data = roads(vec![
+            road(1, vec![at(0.0, 0.0), at(1000.0, 0.0)], vec![national(19)]),
+            road(
+                2,
+                vec![at(500.0, -500.0), at(500.0, 500.0)],
+                vec![prefectural(80)],
+            ),
+        ]);
+        assert_eq!(snapped(data, at(400.0, 0.0), at(500.0, 100.0)), None);
     }
 
     #[test]

@@ -124,7 +124,17 @@ pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
             event.time_ms = time_at(&knots, event.route_m);
         }
     }
-    events.sort_by(|a, b| a.route_m.total_cmp(&b.route_m));
+    // 同じ位置なら、出発を先頭に、到着を最後にする。
+    let rank = |kind: EventKind| match kind {
+        EventKind::Departure => 0,
+        EventKind::Arrival => 2,
+        _ => 1,
+    };
+    events.sort_by(|a, b| {
+        a.route_m
+            .total_cmp(&b.route_m)
+            .then(rank(a.kind).cmp(&rank(b.kind)))
+    });
 
     let confirmed: Vec<&Event> = events.iter().filter(|e| is_knot(e)).collect();
     let mut conflicts: Vec<String> = Vec::new();
@@ -266,6 +276,37 @@ mod tests {
         refresh(&mut doc);
         assert_eq!(doc.events.len(), 2);
         assert_eq!(doc.events[1].route_m.round(), 4000.0);
+    }
+
+    #[test]
+    fn at_the_same_place_the_departure_comes_first_and_the_arrival_last() {
+        let mut doc = document(
+            2000.0,
+            0,
+            vec![
+                event("road", EventKind::Road, 0.0, None),
+                event("station", EventKind::MichiNoEki, 2000.0, None),
+            ],
+        );
+        refresh(&mut doc);
+        // 到着は経路の長さの位置に置かれる。丸めの差で道の駅より手前に出ないよう、位置を揃える。
+        let end = doc.length_m();
+        doc.events
+            .iter_mut()
+            .find(|e| e.id == "station")
+            .unwrap()
+            .route_m = end;
+        refresh(&mut doc);
+        let kinds: Vec<_> = doc.events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                EventKind::Departure,
+                EventKind::Road,
+                EventKind::MichiNoEki,
+                EventKind::Arrival
+            ]
+        );
     }
 
     #[test]

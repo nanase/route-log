@@ -10,6 +10,7 @@ export interface MapHandle {
   click(at: LonLat): void;
   drag(from: LonLat, to: LonLat): void;
   rightClick(at: LonLat): void;
+  shiftClick(at: LonLat): void;
   idle(timeoutMs?: number): Promise<boolean>;
   snapshot(): Record<string, unknown>;
 }
@@ -21,6 +22,7 @@ export interface AppHandle {
   /** 判定用データを開く。抽出を確かめないなら null */
   loadGeo: (() => Promise<void>) | null;
   events(): RideEvent[];
+  setSnap(on: boolean): void;
   create(rideDate: string): Promise<void>;
   edit(change: (path: Path) => Path): Promise<void>;
   path(): Path;
@@ -111,6 +113,33 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
       message: app.message(),
     });
     captures.push(await capture("events"));
+
+    // 長野市内の国道 19 号の上の 2 点。道に沿わせると、道のり（約 2.66 km）で結ばれる。
+    const [from, to]: LonLat[] = [
+      [138.17128, 36.63714],
+      [138.14595, 36.62546],
+    ];
+    app.setSnap(true);
+    await app.create("2026-10-05");
+    map.jump([138.158, 36.631], 13);
+    await map.idle();
+    map.click(from);
+    await sleep(300);
+    map.click(to);
+    await sleep(2500);
+    note("道に沿わせて 2 点を結ぶ", "線が道をたどり、頂点が 90 個ほどになる。国道 19 号の路線のイベントが出る", {
+      points: line(app.path()).length,
+      modes: app.path().waypoints.map((w) => w.segment_mode),
+      events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}`),
+    });
+    captures.push(await capture("snapped"));
+
+    map.shiftClick(from);
+    await sleep(2500);
+    note("Shift を押しながら経由点 1 をクリック", "区間が直線に戻り、頂点が 2 個になる", {
+      points: line(app.path()).length,
+      modes: app.path().waypoints.map((w) => w.segment_mode),
+    });
   }
 
   return { steps, captures };

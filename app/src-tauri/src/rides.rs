@@ -55,6 +55,8 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
 pub struct Saved {
     updated_at: String,
     length_m: f64,
+    /// 吸着の区間を引き直した後の線。
+    route: Route,
     events: Vec<Event>,
     /// 位置が先なのに時刻が後になっている、確定済みのイベントの ID。
     conflicts: Vec<String>,
@@ -62,7 +64,7 @@ pub struct Saved {
 
 /// 走行を保存し、更新時刻・経路の長さ・イベントを返す。イベントの時刻は、保存の前に推定し直す。
 ///
-/// `extract` なら、保存の前に経路からイベントを抽出し直す。判定用データを開いていなければ、
+/// `extract` なら、保存の前に吸着の区間を引き直し、経路からイベントを抽出し直す。判定用データを開いていなければ、
 /// イベントはそのままにする。
 #[tauri::command]
 pub async fn save_ride(
@@ -75,7 +77,10 @@ pub async fn save_ride(
     if let (true, Some(dir)) = (extract, geo_dir) {
         let handle = app.clone();
         let (returned, events) = tauri::async_runtime::spawn_blocking(move || {
-            let events = handle.state::<Extractor>().extract(Path::new(&dir), &doc);
+            let extractor = handle.state::<Extractor>();
+            let events = extractor
+                .snap(Path::new(&dir), &mut doc)
+                .and_then(|()| extractor.extract(Path::new(&dir), &doc));
             (doc, events)
         })
         .await
@@ -94,6 +99,7 @@ pub async fn save_ride(
     Ok(Saved {
         length_m: doc.length_m(),
         updated_at: doc.ride.updated_at,
+        route: doc.route,
         events: doc.events,
         conflicts,
     })
