@@ -7,6 +7,8 @@
 
   /**
    * 次に確定するイベントの案内と、確定の操作。動画のすぐ下に置く。
+   *
+   * 動画が無ければ、動画の位置では確定できない。時刻を一覧で手で入れることを案内する。
    */
   let {
     target,
@@ -39,7 +41,7 @@
   // 出発と到着は、名前を直していなければ種類と同じ語になる。重ねて出さない。
   const showKind = $derived(target !== null && target.kind !== "road" && target.label !== KINDS[target.kind]);
   const when = $derived.by(() => {
-    if (target === null || target.time_ms === null) return "";
+    if (target === null || target.time_ms === null || !hasVideo) return "";
     const rest = target.time_ms - nowMs;
     return rest >= 0 ? `あと ${short(rest)}` : `${short(-rest)} 前`;
   });
@@ -52,12 +54,15 @@
       {#if count === 0}
         <span class="name none">イベントがまだありません</span>
         <span class="time">「経路を入れる」で経路を引くと、ここに出ます</span>
+      {:else if !hasVideo}
+        <span class="name none">動画がありません</span>
+        <span class="time">時刻は、一覧で手で入れます</span>
       {:else}
         <span class="name none">確定を待つイベントはありません</span>
         <span class="time">一覧で選ぶと、確定し直せます</span>
       {/if}
     {:else}
-      <span class="lead">{confirmed ? "選んでいる（確定済み）" : "次に確定する"}</span>
+      <span class="lead">{confirmed ? "選んでいる（確定済み）" : hasVideo ? "次に確定する" : "選んでいる"}</span>
       <span class="name">
         <KindTag kind={target.kind} />
         {#if showKind}<span>{KINDS[target.kind]}</span>{/if}
@@ -75,7 +80,13 @@
     {/if}
   </div>
   <div class="actions">
-    <button type="button" class="btn primary confirm" onclick={onconfirm} disabled={target === null || !hasVideo}>
+    <button
+      type="button"
+      class="btn primary confirm"
+      onclick={onconfirm}
+      disabled={target === null || !hasVideo}
+      title={hasVideo ? "" : "動画が無いときは、一覧で時刻を手で入れます"}
+    >
       {confirmed ? "いまの位置で確定し直す" : "いまの位置で確定"}<kbd>Enter</kbd>
     </button>
     <div class="more">

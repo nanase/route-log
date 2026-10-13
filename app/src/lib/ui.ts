@@ -15,6 +15,14 @@ export type Folder = "video" | "road" | "geo";
 /** フォルダの読み込みの状態。 */
 export type FolderState = "none" | "loading" | "ready" | "error";
 
+/** 走行から外した動画の、実時刻の範囲。タイムラインに薄く出して、戻せるようにする。 */
+export interface ExcludedClip {
+  /** 動画のファイル名。外した動画は、これで見分ける */
+  name: string;
+  start_ms: number;
+  end_ms: number;
+}
+
 /** 上の帯のすぐ下に帯で出す知らせ。直すか閉じるまで残る。 */
 export interface Notice {
   /** 同じ事柄の知らせは、新しいもので置き換える */

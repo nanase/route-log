@@ -14,6 +14,15 @@ export interface Path {
   route: Route;
 }
 
+/**
+ * 経路の編集 1 つ。当てる瞬間の経路を受け取り、変えた後の経路を返す。変える所が無ければ、
+ * 受け取った経路をそのまま返す。
+ *
+ * 画面は、編集した結果の経路ではなく、この形の操作を渡す。点を道へ寄せるといった待つ処理の
+ * 間に経路が変わっても、古い経路から作った結果で上書きしないためである。
+ */
+export type PathEdit = (path: Path) => Path;
+
 /** 線の上の 1 区切り。途中をつかんで頂点を足す場所になる。 */
 export interface Piece {
   segment: number;
@@ -42,6 +51,40 @@ const withSegment = (path: Path, segment: number, vertices: LonLat[]): Path => (
   ),
   route: { segments: path.route.segments.map((old, i) => (i === segment ? vertices : old)) },
 });
+
+/** 経由点 `index` が、2 つの経路で同じ所にあるか。 */
+function sameWaypoint(path: Path, shown: Path, index: number): boolean {
+  const [now, then] = [path.waypoints[index], shown.waypoints[index]];
+  return now !== undefined && then !== undefined && now.lon === then.lon && now.lat === then.lat;
+}
+
+/**
+ * 画面に出ていた経路 `shown` の経由点 `index` を相手に決めた編集を、いまの経路に当てられる形にする。
+ *
+ * 相手は番号で指す。待つ間にほかの編集が入って、その番号の経由点が出ていたときと違う所に
+ * あれば、何もしない。番号のずれた別の経由点を書き換えないためである。
+ */
+export function onWaypoint(shown: Path, index: number, edit: PathEdit): PathEdit {
+  return (path) => (sameWaypoint(path, shown, index) ? edit(path) : path);
+}
+
+/**
+ * 区間 `segment` を相手に決めた編集を、いまの経路に当てられる形にする。
+ *
+ * 両端の経由点と結び方が、出ていたときと同じであることを確かめる。頂点を番号で指すので、
+ * 吸着でない区間では頂点の数も見る。吸着の区間の頂点は、保存のたびに引き直されるので見ない。
+ */
+export function onSegment(shown: Path, segment: number, edit: PathEdit): PathEdit {
+  return (path) => {
+    const mode = path.waypoints[segment]?.segment_mode;
+    const same =
+      sameWaypoint(path, shown, segment) &&
+      sameWaypoint(path, shown, segment + 1) &&
+      mode === shown.waypoints[segment].segment_mode &&
+      (mode === "snap" || path.route.segments[segment]?.length === shown.route.segments[segment]?.length);
+    return same ? edit(path) : path;
+  };
+}
 
 /** 経路の折れ線。経由点と、その間の頂点を順に並べる。 */
 export function line(path: Path): LonLat[] {

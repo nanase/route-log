@@ -1,6 +1,7 @@
 mod check;
 mod config;
 mod events;
+mod excluded;
 mod rides;
 mod store;
 mod sync;
@@ -45,6 +46,9 @@ pub fn run() {
             let dir = config::data_dir(app.handle())?;
             app.manage(store::Store::new(dir.join("rides")));
             app.manage(config::ConfigFile::open(dir.join("config.json")));
+            app.manage(excluded::ExcludedVideos::open(
+                dir.join("excluded-videos.json"),
+            ));
             app.manage(sync::Synced::open(dir.join("sync.json")));
             sync::init_credentials();
             Ok(())
@@ -58,6 +62,8 @@ pub fn run() {
             config::get_config,
             config::open_road_data,
             config::open_geo_data,
+            excluded::get_excluded_videos,
+            excluded::set_video_excluded,
             rides::list_rides,
             rides::load_ride,
             rides::create_ride,

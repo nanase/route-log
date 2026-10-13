@@ -26,7 +26,7 @@
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
   import RidePanel from "./lib/RidePanel.svelte";
-  import { line, type Path } from "./lib/route";
+  import { line, type Path, type PathEdit } from "./lib/route";
   import RouteMap from "./lib/RouteMap.svelte";
   import RouteSide from "./lib/RouteSide.svelte";
   import RouteTools from "./lib/RouteTools.svelte";
@@ -48,6 +48,7 @@
   } from "./lib/types";
   import {
     type Basemap,
+    type ExcludedClip,
     type Folder,
     type FolderState,
     type Mode,
@@ -102,6 +103,8 @@
   /** 最後に出した知らせ。自動の確認が読む */
   let lastMessage = "";
   let videos = $state<RideVideos[]>([]);
+  /** 開いている走行で、タイムラインから外している動画のファイル名 */
+  let excludedNames = $state.raw<string[]>([]);
   let stored = $state<RideSummary[]>([]);
   let roads = $state<RoadData | null>(null);
   /** 開いている走行の日付 */
@@ -127,6 +130,8 @@
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** 書いている最中の保存。走行を消す前に、終わるのを待つ */
   let writing: Promise<void> | undefined;
+  /** 順に行う編集の列の、いちばん後ろ。`inTurn` が継ぎ足す */
+  let editing: Promise<void> = Promise.resolve();
   /** 経路の編集の取り消しとやり直し。編集の前の経路を、古い順に持つ */
   let undoStack = $state.raw<Path[]>([]);
   let redoStack = $state.raw<Path[]>([]);
@@ -138,7 +143,18 @@
     [...new Set([...videos.map((v) => v.date), ...stored.map((s) => s.ride_date)])].sort().reverse(),
   );
   const files = $derived(videos.find((v) => v.date === date)?.files ?? []);
+  /** 走行に使う動画。再生、タイムライン、時刻と動画の位置の変換は、これだけを相手にする */
+  const usedFiles = $derived(files.filter((file) => !excludedNames.includes(file.name)));
   const clockOffsetMs = $derived(doc?.ride.clock_offset_ms ?? 0);
+  /** 走行から外している動画の、実時刻の範囲。タイムラインに薄く出して、戻せるようにする */
+  const excludedClips = $derived<ExcludedClip[]>(
+    files
+      .filter((file) => excludedNames.includes(file.name))
+      .map(({ name, start_ms, duration_ms }) => {
+        const start = start_ms + clockOffsetMs;
+        return { name, start_ms: start, end_ms: start + duration_ms };
+      }),
+  );
   const routeLine = $derived(doc === null ? [] : line(doc));
   const events = $derived(doc?.events ?? []);
   const target = $derived(
@@ -163,7 +179,8 @@
     if (event === null || at === null) return null;
     let note = `${(event.route_m / 1000).toFixed(1)} km`;
     if (mode === "confirm") {
-      const rest = event.time_ms === null ? null : event.time_ms - nowMs;
+      // 動画が無ければ、いまの時刻も無い。あと何分かは出さない。
+      const rest = event.time_ms === null || timeline === null ? null : event.time_ms - nowMs;
       if (event.status === "confirmed") note = "確定済み";
       else if (rest === null) note = "";
       else note = rest >= 0 ? `あと ${short(rest)}` : `${short(-rest)} 前`;
@@ -181,7 +198,9 @@
     if (videoState === "loading") return "動画を読み込み中…";
     if (date === null) return "";
     if (files.length === 0) return "動画なし";
-    return `動画 ${files.length} 本・${hms(files.reduce((sum, file) => sum + file.duration_ms, 0))}`;
+    const used = `動画 ${usedFiles.length} 本・${hms(usedFiles.reduce((sum, file) => sum + file.duration_ms, 0))}`;
+    const out = files.length - usedFiles.length;
+    return out === 0 ? used : `${used}（外した動画 ${out} 本）`;
   });
 
   onMount(async () => {
@@ -295,10 +314,15 @@
   const repick = (folder: Folder) => ({ label: "フォルダを選び直す", run: () => void pick(folder) });
 
   async function select(next: string) {
+    // 待っている編集を、いまの走行に入れ終えてから切り替える。
+    await editing;
     await flush();
     const summary = stored.find((s) => s.ride_date === next);
-    doc = summary ? await invoke<RideDocument>("load_ride", { id: summary.id }) : null;
+    const loaded = summary ? await invoke<RideDocument>("load_ride", { id: summary.id }) : null;
+    const names = await invoke<string[]>("get_excluded_videos", { date: next });
+    doc = loaded;
     date = next;
+    excludedNames = names;
     chosenId = null;
     selectedId = null;
     conflicts = [];
@@ -310,18 +334,31 @@
     dismiss("ride");
   }
 
-  /** 開いている日付の走行を、無ければ作って返す。日付を選んでいなければ null。 */
+  /**
+   * 編集を、頼まれた順に 1 つずつ行う。前の編集が済むまで、次を始めない。
+   *
+   * 編集には、走行を作る、点を道へ寄せるといった、待つ処理が挟まる。順に行うので、待つ間に
+   * 来た次の編集が、古い状態から作った結果で上書きすることも、走行を 2 つ作ることもない。
+   */
+  function inTurn(task: () => void | Promise<void>): Promise<void> {
+    const done = editing.then(task).catch((e) => {
+      report({ key: "edit", level: "error", title: "編集できません。", detail: String(e) });
+    });
+    editing = done;
+    return done;
+  }
+
+  /**
+   * 開いている日付の走行を、無ければ作って返す。日付を選んでいなければ null。
+   *
+   * `inTurn` の中からだけ呼ぶ。作るのを待つ間に、もう 1 度呼ばれることが無い。
+   */
   async function ensureDoc(): Promise<RideDocument | null> {
     if (doc === null && date !== null) {
       doc = await invoke<RideDocument>("create_ride", { rideDate: date });
       stored = await invoke("list_rides");
     }
-    return doc;
-  }
-
-  async function edit(change: (current: RideDocument) => RideDocument, delayMs = SAVE_DELAY_MS) {
-    const current = await ensureDoc();
-    if (current === null) {
+    if (doc === null) {
       report({
         key: "ride",
         level: "warning",
@@ -329,23 +366,38 @@
         detail: "走行を選ぶか、日付を入れて作ってください。",
         action: { label: "走行を選ぶ", run: openRides },
       });
-      return;
     }
-    const next = change(current);
-    if (next.waypoints !== current.waypoints || next.route !== current.route) extractNeeded = true;
+    return doc;
+  }
+
+  /** 走行を入れ替えて、保存を予約する。 */
+  function put(next: RideDocument, delayMs = SAVE_DELAY_MS) {
+    if (next.waypoints !== doc?.waypoints || next.route !== doc?.route) extractNeeded = true;
     doc = next;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flush, delayMs);
     saveState = "pending";
   }
 
+  /** 走行を書き換える。`change` は、順番が来たときの走行に当てる。変える所が無ければ、そのまま返す。 */
+  function edit(change: (current: RideDocument) => RideDocument, delayMs = SAVE_DELAY_MS) {
+    return inTurn(async () => {
+      const current = await ensureDoc();
+      if (current === null) return;
+      const next = change(current);
+      if (next !== current) put(next, delayMs);
+    });
+  }
+
   /** 待っている保存があれば、いま書く。 */
   async function flush() {
+    // 前の保存が済んでから書く。重ねて書くと、古い内容が後から書かれて残ることがある。
+    while (writing !== undefined) await writing;
     if (saveTimer === undefined || doc === null) return;
     clearTimeout(saveTimer);
     saveTimer = undefined;
     saveState = "saving";
-    writing = write(doc);
+    writing = write(doc).finally(() => (writing = undefined));
     await writing;
   }
 
@@ -402,31 +454,46 @@
   const pathOf = (current: RideDocument | null): Path =>
     current === null ? EMPTY : { waypoints: current.waypoints, route: current.route };
 
-  /** 経路を書き換える。取り消せるよう、書き換える前の経路を覚えておく。 */
-  function editPath(next: Path) {
-    if (date !== null) {
-      undoStack = [...undoStack.slice(1 - HISTORY_LIMIT), pathOf(doc)];
+  /**
+   * 地図での操作を、経路に入れる。取り消せるよう、書き換える前の経路を覚えておく。
+   *
+   * `make` は、順番が来てから呼ぶ。いまの経路を見て、点を道へ寄せるなどして、経路に当てる
+   * 編集を返す。編集は、返ってきたその場で、そのときの経路に当てる。
+   */
+  function editPath(make: () => PathEdit | null | Promise<PathEdit | null>) {
+    return inTurn(async () => {
+      const change = await make();
+      const current = change === null ? null : await ensureDoc();
+      if (change === null || current === null) return;
+      const before = pathOf(current);
+      const after = change(before);
+      if (after === before) return;
+      undoStack = [...undoStack.slice(1 - HISTORY_LIMIT), before];
       redoStack = [];
-    }
-    return edit((current) => ({ ...current, ...next }));
+      put({ ...current, ...after });
+    });
   }
 
-  /** 経路の編集を 1 つ取り消す。 */
+  /** 経路の編集を 1 つ取り消す。先に頼まれた編集が、経路に入ってから取り消す。 */
   function undo() {
-    const previous = undoStack.at(-1);
-    if (previous === undefined || doc === null) return;
-    undoStack = undoStack.slice(0, -1);
-    redoStack = [...redoStack, pathOf(doc)];
-    return edit((current) => ({ ...current, ...previous }));
+    return inTurn(() => {
+      const previous = undoStack.at(-1);
+      if (previous === undefined || doc === null) return;
+      undoStack = undoStack.slice(0, -1);
+      redoStack = [...redoStack, pathOf(doc)];
+      put({ ...doc, ...previous });
+    });
   }
 
   /** 取り消した編集を 1 つやり直す。 */
   function redo() {
-    const next = redoStack.at(-1);
-    if (next === undefined || doc === null) return;
-    redoStack = redoStack.slice(0, -1);
-    undoStack = [...undoStack, pathOf(doc)];
-    return edit((current) => ({ ...current, ...next }));
+    return inTurn(() => {
+      const next = redoStack.at(-1);
+      if (next === undefined || doc === null) return;
+      redoStack = redoStack.slice(0, -1);
+      undoStack = [...undoStack, pathOf(doc)];
+      put({ ...doc, ...next });
+    });
   }
 
   /** イベントを書き換える。時刻の推定をすぐ見せたいので、待たずに保存する。 */
@@ -497,10 +564,18 @@
     untrack(() => (selectedWaypoint = null));
   });
 
+  /**
+   * 動画の再生位置の実時刻。動画が無ければ null。
+   *
+   * 動画を出さなくなると、`player` は null になる。動画に頼る操作は、これが null なら何もしない。
+   */
+  const videoNow = () => (timeline === null || player == null ? null : player.now());
+
   /** 次に確定する相手を、動画のいまの位置の時刻で確定する。 */
   function confirmTarget() {
-    if (player === undefined || target === null || doc === null) return;
-    const [id, realMs, offsetMs] = [target.id, player.now(), clockOffsetMs];
+    const realMs = videoNow();
+    if (realMs === null || target === null || doc === null) return;
+    const [id, offsetMs] = [target.id, clockOffsetMs];
     confirmedOnVideo = [...confirmedOnVideo, id];
     chosenId = nextConfirmable(events, id)?.id ?? null;
     void editEvents((current) => patch(current, id, (event) => confirmOnVideo(event, realMs, offsetMs)));
@@ -517,8 +592,9 @@
 
   /** 動画のいまの位置に、手動のイベントを足す。 */
   function addCustom() {
-    if (player === undefined || doc === null) return;
-    const custom = customAt(player.now(), clockOffsetMs, "メモ");
+    const realMs = videoNow();
+    if (realMs === null || doc === null) return;
+    const custom = customAt(realMs, clockOffsetMs, "メモ");
     // 足したら、すぐ名前を付けられるように、直す欄を開く。
     chosenId = custom.id;
     selectedId = custom.id;
@@ -591,10 +667,10 @@
     }
   }
 
-  /** その日付の走行を開き、記録が無ければ作る。 */
+  /** その日付の走行を開き、記録が無ければ作る。何も変えない編集を頼むと、走行だけができる。 */
   async function createRide(rideDate: string) {
     await select(rideDate);
-    await ensureDoc();
+    await edit((current) => current);
   }
 
   /** 走行の一覧を開く。同期の前に、待っている保存を書いておく。 */
@@ -616,6 +692,7 @@
 
   /** 手元の走行の記録を消す。開いている走行なら、待っている保存を捨ててから消す。 */
   async function removeRide(id: string) {
+    await editing;
     const opened = doc?.ride.id === id;
     if (opened) {
       clearTimeout(saveTimer);
@@ -641,15 +718,32 @@
     tell("走行の記録を消しました");
   }
 
+  /** タイムラインを作り直すたびに進める番号。遅れて返った古い応答を使わないために持つ */
+  let builds = 0;
   $effect(() => {
-    if (files.length === 0) {
-      timeline = null;
-      return;
-    }
-    void invoke<Timeline>("build_timeline", { files, clockOffsetMs }).then((built) => {
-      timeline = built;
+    const build = ++builds;
+    if (usedFiles.length === 0) timeline = null;
+    // 動画が無いときも呼んで、Rust 側のタイムラインを空にする。前に開いた走行や、外した動画が、
+    // CSV の動画の位置に残らないようにする。
+    void invoke<Timeline>("build_timeline", { files: usedFiles, clockOffsetMs }).then((built) => {
+      if (build === builds) timeline = built.files.length > 0 ? built : null;
     });
   });
+
+  /** 動画を、開いている走行のタイムラインから外す。`excluded` が偽なら、外した動画を戻す。 */
+  async function setVideoExcluded(name: string, excluded: boolean) {
+    const rideDate = date;
+    if (rideDate === null) return;
+    dismiss("exclude");
+    try {
+      const names = await invoke<string[]>("set_video_excluded", { date: rideDate, name, excluded });
+      if (date === rideDate) excludedNames = names;
+      tell(excluded ? "動画を走行から外しました" : "動画を走行に戻しました");
+    } catch (e) {
+      const title = excluded ? "動画を走行から外せません。" : "動画を走行に戻せません。";
+      report({ key: "exclude", level: "error", title, detail: String(e) });
+    }
+  }
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -660,8 +754,13 @@
       await loadVideos(target);
       await select(dates[dates.length - 1]);
       setMode("confirm");
-      while (timeline === null || player === undefined) await sleep(100);
-      report = await runTimelineCheck(timeline, player, (seconds) => setClockOffset(seconds * 1000));
+      while (timeline === null || player == null) await sleep(100);
+      report = await runTimelineCheck(timeline, player, (seconds) => setClockOffset(seconds * 1000), {
+        timeline: () => timeline,
+        player: () => (timeline === null ? null : (player ?? null)),
+        bar: () => timelineBar,
+        remembered: () => invoke<string[]>("get_excluded_videos", { date }),
+      });
       await invoke("capture_check", { name: "played" });
     } catch (e) {
       report = { error: String(e), message: lastMessage };
@@ -676,9 +775,10 @@
       await loadVideos(videoDir);
       await select(dates[dates.length - 1]);
       await loadGeo(geoDir);
-      while (timeline === null || player === undefined || routeMap === undefined) await sleep(100);
+      while (timeline === null || player == null || routeMap === undefined) await sleep(100);
       report = await runConfirmCheck(timeline, player, routeMap, {
         setMode,
+        create: createRide,
         events: () => events,
         target: () => target?.id ?? null,
         choose: (id) => {
@@ -693,8 +793,8 @@
           await sleep(300);
         },
         rideDate: () => date ?? "",
-        exportCsv: async () => {
-          const path = await invoke<string>("check_path", { name: "events.csv" });
+        exportCsv: async (name) => {
+          const path = await invoke<string>("check_path", { name });
           await writeCsv(path);
           return path;
         },
@@ -745,6 +845,7 @@
         events: () => events,
         setSnap: (on) => (snapNew = on),
         create: createRide,
+        open: select,
         path: () => doc ?? EMPTY,
         saved: async () => {
           await flush();
@@ -804,7 +905,7 @@
         {pad}
         onsnap={(at, radiusM) => invoke<[number, number] | null>("snap_point", { point: at, radiusM })}
         onselect={(index) => (selectedWaypoint = index)}
-        onchange={editPath}
+        onedit={editPath}
       />
       <div class="overlay">
         <TopBar
@@ -883,10 +984,15 @@
         />
       {:else}
         <div class="no-video">
-          <b>{date === null ? "走行を開いていません" : "この日付の動画はありません"}</b>
           {#if date === null}
+            <b>走行を開いていません</b>
             <button type="button" class="btn" onclick={openRides}>走行を選ぶ</button>
+          {:else if files.length > 0}
+            <b>この日付の動画は、すべて走行から外してあります</b>
+            <span>下のタイムラインで、薄い帯を押すと戻せます。</span>
+            <span>時刻は、一覧の行を押して手で入れられます。</span>
           {:else}
+            <b>この日付の動画はありません</b>
             <span>時刻は、一覧の行を押して手で入れられます。</span>
             <button type="button" class="btn" onclick={() => (settingsOpen = true)}>設定で動画フォルダを選ぶ</button>
           {/if}
@@ -920,12 +1026,14 @@
       <TimelineBar
         bind:this={timelineBar}
         {timeline}
+        excluded={excludedClips}
         {events}
         {conflicts}
         {nowMs}
         targetId={target?.id ?? null}
         onseek={(realMs) => void player?.seek(realMs)}
         onselect={choose}
+        onexclude={setVideoExcluded}
       />
     </div>
     {#if toast !== ""}
@@ -1114,6 +1222,10 @@
   .no-video b {
     color: #fff;
     font-size: 15px;
+  }
+  /* 白いボタンの字が、暗い地に合わせた淡い色にならないようにする。 */
+  .no-video .btn {
+    color: var(--ink);
   }
   main.confirm .toast {
     bottom: calc(96px + var(--gutter));

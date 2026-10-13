@@ -9,7 +9,12 @@ import type { Basemap } from "./ui";
 export interface MapHandle {
   jump(center: LonLat, zoom: number): void;
   click(at: LonLat): void;
-  drag(from: LonLat, to: LonLat): void;
+  /** 丸をドラッグする。`holdMs` を渡すと、つかんだまま途中でその間だけ止まる */
+  drag(from: LonLat, to: LonLat, holdMs?: number): Promise<void>;
+  /** 丸をつかんで動かし、地図の外で離す。離す直前に丸があった位置を返す */
+  dragAway(from: LonLat, to: LonLat): LonLat | null;
+  /** 経由点の丸が、いま出ている位置 */
+  waypointHandles(): LonLat[];
   rightClick(at: LonLat): void;
   shiftClick(at: LonLat): void;
   /** 丸をクリックする。経由点なら、選ぶことになる */
@@ -31,6 +36,8 @@ export interface AppHandle {
   events(): RideEvent[];
   setSnap(on: boolean): void;
   create(rideDate: string): Promise<void>;
+  /** その日付の走行を開く。記録が無くても、作らない */
+  open(rideDate: string): Promise<void>;
   path(): Path;
   /** 保存を済ませ、保存されたものを読み直す */
   saved(): Promise<RideDocument | null>;
@@ -59,6 +66,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(done: () => boolean, timeoutMs = 15_000) {
   const deadline = performance.now() + timeoutMs;
   while (!done() && performance.now() < deadline) await sleep(200);
+}
+
+/** `points` のうち、`at` にいちばん近いものの番号。 */
+function nearestIndex(points: LonLat[], at: LonLat): number {
+  const far = (p: LonLat) => Math.hypot(p[0] - at[0], p[1] - at[1]);
+  return points.reduce((best, p, i) => (far(p) < far(points[best]) ? i : best), 0);
 }
 
 /** 長野駅のあたり。国道と県道がどちらも画面に入る。 */
@@ -216,6 +229,8 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
       events: app.events().map((e) => `${(e.route_m / 1000).toFixed(1)} km ${e.kind} ${e.label} ${e.status}`),
     });
     captures.push(await capture("snapped"));
+    /** 道をたどった線。あとで、道の上の点を選ぶのに使う */
+    const road = line(app.path());
 
     const middle = line(app.path())[50];
     map.click(middle);
@@ -244,6 +259,99 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
       points: line(app.path()).length,
       modes: app.path().waypoints.map((w) => w.segment_mode),
     });
+
+    // ここからは、待つ処理が挟まっても、経由点が飛んだり消えたりしないことを確かめる。
+    // 記録のまだ無い日付を開き、道に沿わせたまま、待たずに 5 回続けてクリックする。走行を作るのと、
+    // 点を道へ寄せるのを待つ間に、次のクリックが来る。
+    const on = (fraction: number) => road[Math.round((road.length - 1) * fraction)];
+    const along = [0.1, 0.3, 0.5, 0.7, 0.9].map(on);
+    const order = () => app.path().waypoints.map((w) => nearestIndex(along, [w.lon, w.lat]));
+    const state = () => ({ order: order(), history: app.history() });
+    await app.open("2026-10-07");
+    for (const at of along) map.click(at);
+    await until(() => app.path().waypoints.length >= along.length, 6000);
+    await sleep(600);
+    note(
+      "記録の無い日付で、道に沿わせて待たずに 5 回クリック",
+      "経由点が 5 個、押した順（0,1,2,3,4）に並ぶ。その日付の走行は 1 つだけ。取り消せる編集が 5 つ",
+      { ...state(), rides: (await app.list()).filter((ride) => ride.ride_date === "2026-10-07").length },
+    );
+
+    await app.undo();
+    await app.undo();
+    await sleep(300);
+    note("取り消しを 2 回", "経由点が 3 個（0,1,2）。やり直せる編集が 2 つ", state());
+    await app.redo();
+    await app.redo();
+    await sleep(300);
+    note("やり直しを 2 回", "経由点が 5 個、押した順のまま。やり直せる編集は 0", state());
+
+    // 点を道へ寄せるのを待つ間に取り消しても、クリックが先、取り消しが後になる。
+    const last = app.path().waypoints.at(-1);
+    map.click(on(0.98));
+    await app.undo();
+    await sleep(600);
+    note("クリックの直後に、待たずに取り消す", "足した点が取り消されて、経由点は 5 個のまま。やり直せる編集が 1 つ", {
+      ...state(),
+      lastKept: JSON.stringify(app.path().waypoints.at(-1)) === JSON.stringify(last),
+    });
+
+    // 経由点を足してすぐ、別の経由点をつかみ、保存の応答が返るまで離さない。
+    map.click(on(0.98));
+    await sleep(150);
+    const target = on(0.56);
+    await map.drag(along[2], target, 1500);
+    await sleep(1500);
+    const moved = app.path().waypoints[2];
+    const kept = await app.saved();
+    note("経由点を足してすぐ、経由点 3 をつかんで 1.5 秒待ってから動かす", "経由点 3 が、離した所へ動く。経由点は 6 個で、保存されたものも 6 個", {
+      target,
+      moved: moved && [moved.lon, moved.lat],
+      offDegrees: moved && Math.hypot(moved.lon - target[0], moved.lat - target[1]).toFixed(5),
+      saved: kept?.waypoints.length,
+    });
+    captures.push(await capture("burst"));
+
+    // 丸をつかんだまま地図の外で離すと、ドラッグは取りやめになる。丸は元の所へ戻り、次のドラッグもできる。
+    const apart = (a: LonLat, b: LonLat) => Math.hypot(a[0] - b[0], a[1] - b[1]).toFixed(5);
+    const waypointAt = (index: number): LonLat => [app.path().waypoints[index].lon, app.path().waypoints[index].lat];
+    const start = waypointAt(0);
+    const carried = map.dragAway(along[0], on(0.2));
+    await sleep(300);
+    const afterAway = {
+      carried: carried && apart(carried, on(0.2)),
+      waypoint: apart(waypointAt(0), start),
+      handle: apart(map.waypointHandles()[0], start),
+    };
+    await map.drag(along[0], on(0.04));
+    await sleep(1500);
+    note("丸をつかんで地図の外で離し、そのあと同じ丸をドラッグする", "丸は離す直前まで付いてくる（carried が 0 に近い）。外で離すと、経由点も丸も元の所に戻る。そのあとのドラッグでは、離した所へ動く", {
+      afterAway,
+      offDegrees: apart(waypointAt(0), on(0.04)),
+      shownWaypoints: map.waypointHandles().length,
+    });
+
+    // 判定用データをまだ読んでいない地域（上越市のあたり）でも、待たずに 5 回続けてクリックする。
+    // 最初のクリックが読み込みを待つ間に、残りのクリックが来る。点を道へ寄せる処理は、頼んだ順に
+    // 終わるとは限らない。
+    const far: LonLat[] = [
+      [138.22, 37.14],
+      [138.235, 37.145],
+      [138.25, 37.15],
+      [138.265, 37.155],
+      [138.28, 37.16],
+    ];
+    await app.create("2026-10-08");
+    map.jump([138.25, 37.15], 13);
+    await sleep(500);
+    for (const at of far) map.click(at);
+    await until(() => app.path().waypoints.length >= far.length, 30_000);
+    await sleep(600);
+    note("まだ読んでいない地域で、待たずに 5 回クリック", "経由点が 5 個、押した順（0,1,2,3,4）に並ぶ", {
+      order: app.path().waypoints.map((w) => nearestIndex(far, [w.lon, w.lat])),
+    });
+    map.jump([138.158, 36.631], 13);
+    await app.create("2026-10-07");
   }
 
   // 走行の切り替えの板と、設定のダイアログ。見た目は画面の写しで確かめる。

@@ -21,6 +21,8 @@ interface MapHandle {
 interface AppHandle {
   /** 経路を入れる画面と、時刻を確定する画面を切り替える */
   setMode(mode: Mode): void;
+  /** その日付の走行を開き、記録が無ければ作る */
+  create(rideDate: string): Promise<void>;
   events(): RideEvent[];
   target(): string | null;
   choose(id: string): void;
@@ -29,8 +31,8 @@ interface AppHandle {
   /** 保存と時刻の推定が済むまで待つ */
   settled(): Promise<void>;
   rideDate(): string;
-  /** CSV を報告の隣に書き出し、その場所を返す */
-  exportCsv(): Promise<string>;
+  /** CSV を報告の隣に `name` の名前で書き出し、その場所を返す */
+  exportCsv(name: string): Promise<string>;
   message(): string;
   /** タイムライン。動画が無い間は無い */
   timeline(): TimelineHandle | undefined;
@@ -39,6 +41,10 @@ interface AppHandle {
 interface TimelineHandle {
   zoomIn(): void;
   zoomOut(): void;
+  /** その名前の動画の帯を右クリックする */
+  rightClick(name: string): boolean;
+  /** 開いている板のボタンを押す */
+  pressMenu(): void;
   snapshot(): Record<string, unknown>;
 }
 
@@ -136,7 +142,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   await sleep(600);
   note("県境に 12:00:00 を手で入れ、補正を 0 に戻す", "県境は 12:00:00 のまま。出発と到着は 90 秒戻る。順序が合わないので警告が出る");
 
-  const csv = await app.exportCsv();
+  const csv = await app.exportCsv("events.csv");
   const captured = await invoke<string>("capture_check", { name: "confirm" }).catch((e) => `写せない: ${e}`);
 
   key("Backspace");
@@ -164,5 +170,99 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
     "K のあと 2 秒（動かない）": await moved(["l", "k"], 2000),
   };
 
-  return { steps, transport, captures: [next, captured], csv, message: app.message() };
+  const exported = app.message();
+
+  // 走行に使わない動画を外すと、その動画の中の時刻は、CSV に動画の位置が出ない。
+  const clips = () => Number(app.timeline()?.snapshot().clips ?? 0);
+  const toggle = async (name: string) => {
+    const count = clips();
+    app.timeline()?.rightClick(name);
+    await sleep(200);
+    app.timeline()?.pressMenu();
+    for (let i = 0; i < 50 && clips() === count; i++) await sleep(100);
+    await sleep(500);
+  };
+  const first = timeline.files[0].name;
+  await toggle(first);
+  const csvExcluded = await app.exportCsv("excluded.csv");
+  note("最初の動画を外して、CSV を書き出す", "出発の行に時刻は出るが、動画のファイル名と位置は空になる。タイムラインの動画が 1 本減る", {
+    csv: csvExcluded,
+    timeline: app.timeline()?.snapshot(),
+    message: app.message(),
+  });
+  await toggle(first);
+
+  // 動画の無い走行。動画の無い日付の走行を作り、経路を引いて、時刻を一覧で手で入れる。
+  const errors: string[] = [];
+  const caught = (event: ErrorEvent | PromiseRejectionEvent) =>
+    errors.push(String("reason" in event ? event.reason : event.message));
+  window.addEventListener("error", caught);
+  window.addEventListener("unhandledrejection", caught);
+  const text = (selector: string) => document.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() ?? null;
+  /** 一覧の行を押して直す欄を開き、時刻の欄に打ち込む。人がするのと同じ道を通す。 */
+  const typeTime = async (id: string | undefined, value: string) => {
+    const row = document.querySelector<HTMLElement>(`.rows [data-id="${id}"]`);
+    if (row?.getAttribute("aria-expanded") !== "true") row?.click();
+    await sleep(300);
+    const input = row?.parentElement?.querySelector<HTMLInputElement>('input[type="time"]');
+    if (!input) return false;
+    input.value = value;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await app.settled();
+    return true;
+  };
+
+  await app.create("2026-10-04");
+  app.setMode("route");
+  map.jump([138.66, 36.35], 12);
+  await map.idle();
+  map.click([138.62, 36.345]);
+  await sleep(300);
+  map.click([138.7, 36.36]);
+  for (let i = 0; i < 75 && app.events().length === 0; i++) await sleep(200);
+  await sleep(500);
+  app.setMode("confirm");
+  await sleep(800);
+  note(
+    "動画の無い走行で、時刻を確定する画面を開く",
+    "一覧に出発・県境・市区町村境・到着が並ぶ。動画とタイムラインの場所に、動画が無いことと、時刻は一覧で手で入れられることが出る",
+    { video: text(".no-video"), timeline: text(".timeline .empty"), guide: text(".side > section .what") },
+  );
+  const empty = await invoke<string>("capture_check", { name: "no-video" }).catch((e) => `写せない: ${e}`);
+
+  const typedDeparture = await typeTime(find("departure")?.id, "09:00:00");
+  note("出発の行を押して、時刻の欄に 09:00:00 を入れる", "出発が 09:00:00 で確定する。選んだ出発が、案内に出る", {
+    typed: typedDeparture,
+    guide: text(".side > section .what"),
+  });
+
+  // 動画に頼るキー。動画が無いので、押しても何も起きない。エラーにもならない。
+  const untouched = JSON.stringify(app.events());
+  for (const name of ["Enter", "a", " ", "l", "j", "k", "ArrowRight", "Backspace"]) key(name);
+  await app.settled();
+  note("動画に頼るキーを押す（Enter・A・Space・L・J・K・→・Backspace）", "イベントは何も変わらない。エラーも出ない", {
+    unchanged: JSON.stringify(app.events()) === untouched,
+    errors: [...errors],
+  });
+
+  key("n");
+  await sleep(500);
+  note("N", "次の相手が、出発の次のイベント（県境）に移る。エラーは出ない", { errors: [...errors] });
+
+  const typedArrival = await typeTime(find("arrival")?.id, "09:20:00");
+  note("到着の行を押して、時刻の欄に 09:20:00 を入れる", "到着が確定し、県境と市区町村境の推定が、出発と到着の間（09:07 ごろ）に出る", {
+    typed: typedArrival,
+  });
+  const filled = await invoke<string>("capture_check", { name: "no-video-typed" }).catch((e) => `写せない: ${e}`);
+
+  const csvNoVideo = await app.exportCsv("no-video.csv");
+  note("動画の無い走行の CSV を書き出す", "4 件を書き出す。どの行も時刻があり、動画のファイル名と位置は空", {
+    csv: csvNoVideo,
+    message: app.message(),
+    errors: [...errors],
+  });
+  window.removeEventListener("error", caught);
+  window.removeEventListener("unhandledrejection", caught);
+
+  return { steps, transport, captures: [next, captured, empty, filled], csv, message: exported };
 }

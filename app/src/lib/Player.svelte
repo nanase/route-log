@@ -42,14 +42,20 @@
   const endMs = $derived(timeline.spans.at(-1)?.end_ms ?? 0);
   const current = $derived(timeline.files[file]);
 
-  // 走行が変われば先頭へ移る。時計の補正だけが変わったときは、位置を保って時刻を直す。
+  // 走行が変われば先頭へ移る。時計の補正が変わったときと、ほかの動画を外したり戻したりした
+  // ときは、位置を保って、番号と時刻を直す。
   $effect(() => {
-    const index = untrack(() => file);
-    if (timeline.files[index]?.path === loadedPath) {
+    const index = timeline.files.findIndex((candidate) => candidate.path === loadedPath);
+    if (index >= 0) {
+      file = index;
       realMs = timeline.spans[index].start_ms + video.currentTime * 1000;
-    } else if (timeline.files.length > 0) {
-      show({ file: 0, offset_ms: 0 }, false);
+      return;
     }
+    if (timeline.files.length === 0) return;
+    // 見ていた動画を外したときは、その時刻より後で、最初に録画のある所へ移る。
+    const at = untrack(() => realMs);
+    if (loadedPath !== "" && at >= startMs && at < endMs) void seek(at);
+    else show({ file: 0, offset_ms: 0 }, false);
   });
 
   $effect(() => ontime?.(realMs));

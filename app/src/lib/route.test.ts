@@ -6,6 +6,8 @@ import {
   line,
   moveVertex,
   moveWaypoint,
+  onSegment,
+  onWaypoint,
   type Path,
   pieces,
   removeVertex,
@@ -159,6 +161,53 @@ describe("吸着", () => {
     const removed = removeWaypoint(snapped(), 1);
     expect(modes(removed)).toEqual(["snap", "straight"]);
     expect(removed.route.segments).toEqual([[]]);
+  });
+});
+
+describe("待つ間に経路が変わったあとで当てる編集", () => {
+  test("いまの経路に当てるので、待つ間に足された経由点は残る", () => {
+    const shown = build(A, B);
+    const move = onWaypoint(shown, 1, (path) => moveWaypoint(path, 1, D));
+    // 経由点 2 を動かす編集を待つ間に、終わりに C が足された。
+    expect(line(move(appendWaypoint(shown, C)))).toEqual([A, D, C]);
+  });
+
+  test("相手の経由点が同じ所に無ければ、何も変えない", () => {
+    const shown = build(A, B, C);
+    const remove = onWaypoint(shown, 1, (path) => removeWaypoint(path, 1));
+    // 手前に経由点が足されて、番号がずれた。
+    const shifted = insertWaypoint(shown, 0, 0, P);
+    expect(remove(shifted)).toBe(shifted);
+    // 相手がもう消えている。
+    const shorter = removeWaypoint(removeWaypoint(shown, 2), 1);
+    expect(remove(shorter)).toBe(shorter);
+    expect(line(remove(shown))).toEqual([A, C]);
+  });
+
+  test("区間が相手の編集は、両端・結び方・頂点の数が同じときだけ当てる", () => {
+    const shown = insertVertex(build(A, B, C), 0, 0, P);
+    const bend = onSegment(shown, 0, (path) => moveVertex(path, 0, 0, Q));
+    expect(line(bend(shown))).toEqual([A, Q, B, C]);
+    // 次の区間だけが変わったのなら、当てる。
+    expect(line(bend(moveWaypoint(shown, 2, D)))).toEqual([A, Q, B, D]);
+    // 端の経由点が動いた、頂点が消えた、区間が無くなった。
+    for (const changed of [moveWaypoint(shown, 1, D), removeVertex(shown, 0, 0), removeWaypoint(shown, 0)]) {
+      expect(bend(changed)).toBe(changed);
+    }
+  });
+
+  test("吸着の区間は、線が引き直されていても同じ区間とみなす", () => {
+    const shown: Path = {
+      waypoints: [A, C].map(([lon, lat], i) => ({ lon, lat, segment_mode: i === 0 ? "snap" : "straight" })),
+      route: { segments: [[]] },
+    };
+    const split = onSegment(shown, 0, (path) => insertWaypoint(path, 0, 0, B));
+    // 保存の応答で、線が道に沿って引き直された。
+    const redrawn = { ...shown, route: { segments: [[P, Q]] } };
+    expect(line(split(redrawn))).toEqual([A, B, C]);
+    // 結び方が直線に変わっていれば、当てない。
+    const straight = toggleSnap(redrawn, 0);
+    expect(split(straight)).toBe(straight);
   });
 });
 

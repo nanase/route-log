@@ -16,7 +16,10 @@
     line,
     moveVertex,
     moveWaypoint,
+    onSegment,
+    onWaypoint,
     type Path,
+    type PathEdit,
     pieces,
     removeVertex,
     removeWaypoint,
@@ -36,6 +39,9 @@
    * - 経由点をクリックすると選び、結び方の切り替えと削除のボタンをそばに出す
    *
    * `editable` でなければ、経路は見るだけになる。時刻を確定するときに使う。
+   *
+   * 操作の結果は、変えた後の経路ではなく、経路に当てる編集（`PathEdit`）として `onedit` に渡す。
+   * 点を道へ寄せるのを待つ間に、次の操作や保存の応答で経路が変わるからである。
    */
   let {
     path,
@@ -54,7 +60,7 @@
     pad = { top: 60, right: 60, bottom: 60, left: 60 },
     onsnap,
     onselect,
-    onchange,
+    onedit,
   }: {
     path: Path;
     /** 走行が変わったら、経路の全体が見えるように地図を動かす */
@@ -83,7 +89,13 @@
     /** 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。近くに道が無ければ null を返す */
     onsnap?: (at: LonLat, radiusM: number) => Promise<LonLat | null>;
     onselect?: (index: number | null) => void;
-    onchange: (path: Path) => void;
+    /**
+     * 経路を変える操作を、した順に 1 つずつ経路に入れてもらう。
+     *
+     * `make` は、前の操作が経路に入った後で呼ばれ、いまの経路に当てる編集を返す。当てるものが
+     * 無ければ null を返す。返る約束は、その操作が経路に入り終えたときに果たされる。
+     */
+    onedit: (make: () => PathEdit | null | Promise<PathEdit | null>) => Promise<void>;
   } = $props();
 
   const VIEW_KEY = "routelog.map-view";
@@ -128,12 +140,26 @@
   /** 道へ寄せるときに探す範囲（画面上の px）。縮尺を引いていても、近くの道に届く */
   const SNAP_PX = 24;
 
-  /** 点を、画面上で近い道の上へ寄せる。寄せる先が無ければ、そのままにする。 */
-  async function onRoad(at: LonLat): Promise<LonLat> {
-    if (map === undefined || onsnap === undefined) return at;
+  /** 道へ寄せるときに探す範囲（m）。画面上の `SNAP_PX` を、その場所での距離に直す。 */
+  function snapRadiusM(at: LonLat): number {
+    if (map === undefined) return 0;
     const pixel = map.project(at);
-    const edge = map.unproject([pixel.x + SNAP_PX, pixel.y]).toArray();
-    return (await onsnap(at, distanceM(at, edge))) ?? at;
+    return distanceM(at, map.unproject([pixel.x + SNAP_PX, pixel.y]).toArray());
+  }
+
+  /**
+   * 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。寄せる先が無ければ、そのままにする。
+   *
+   * 判定データを読めないなどで寄せられなかったときも、そのままにする。読めない理由は、経路を
+   * 保存するときに知らせが出る。
+   */
+  async function onRoad(at: LonLat, radiusM: number): Promise<LonLat> {
+    if (onsnap === undefined) return at;
+    try {
+      return (await onsnap(at, radiusM)) ?? at;
+    } catch {
+      return at;
+    }
   }
 
   /** 線の上とみなす、線からの距離（画面上の px） */
@@ -171,6 +197,50 @@
     (map?.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData(routeData(next));
   }
 
+  /** 丸を押しているか */
+  let pressed = false;
+  /** 丸をドラッグしている最中か */
+  let dragging = false;
+  /** 離した位置を経路に入れている最中の、ドラッグの数 */
+  let settling = 0;
+  /** 丸の置き直しを、後回しにしたか */
+  let overdue = false;
+
+  /**
+   * 経路の線と丸を、いまの経路に合わせる。丸を押している間と、離した位置が経路に入るまでの
+   * 間は、後回しにする。
+   *
+   * 丸は、経路が変わるたびに作り直す。保存の応答で経路が入れ替わったときに作り直すと、
+   * つかんでいる丸が消えて、ドラッグが途切れる。
+   */
+  function render() {
+    if (pressed || settling > 0) {
+      overdue = true;
+      return;
+    }
+    overdue = false;
+    draw(path);
+    place(path);
+  }
+
+  const press = () => (pressed = true);
+
+  /** 後回しにした置き直しを、できるようになっていれば行う。 */
+  function catchUp() {
+    if (overdue) render();
+  }
+
+  /** 押していたボタンか指を離した。 */
+  function lifted() {
+    if (!pressed) return;
+    pressed = false;
+    // ドラッグを地図の外で離すと、地図には伝わらず、離した位置が経路に入らない。丸を経路の上の
+    // 位置へ戻して、ドラッグを取りやめる。
+    if (dragging) overdue = true;
+    dragging = false;
+    catchUp();
+  }
+
   function handle(kind: string, at: LonLat, label = "") {
     const element = document.createElement("div");
     element.className = `handle ${kind}`;
@@ -185,30 +255,76 @@
     });
     const marker = new maplibregl.Marker({ element, draggable: editable }).setLngLat(at).addTo(map!);
     markers.push(marker);
+    if (editable) {
+      element.addEventListener("mousedown", press);
+      element.addEventListener("touchstart", press, { passive: true });
+    }
     return {
       /**
-       * ドラッグの間は線だけを描き直し、離したときに確定する。`settle` があれば、離した位置を
-       * それで直してから確定する。
+       * ドラッグの間は線だけを描き直し、離したときに経路に入れる。`toRoad` なら、離した位置を
+       * 道の上へ寄せてから入れる。
        */
-      ondrag(moved: (to: LonLat) => Path, settle?: (to: LonLat) => Promise<LonLat>) {
+      ondrag(moved: (to: LonLat) => PathEdit, toRoad = false) {
         const to = (): LonLat => marker.getLngLat().toArray();
-        marker.on("drag", () => draw(moved(to())));
-        marker.on("dragend", async () => onchange(moved(settle ? await settle(to()) : to())));
+        marker.on("dragstart", () => (dragging = true));
+        marker.on("drag", () => draw(moved(to())(path)));
+        marker.on("dragend", () => {
+          const dropped = to();
+          const radiusM = snapRadiusM(dropped);
+          dragging = false;
+          settling += 1;
+          const done = () => {
+            settling -= 1;
+            // 何も変わらなかったときも、丸を経路の上の位置へ戻す。
+            overdue = true;
+            catchUp();
+          };
+          void onedit(async () => moved(toRoad ? await onRoad(dropped, radiusM) : dropped)).then(done, done);
+        });
       },
       onclick(clicked: () => void) {
         onplainclick = clicked;
       },
-      onshiftclick(changed: () => Path) {
-        onshiftclick = () => onchange(changed());
+      onshiftclick(changed: () => PathEdit) {
+        onshiftclick = () => void onedit(changed);
       },
-      onremove(removed: () => Path) {
+      onremove(removed: () => PathEdit) {
         element.addEventListener("contextmenu", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          onchange(removed());
+          void onedit(removed);
         });
       },
     };
+  }
+
+  /**
+   * クリックした所に経由点を足す編集。経路の線の上なら、そこで区間を 2 つに分ける。そうで
+   * なければ、終わりに足す。前のクリックが経路に入った後で呼ぶ。
+   */
+  async function added(clicked: LonLat, radiusM: number, snapping: boolean): Promise<PathEdit> {
+    const shown = path;
+    const piece = pieceAt(clicked);
+    if (piece !== null) {
+      const snapped = shown.waypoints[piece.segment].segment_mode === "snap";
+      const at = snapped ? await onRoad(clicked, radiusM) : clicked;
+      return onSegment(shown, piece.segment, (latest) => insertWaypoint(latest, piece.segment, piece.index, at));
+    }
+    if (!snapping) return (latest) => appendWaypoint(latest, clicked);
+    const at = await onRoad(clicked, radiusM);
+    return (latest) => appendWaypoint(latest, at, "snap");
+  }
+
+  /** 選んだ経由点の、次の点までの結び方を切り替える。 */
+  function toggle(index: number) {
+    const shown = path;
+    void onedit(() => onWaypoint(shown, index, (latest) => toggleSnap(latest, index)));
+  }
+
+  /** 選んだ経由点を消す。 */
+  function remove(index: number) {
+    const shown = path;
+    void onedit(() => onWaypoint(shown, index, (latest) => removeWaypoint(latest, index)));
   }
 
   function place(current: Path) {
@@ -239,24 +355,26 @@
       const [from, to] = [map.project(piece.from), map.project(piece.to)];
       if (from.dist(to) < MIN_PIECE_PX) continue;
       const middle = map.unproject(from.add(to).div(2)).toArray();
-      handle("middle", middle).ondrag((at) => insertVertex(current, piece.segment, piece.index, at));
+      handle("middle", middle).ondrag((at) =>
+        onSegment(current, piece.segment, (latest) => insertVertex(latest, piece.segment, piece.index, at)),
+      );
     }
     current.route.segments.forEach((vertices, segment) => {
       if (snapped(segment)) return;
       vertices.forEach((vertex, index) => {
         const vertexHandle = handle("vertex", vertex);
-        vertexHandle.ondrag((to) => moveVertex(current, segment, index, to));
-        vertexHandle.onremove(() => removeVertex(current, segment, index));
+        vertexHandle.ondrag((to) => onSegment(current, segment, (latest) => moveVertex(latest, segment, index, to)));
+        vertexHandle.onremove(() => onSegment(current, segment, (latest) => removeVertex(latest, segment, index)));
       });
     });
     current.waypoints.forEach((waypoint, index) => {
       const waypointHandle = handle(waypointClass(index), [waypoint.lon, waypoint.lat], String(index + 1));
       waypointHandle.onclick(() => onselect?.(index === selected ? null : index));
-      waypointHandle.onshiftclick(() => toggleSnap(current, index));
+      waypointHandle.onshiftclick(() => onWaypoint(current, index, (latest) => toggleSnap(latest, index)));
       // 前後のどちらかが吸着の区間なら、離した位置を道の上へ寄せる。
       const beside = snapped(index) || (index > 0 && snapped(index - 1));
-      waypointHandle.ondrag((to) => moveWaypoint(current, index, to), beside ? onRoad : undefined);
-      waypointHandle.onremove(() => removeWaypoint(current, index));
+      waypointHandle.ondrag((to) => onWaypoint(current, index, (latest) => moveWaypoint(latest, index, to)), beside);
+      waypointHandle.onremove(() => onWaypoint(current, index, (latest) => removeWaypoint(latest, index)));
     });
   }
 
@@ -396,22 +514,12 @@
       });
       ready = true;
     });
-    created.on("click", async (event) => {
+    created.on("click", (event) => {
       if (!editable) return;
+      // 押した所と、そのときの寄せる範囲と結び方を覚えておき、順番が来たら経路に入れる。
       const clicked = event.lngLat.toArray();
-      const piece = pieceAt(clicked);
-      if (piece !== null) {
-        const snapped = path.waypoints[piece.segment].segment_mode === "snap";
-        const at = snapped ? await onRoad(clicked) : clicked;
-        onchange(insertWaypoint(path, piece.segment, piece.index, at));
-        return;
-      }
-      if (!snap) {
-        onchange(appendWaypoint(path, clicked));
-        return;
-      }
-      const at = await onRoad(clicked);
-      onchange(appendWaypoint(path, at, "snap"));
+      const [radiusM, snapping] = [snapRadiusM(clicked), snap];
+      void onedit(() => added(clicked, radiusM, snapping));
     });
     // 線の上では、押すと経由点が足されることをカーソルで知らせる。
     // 動かすたびに線の区切りを総当たりすると、長い経路で重い。描かれた線に当たるかだけを見る。
@@ -429,8 +537,11 @@
       localStorage.setItem(VIEW_KEY, JSON.stringify({ center: created.getCenter().toArray(), zoom: created.getZoom() }));
     });
     // 頂点を足す丸は画面上の長さで出し分けるので、縮尺が変わったら置き直す。
-    created.on("zoomend", () => place(path));
+    created.on("zoomend", render);
+    const LIFTS = ["mouseup", "touchend", "touchcancel"] as const;
+    for (const type of LIFTS) window.addEventListener(type, lifted);
     return () => {
+      for (const type of LIFTS) window.removeEventListener(type, lifted);
       created.remove();
       maplibregl.removeProtocol("pmtiles");
     };
@@ -438,10 +549,9 @@
 
   $effect(() => {
     if (!ready) return;
-    // 選んでいる経由点と、編集できるかどうかで、丸の見た目が変わる。
-    void [selected, editable];
-    draw(path);
-    place(path);
+    // 経路のほか、選んでいる経由点と、編集できるかどうかでも、丸の見た目が変わる。
+    void [path, selected, editable];
+    untrack(render);
   });
 
   $effect(() => {
@@ -613,15 +723,39 @@
     element.dispatchEvent(new MouseEvent(type, init));
   }
 
-  /** `from` にいちばん近い丸を `to` までドラッグしたことにする。 */
-  export function drag(from: LonLat, to: LonLat) {
+  /**
+   * `from` にいちばん近い丸を `to` までドラッグしたことにする。`holdMs` を渡すと、つかんだまま
+   * 途中でその間だけ止まる。
+   */
+  export async function drag(from: LonLat, to: LonLat, holdMs = 0) {
     if (map === undefined || markers.length === 0) return;
     const canvas = map.getCanvasContainer();
     const middle: LonLat = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
     mouse("mousedown", from, nearest(from).getElement());
     mouse("mousemove", middle, canvas);
+    if (holdMs > 0) await new Promise((resolve) => setTimeout(resolve, holdMs));
     mouse("mousemove", to, canvas);
     mouse("mouseup", to, canvas);
+  }
+
+  /**
+   * `from` にいちばん近い丸をつかんで `to` まで動かし、地図の外で離したことにする。離す直前に
+   * 丸があった位置を返す。
+   */
+  export function dragAway(from: LonLat, to: LonLat): LonLat | null {
+    if (map === undefined || markers.length === 0) return null;
+    const marker = nearest(from);
+    mouse("mousedown", from, marker.getElement());
+    mouse("mousemove", to, map.getCanvasContainer());
+    const carried = marker.getLngLat().toArray();
+    mouse("mouseup", to, document.body);
+    return carried;
+  }
+
+  /** 経由点の丸が、いま出ている位置。 */
+  export function waypointHandles(): LonLat[] {
+    const waypoints = markers.filter((marker) => marker.getElement().classList.contains("waypoint"));
+    return waypoints.map((marker) => marker.getLngLat().toArray());
   }
 
   /** `at` にいちばん近い丸をクリックしたことにする。 */
@@ -709,14 +843,14 @@
             class:on={chosen.segment_mode === "snap"}
             disabled={!canSnap && chosen.segment_mode !== "snap"}
             title={canSnap ? "" : "判定データを選ぶと使えます"}
-            onclick={() => chosen.segment_mode !== "snap" && onchange(toggleSnap(path, index))}
+            onclick={() => chosen.segment_mode !== "snap" && toggle(index)}
           >
             道に沿わせる
           </button>
           <button
             type="button"
             class:on={chosen.segment_mode !== "snap"}
-            onclick={() => chosen.segment_mode === "snap" && onchange(toggleSnap(path, index))}
+            onclick={() => chosen.segment_mode === "snap" && toggle(index)}
           >
             直線
           </button>
@@ -729,7 +863,7 @@
         class="btn icon-only remove"
         aria-label="この点を消す"
         title="この点を消す"
-        onclick={() => onchange(removeWaypoint(path, index))}
+        onclick={() => remove(index)}
       >
         <Icon name="trash" />
       </button>

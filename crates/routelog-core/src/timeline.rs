@@ -231,6 +231,23 @@ mod tests {
     }
 
     #[test]
+    fn a_file_left_out_of_the_ride_leaves_a_recording_stop() {
+        // 続けて録画した 3 本（100〜160 秒、158〜218 秒、216〜276 秒）のうち、まん中を外した。
+        let timeline = Timeline::new(vec![file(1, 100, 60), file(3, 216, 60)], 0);
+        assert_eq!(
+            timeline.gaps(),
+            [Gap {
+                start_ms: 160_000,
+                end_ms: 216_000
+            }]
+        );
+        assert_eq!(timeline.locate(190_000), None);
+        assert_eq!(timeline.locate_or_next(190_000), position(1, 0));
+        // 外した動画の手前は、前のファイルの終わりまで再生できる。
+        assert_eq!(timeline.locate(159_000), position(0, 59));
+    }
+
+    #[test]
     fn nothing_before_the_first_file_or_after_the_last() {
         let timeline = Timeline::new(vec![file(1, 100, 60)], 0);
         assert_eq!(timeline.locate(99_999), None);
