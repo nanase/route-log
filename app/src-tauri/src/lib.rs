@@ -62,6 +62,7 @@ pub fn run() {
             rides::load_ride,
             rides::create_ride,
             rides::save_ride,
+            rides::snap_point,
             sync::get_sync_settings,
             sync::set_sync_settings,
             sync::sync_list,

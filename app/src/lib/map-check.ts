@@ -134,6 +134,19 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     });
     captures.push(await capture("snapped"));
 
+    // 道から 150 m ほど外れた所をクリックする。縮尺 13 では画面上で 10 px ほどなので、道の上へ寄る。
+    const off: LonLat = [from[0] + 0.0012, from[1] + 0.0011];
+    await app.create("2026-10-06");
+    map.click(off);
+    await sleep(1500);
+    const placed = app.path().waypoints[0];
+    note("道から外れた所をクリック", "経由点が、クリックした所ではなく道の上に置かれる", {
+      clicked: off,
+      placed: placed && [placed.lon, placed.lat],
+      movedDegrees: placed && Math.hypot(placed.lon - off[0], placed.lat - off[1]).toFixed(5),
+    });
+    await app.create("2026-10-05");
+
     map.shiftClick(from);
     await sleep(2500);
     note("Shift を押しながら経由点 1 をクリック", "区間が直線に戻り、頂点が 2 個になる", {

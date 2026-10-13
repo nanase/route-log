@@ -5,6 +5,7 @@
   import "maplibre-gl/dist/maplibre-gl.css";
   import { Protocol } from "pmtiles";
   import { onMount, untrack } from "svelte";
+  import { distanceM } from "./geo";
   import {
     appendWaypoint,
     insertVertex,
@@ -34,6 +35,7 @@
     marks = [],
     here = null,
     snap = false,
+    onsnap,
     onchange,
   }: {
     path: Path;
@@ -44,6 +46,8 @@
     marks?: { at: LonLat; label: string; hidden: boolean }[];
     /** 新しく足す区間を、道に沿わせるか */
     snap?: boolean;
+    /** 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。近くに道が無ければ null を返す */
+    onsnap?: (at: LonLat, radiusM: number) => Promise<LonLat | null>;
     /** 動画のいまの時刻にいると推定される位置 */
     here?: LonLat | null;
     onchange: (path: Path) => void;
@@ -70,6 +74,17 @@
     return { center: [137.7, 36.5], zoom: 6 };
   }
 
+  /** 道へ寄せるときに探す範囲（画面上の px）。縮尺を引いていても、近くの道に届く */
+  const SNAP_PX = 24;
+
+  /** 点を、画面上で近い道の上へ寄せる。寄せる先が無ければ、そのままにする。 */
+  async function onRoad(at: LonLat): Promise<LonLat> {
+    if (map === undefined || onsnap === undefined) return at;
+    const pixel = map.project(at);
+    const edge = map.unproject([pixel.x + SNAP_PX, pixel.y]).toArray();
+    return (await onsnap(at, distanceM(at, edge))) ?? at;
+  }
+
   const lineData = (points: LonLat[]): Feature => ({
     type: "Feature",
     properties: {},
@@ -94,10 +109,11 @@
     markers.push(marker);
     return {
       /** ドラッグの間は線だけを描き直し、離したときに確定する */
-      ondrag(moved: (to: LonLat) => Path) {
+      /** `settle` があれば、離した位置をそれで直してから確定する */
+      ondrag(moved: (to: LonLat) => Path, settle?: (to: LonLat) => Promise<LonLat>) {
         const to = (): LonLat => marker.getLngLat().toArray();
         marker.on("drag", () => draw(moved(to())));
-        marker.on("dragend", () => onchange(moved(to())));
+        marker.on("dragend", async () => onchange(moved(settle ? await settle(to()) : to())));
       },
       onshiftclick(changed: () => Path) {
         onshiftclick = () => onchange(changed());
@@ -137,7 +153,9 @@
       const kind = waypoint.segment_mode === "snap" ? "waypoint snap" : "waypoint";
       const waypointHandle = handle(kind, [waypoint.lon, waypoint.lat], String(index + 1));
       waypointHandle.onshiftclick(() => toggleSnap(current, index));
-      waypointHandle.ondrag((to) => moveWaypoint(current, index, to));
+      // 前後のどちらかが吸着の区間なら、離した位置を道の上へ寄せる。
+      const beside = snapped(index) || (index > 0 && snapped(index - 1));
+      waypointHandle.ondrag((to) => moveWaypoint(current, index, to), beside ? onRoad : undefined);
       waypointHandle.onremove(() => removeWaypoint(current, index));
     });
   }
@@ -219,8 +237,14 @@
       });
       ready = true;
     });
-    created.on("click", (event) => {
-      onchange(appendWaypoint(path, event.lngLat.toArray(), snap ? "snap" : "straight"));
+    created.on("click", async (event) => {
+      const clicked = event.lngLat.toArray();
+      if (!snap) {
+        onchange(appendWaypoint(path, clicked));
+        return;
+      }
+      const at = await onRoad(clicked);
+      onchange(appendWaypoint(path, at, "snap"));
     });
     created.on("moveend", () => {
       localStorage.setItem(VIEW_KEY, JSON.stringify({ center: created.getCenter().toArray(), zoom: created.getZoom() }));

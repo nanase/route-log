@@ -26,10 +26,29 @@ impl Extractor {
         {
             return Ok(prepared.clone());
         }
-        let wide = bbox.expand(LOAD_MARGIN_DEGREES);
+        // 読んである範囲に足して読む。クリックした点のまわりと経路の全体を、交互に読み直さない。
+        let wide = match loaded.as_ref() {
+            Some((from, prepared)) if from == dir => prepared.bbox().union(bbox),
+            _ => bbox,
+        }
+        .expand(LOAD_MARGIN_DEGREES);
         let prepared = Arc::new(Prepared::new(GeoData::load(dir, wide)?, wide));
         *loaded = Some((dir.to_owned(), prepared.clone()));
         Ok(prepared)
+    }
+
+    /// その点を、画面上で近い道の上へ寄せる。近くに道が無ければ `None`。
+    pub fn snap_point(
+        &self,
+        dir: &Path,
+        point: [f64; 2],
+        radius_m: f64,
+    ) -> Result<Option<[f64; 2]>, routelog_geo::Error> {
+        let Some(bbox) = BBox::around(&[point]) else {
+            return Ok(None);
+        };
+        let prepared = self.prepared(dir, bbox.expand(MARGIN_DEGREES))?;
+        Ok(prepared.snap_point(point, radius_m))
     }
 
     /// 吸着の区間を、道に沿った線に引き直す。

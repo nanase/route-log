@@ -1,6 +1,7 @@
-//! 経由点の間を、国道・都道府県道に沿って結ぶ。
+//! 経由点の間を、道に沿って結ぶ。
 //!
-//! 道の線を交点と端点で分けたグラフの上で、最短の道のりを探す。一方通行は見ない。
+//! 道の線を交点と端点で分けたグラフの上で、いちばん走りそうな道のりを探す。路線番号のある
+//! 道ほど選ばれやすい。一方通行は見ない。
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -22,8 +23,26 @@ impl Default for SnapOptions {
     fn default() -> Self {
         Self {
             road_m: 30.0,
-            max_ratio: 1.5,
+            max_ratio: 3.0,
         }
+    }
+}
+
+/// 道の選ばれにくさの上限。探す範囲を決めるのに使う。
+const MAX_RELUCTANCE: f64 = 1.6;
+
+/// 道の選ばれにくさ。道のりにこれを掛けたものが小さい道を選ぶ。
+///
+/// 国道・都道府県道を走ってきた人は、近道になる細い道より、そのまま番号のある道を走る
+/// ことが多い。同じ長さなら、番号のある道、格の高い道の順に選ぶ。
+fn reluctance(road: &Road) -> f64 {
+    if !road.routes.is_empty() {
+        return 1.0;
+    }
+    match road.grade.trim_end_matches("_link") {
+        "trunk" | "primary" | "secondary" => 1.1,
+        "tertiary" => 1.3,
+        _ => MAX_RELUCTANCE,
     }
 }
 
@@ -34,6 +53,7 @@ struct Edge {
     line: Vec<LonLat>,
     /// `line` の各点までの、`from` からの道のり（m）。
     along: Vec<f64>,
+    reluctance: f64,
 }
 
 impl Edge {
@@ -141,6 +161,7 @@ impl Graph {
                     to: node(line[line.len() - 1]),
                     line,
                     along,
+                    reluctance: reluctance(road),
                 });
                 start = i;
             }
@@ -166,19 +187,27 @@ impl Graph {
         Some(OnRoad { edge, m })
     }
 
-    /// `from` から `to` までの最短の道のりの線。`limit_m` を超えるなら `None`。
+    /// グラフの上の位置の、経度・緯度。
+    pub fn point(&self, on: OnRoad) -> LonLat {
+        self.edges[on.edge].point(on.m)
+    }
+
+    /// `from` から `to` までの、いちばん走りそうな道のりの線。道のりが `limit_m` を超えるなら `None`。
     pub fn path(&self, from: OnRoad, to: OnRoad, limit_m: f64) -> Option<Vec<LonLat>> {
         let (first, last) = (&self.edges[from.edge], &self.edges[to.edge]);
+        // 比べるのは、道のりに選ばれにくさを掛けたもの。探す範囲も同じ尺度で切る。
+        let bound = limit_m * MAX_RELUCTANCE;
 
         // 同じ道の上なら、その道を辿るだけの道のりが候補になる。
         let mut best: Option<(f64, Option<usize>)> =
-            (from.edge == to.edge).then_some(((from.m - to.m).abs(), None));
+            (from.edge == to.edge).then_some(((from.m - to.m).abs() * first.reluctance, None));
 
         // 始点のある道の両端から、交点を広げていく。
         let mut cost: HashMap<usize, f64> = HashMap::new();
         let mut came: HashMap<usize, (usize, usize)> = HashMap::new();
         let mut queue = BinaryHeap::new();
         for (node, m) in [(first.from, from.m), (first.to, first.length_m() - from.m)] {
+            let m = m * first.reluctance;
             if m < *cost.get(&node).unwrap_or(&f64::MAX) {
                 cost.insert(node, m);
                 queue.push(Reached { cost: m, node });
@@ -189,15 +218,16 @@ impl Graph {
             node,
         }) = queue.pop()
         {
-            if reached > limit_m {
+            if reached > bound {
                 break;
             }
             if reached > cost[&node] {
                 continue;
             }
             for (end, m) in [(last.from, to.m), (last.to, last.length_m() - to.m)] {
-                if end == node && best.is_none_or(|(b, _)| reached + m < b) {
-                    best = Some((reached + m, Some(node)));
+                let total = reached + m * last.reluctance;
+                if end == node && best.is_none_or(|(b, _)| total < b) {
+                    best = Some((total, Some(node)));
                 }
             }
             for &e in &self.adjacency[node] {
@@ -207,7 +237,7 @@ impl Graph {
                 } else {
                     edge.from
                 };
-                let total = reached + edge.length_m();
+                let total = reached + edge.length_m() * edge.reluctance;
                 if total < *cost.get(&next).unwrap_or(&f64::MAX) {
                     cost.insert(next, total);
                     came.insert(next, (node, e));
@@ -219,48 +249,46 @@ impl Graph {
             }
         }
 
-        let (total, via) = best?;
-        if total > limit_m {
-            return None;
-        }
-        let Some(mut node) = via else {
-            return Some(first.slice(from.m, to.m));
-        };
-
-        // 終点側から始点側へ、通った道を集める。
-        let end_m = if last.from == node {
-            0.0
-        } else {
-            last.length_m()
-        };
-        let mut pieces = vec![last.slice(end_m, to.m)];
-        while let Some(&(previous, e)) = came.get(&node) {
-            let edge = &self.edges[e];
-            let forward = edge.from == previous;
-            let (a, b) = if forward {
-                (0.0, edge.length_m())
-            } else {
-                (edge.length_m(), 0.0)
-            };
-            pieces.push(edge.slice(a, b));
-            node = previous;
-        }
-        let start_m = if first.from == node {
-            0.0
-        } else {
-            first.length_m()
-        };
-        pieces.push(first.slice(from.m, start_m));
-
-        let mut line: Vec<LonLat> = Vec::new();
-        for piece in pieces.into_iter().rev() {
-            for point in piece {
-                if line.last() != Some(&point) {
-                    line.push(point);
+        let (_, via) = best?;
+        let line = match via {
+            None => first.slice(from.m, to.m),
+            Some(mut node) => {
+                // 終点側から始点側へ、通った道を集める。
+                let end_m = if last.from == node {
+                    0.0
+                } else {
+                    last.length_m()
+                };
+                let mut pieces = vec![last.slice(end_m, to.m)];
+                while let Some(&(previous, e)) = came.get(&node) {
+                    let edge = &self.edges[e];
+                    let (a, b) = if edge.from == previous {
+                        (0.0, edge.length_m())
+                    } else {
+                        (edge.length_m(), 0.0)
+                    };
+                    pieces.push(edge.slice(a, b));
+                    node = previous;
                 }
+                let start_m = if first.from == node {
+                    0.0
+                } else {
+                    first.length_m()
+                };
+                pieces.push(first.slice(from.m, start_m));
+
+                let mut line: Vec<LonLat> = Vec::new();
+                for piece in pieces.into_iter().rev() {
+                    for point in piece {
+                        if line.last() != Some(&point) {
+                            line.push(point);
+                        }
+                    }
+                }
+                line
             }
-        }
-        Some(line)
+        };
+        (geo::length_m(&line) <= limit_m).then_some(line)
     }
 }
 

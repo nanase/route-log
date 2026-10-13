@@ -270,6 +270,12 @@ impl Prepared {
         graph.on_road(segment.data.0, segment.data.1, t)
     }
 
+    /// その点にいちばん近い、道の上の点。吸着に使える道が `radius_m` 以内に無ければ `None`。
+    pub fn snap_point(&self, point: LonLat, radius_m: f64) -> Option<LonLat> {
+        let graph = self.graph.get_or_init(|| Graph::new(&self.data.roads));
+        Some(graph.point(self.nearest(graph, point, radius_m)?))
+    }
+
     /// 2 点の間を、道に沿って結ぶ線。両端は道の上の点になる。
     ///
     /// どちらかの近くに道が無いときと、道のりが直線距離に比べて長すぎるときは `None`。
@@ -562,6 +568,7 @@ mod tests {
             line,
             routes,
             kind: "road".into(),
+            grade: "trunk".into(),
             motorroad: false,
             structure: Structure::None,
             structure_name: String::new(),
@@ -1027,7 +1034,7 @@ mod tests {
 
     #[test]
     fn a_detour_much_longer_than_the_straight_line_is_refused() {
-        // 東へ 1000 m、北へ 200 m、西へ 1000 m と折り返す道。
+        // 東へ 1000 m、北へ 200 m、西へ 1000 m と折り返す道。吸着を諦めるのは、直線の 3 倍から。
         let hairpin = || {
             roads(vec![
                 road(1, vec![at(0.0, 0.0), at(1000.0, 0.0)], vec![national(19)]),
@@ -1048,6 +1055,58 @@ mod tests {
         // 折り返しの近くなら、道のりは直線の 1.5 倍に収まる。
         let near = snapped(hairpin(), at(950.0, 0.0), at(1000.0, 200.0));
         assert_eq!(near.map(|l| length(&l)), Some(250.0));
+    }
+
+    #[test]
+    fn a_road_with_a_route_number_is_preferred_to_a_slightly_shorter_one() {
+        // 番号のある道は 1000 m、番号の無い道は斜めに 950 m で、同じ 2 点を結ぶ。
+        let mut shortcut = road(
+            2,
+            vec![at(0.0, 0.0), at(500.0, 150.0), at(1000.0, 0.0)],
+            vec![],
+        );
+        shortcut.grade = "tertiary".into();
+        let data = roads(vec![
+            road(
+                1,
+                vec![at(0.0, 0.0), at(500.0, -5.0), at(1000.0, 0.0)],
+                vec![national(19)],
+            ),
+            shortcut,
+            road(3, vec![at(-500.0, 0.0), at(0.0, 0.0)], vec![national(19)]),
+            road(
+                4,
+                vec![at(1000.0, 0.0), at(1500.0, 0.0)],
+                vec![national(19)],
+            ),
+        ]);
+        let line = snapped(data, at(-400.0, 0.0), at(1400.0, 0.0)).unwrap();
+        assert!(line.contains(&at(500.0, -5.0)), "番号のある道を通る");
+    }
+
+    #[test]
+    fn a_much_shorter_road_without_a_number_is_still_taken() {
+        // 番号のある道は大回りで 3000 m、番号の無い道はまっすぐ 1000 m。
+        let mut direct = road(2, vec![at(0.0, 0.0), at(1000.0, 0.0)], vec![]);
+        direct.grade = "tertiary".into();
+        let data = roads(vec![
+            road(
+                1,
+                vec![at(0.0, 0.0), at(500.0, 1400.0), at(1000.0, 0.0)],
+                vec![national(19)],
+            ),
+            direct,
+        ]);
+        let line = snapped(data, at(0.0, 0.0), at(1000.0, 0.0)).unwrap();
+        assert_eq!(length(&line), 1000.0);
+    }
+
+    #[test]
+    fn a_point_is_pulled_onto_the_nearest_road() {
+        let prepared = prepared(roads(corner()));
+        let on = prepared.snap_point(at(300.0, 80.0), 100.0).unwrap();
+        assert!((on[0] - at(300.0, 0.0)[0]).abs() < 1e-9 && (on[1] - ORIGIN[1]).abs() < 1e-9);
+        assert_eq!(prepared.snap_point(at(300.0, 80.0), 50.0), None);
     }
 
     #[test]

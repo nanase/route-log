@@ -47,6 +47,14 @@ impl BBox {
         }
     }
 
+    /// 2 つの矩形をどちらも囲む矩形。
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            min: [self.min[0].min(other.min[0]), self.min[1].min(other.min[1])],
+            max: [self.max[0].max(other.max[0]), self.max[1].max(other.max[1])],
+        }
+    }
+
     pub fn contains(&self, other: &Self) -> bool {
         self.min[0] <= other.min[0]
             && self.min[1] <= other.min[1]
@@ -73,6 +81,8 @@ pub struct Road {
     pub routes: Vec<RouteRef>,
     /// 国道マップの区分。一般の道は `road`。
     pub kind: String,
+    /// OSM での道の格。`trunk`・`primary`・`secondary`・`tertiary` など。
+    pub grade: String,
     pub motorroad: bool,
     pub structure: Structure,
     pub structure_name: String,
@@ -166,6 +176,8 @@ impl GeoData {
                     .chain(routes(RouteClass::Prefectural, &prefectural))
                     .collect(),
                 kind: feature.property("kind")?,
+                // 古い書き出しには、この列が無い。
+                grade: feature.property("grade").unwrap_or_default(),
                 motorroad: feature.property::<i32>("motorroad")? != 0,
                 structure: match structure.as_str() {
                     "bridge" => Structure::Bridge,

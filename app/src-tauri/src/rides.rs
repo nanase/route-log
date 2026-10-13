@@ -53,6 +53,26 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
     Ok(doc)
 }
 
+/// クリックした点を、近い道の上へ寄せる。判定用データを開いていないか、`radius_m` 以内に
+/// 道が無ければ `None`。
+#[tauri::command]
+pub async fn snap_point(
+    app: tauri::AppHandle,
+    point: [f64; 2],
+    radius_m: f64,
+) -> Result<Option<[f64; 2]>, String> {
+    let Some(dir) = app.state::<ConfigFile>().get().geo_data_dir else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Extractor>()
+            .snap_point(Path::new(&dir), point, radius_m)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 pub struct Saved {
     updated_at: String,

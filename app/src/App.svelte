@@ -546,6 +546,7 @@
         {marks}
         {here}
         snap={snapNew && geoReady}
+        onsnap={(at, radiusM) => invoke<[number, number] | null>("snap_point", { point: at, radiusM })}
         onchange={(path) => edit((current) => ({ ...current, ...path }))}
       />
     </div>

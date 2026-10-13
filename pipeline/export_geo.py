@@ -7,7 +7,8 @@
 国道マップ（nanase/kokudo-map）の生成物と、その元になった pbf・N03 を読むだけで、
 あちらには何も書かない。書き出す物は三つある。
 
-  roads.fgb         国道・都道府県道の way。路線番号、橋・トンネル、自動車専用の印
+  roads.fgb         国道・都道府県道と、それ以外の主要な道の way。路線番号、道の格、
+                    橋・トンネル、自動車専用の印
   michi-no-eki.fgb  道の駅の位置と名前
   admin.fgb         市区町村（政令市は区）の面。簡略化済み
 
@@ -39,6 +40,15 @@ SIMPLIFY_DEGREES = 0.0001
 MIN_AREA_DEGREES2 = 1e-6
 # 同じ道の駅とみなす距離（度）。約 300 m。駐車場と建物が別々に名前を持つ。
 SAME_STATION_DEGREES = 0.003
+
+# 国道・都道府県道でなくても、吸着の相手にする道の格。2 車線の市町村道は、ほぼ tertiary である。
+# unclassified まで足すと way が 234 万本増え、道路データが数倍になるので足していない。
+EXTRA_GRADES = {
+    "trunk", "primary", "secondary", "tertiary",
+    "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+}
+# 車で入れない道。
+NO_ENTRY = {"no", "private"}
 
 # 橋・トンネルの名前らしい `name`。`name` の多くは道路名なので、形で見分ける。
 STRUCTURE_NAME = re.compile(r"(橋|トンネル|隧道|洞門|覆道|シェッド|シェルター)$")
@@ -99,12 +109,28 @@ def export_roads(kokudo: Path, out: Path, started: float) -> None:
     ways = read_kokudo_ways(kokudo)
     log(started, f"国道マップの way {len(ways):,} 本")
 
+    # pbf を 1 回読む。国道マップの way にはタグを足し、それ以外の主要な道は線形ごと集める。
     tags: dict[int, dict[str, str]] = {}
-    reader = osmium.FileProcessor(str(kokudo / "build" / "pbf" / "japan-latest.osm.pbf"), osmium.osm.WAY)
-    for way in reader.with_filter(osmium.filter.KeyFilter("highway")):
+    extra = 0
+    reader = osmium.FileProcessor(str(kokudo / "build" / "pbf" / "japan-latest.osm.pbf"))
+    for way in reader.with_locations().with_filter(osmium.filter.KeyFilter("highway")):
+        if not way.is_way():
+            continue
         if way.id in ways:
             tags[way.id] = {t.k: t.v for t in way.tags}
-    log(started, f"pbf でタグを引けた way {len(tags):,} 本")
+            continue
+        t = way.tags
+        if t["highway"] not in EXTRA_GRADES or t.get("area") == "yes":
+            continue
+        if t.get("access") in NO_ENTRY or t.get("motor_vehicle") in NO_ENTRY:
+            continue
+        coords = [[n.lon, n.lat] for n in way.nodes if n.location.valid()]
+        if len(coords) < 2:
+            continue
+        ways[way.id] = {"coords": coords, "national": set(), "prefectural": set(), "kind": "road", "former": 0}
+        tags[way.id] = {t.k: t.v for t in way.tags}
+        extra += 1
+    log(started, f"pbf でタグを引けた way {len(tags) - extra:,} 本、足した主要な道 {extra:,} 本")
 
     ids = sorted(ways)
     structure, structure_name = [], []
@@ -136,6 +162,7 @@ def export_roads(kokudo: Path, out: Path, started: float) -> None:
         "national": np.array([numeric(ways[w]["national"]) for w in ids], dtype=object),
         "prefectural": np.array([numeric(ways[w]["prefectural"]) for w in ids], dtype=object),
         "kind": np.array([ways[w]["kind"] for w in ids], dtype=object),
+        "grade": np.array([tags.get(w, {}).get("highway", "") for w in ids], dtype=object),
         "former": np.array([ways[w]["former"] for w in ids], dtype=np.int32),
         "motorroad": np.array([int(tags.get(w, {}).get("motorroad") == "yes") for w in ids], dtype=np.int32),
         "structure": np.array(structure, dtype=object),
