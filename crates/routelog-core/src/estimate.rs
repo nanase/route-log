@@ -1,6 +1,7 @@
 //! 通過時刻の推定。
 //!
-//! 時刻を確定したイベントを基準にして、その間を距離で線形に補間する。
+//! 時刻を確定したイベントを基準にして、その間を距離で線形に補間する。停車していた間は、
+//! 時刻が進んでも位置が変わらないものとして、補間から除く。
 
 use crate::event::{Event, EventDetail, EventKind, EventStatus};
 use crate::geo;
@@ -40,8 +41,65 @@ pub fn knots(events: &[Event]) -> Vec<Knot> {
     knots
 }
 
+/// 停車していた時間。その間は、時刻が進んでも位置が変わらない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stop {
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+/// 停車のイベントを、始まりの順に並べる。重なるものは 1 つにまとめる。
+pub fn stops(events: &[Event]) -> Vec<Stop> {
+    let mut found: Vec<Stop> = events
+        .iter()
+        .filter(|event| event.kind == EventKind::Stop)
+        .filter_map(|event| {
+            let start_ms = event.time_ms?;
+            let stay_ms = event.detail.stay_ms.filter(|stay| *stay > 0)?;
+            Some(Stop {
+                start_ms,
+                end_ms: start_ms + stay_ms,
+            })
+        })
+        .collect();
+    found.sort_by_key(|stop| stop.start_ms);
+    let mut merged: Vec<Stop> = Vec::new();
+    for stop in found {
+        match merged.last_mut() {
+            Some(last) if stop.start_ms <= last.end_ms => {
+                last.end_ms = last.end_ms.max(stop.end_ms)
+            }
+            _ => merged.push(stop),
+        }
+    }
+    merged
+}
+
+/// その時刻までに、走っていた時間。時刻から、それまでの停車の長さを引いたもの。
+fn moving_ms(stops: &[Stop], time_ms: i64) -> i64 {
+    let stopped: i64 = stops
+        .iter()
+        .map(|stop| (time_ms.min(stop.end_ms) - stop.start_ms).max(0))
+        .sum();
+    time_ms - stopped
+}
+
+/// 走っていた時間が `moving` になる時刻。停車の始まりにちょうど当たるなら、始まりの時刻にする。
+fn clock_ms(stops: &[Stop], moving: i64) -> i64 {
+    let mut stopped = 0;
+    for stop in stops {
+        if moving <= stop.start_ms - stopped {
+            break;
+        }
+        stopped += stop.end_ms - stop.start_ms;
+    }
+    moving + stopped
+}
+
 /// その位置を通る時刻。最初の基準より前と、最後の基準より後は推定しない。
-pub fn time_at(knots: &[Knot], route_m: f64) -> Option<i64> {
+///
+/// 基準の間は、走っていた時間に比例して進んだものとする。`stops` は `stops` が返した並びを渡す。
+pub fn time_at(knots: &[Knot], stops: &[Stop], route_m: f64) -> Option<i64> {
     if let Some(exact) = knots.iter().find(|k| k.route_m == route_m) {
         return Some(exact.time_ms);
     }
@@ -49,13 +107,24 @@ pub fn time_at(knots: &[Knot], route_m: f64) -> Option<i64> {
         .windows(2)
         .find(|pair| pair[0].route_m < route_m && route_m < pair[1].route_m)?;
     let t = (route_m - pair[0].route_m) / (pair[1].route_m - pair[0].route_m);
-    Some(pair[0].time_ms + ((pair[1].time_ms - pair[0].time_ms) as f64 * t).round() as i64)
+    let (from, to) = (
+        moving_ms(stops, pair[0].time_ms),
+        moving_ms(stops, pair[1].time_ms),
+    );
+    // 2 つの基準が同じ停車の中にあると、走っていた時間が無い。手前の基準の時刻にしておく。
+    if from == to {
+        return Some(pair[0].time_ms);
+    }
+    Some(clock_ms(
+        stops,
+        from + ((to - from) as f64 * t).round() as i64,
+    ))
 }
 
 /// その時刻にいる位置。最初の基準より前と、最後の基準より後は分からない。
 ///
-/// 同じ位置に基準が 2 つあれば、その間は止まっていたものとして同じ位置を返す。
-pub fn position_at(knots: &[Knot], time_ms: i64) -> Option<f64> {
+/// 停車の間と、同じ位置にある 2 つの基準の間は、同じ位置を返す。
+pub fn position_at(knots: &[Knot], stops: &[Stop], time_ms: i64) -> Option<f64> {
     let mut by_time = knots.to_vec();
     by_time.sort_by_key(|k| k.time_ms);
     if let Some(exact) = by_time.iter().find(|k| k.time_ms == time_ms) {
@@ -64,7 +133,14 @@ pub fn position_at(knots: &[Knot], time_ms: i64) -> Option<f64> {
     let pair = by_time
         .windows(2)
         .find(|pair| pair[0].time_ms < time_ms && time_ms < pair[1].time_ms)?;
-    let t = (time_ms - pair[0].time_ms) as f64 / (pair[1].time_ms - pair[0].time_ms) as f64;
+    let (from, to) = (
+        moving_ms(stops, pair[0].time_ms),
+        moving_ms(stops, pair[1].time_ms),
+    );
+    if from == to {
+        return Some(pair[0].route_m);
+    }
+    let t = (moving_ms(stops, time_ms) - from) as f64 / (to - from) as f64;
     Some(pair[0].route_m + (pair[1].route_m - pair[0].route_m) * t)
 }
 
@@ -145,8 +221,8 @@ fn place_waypoints(events: &mut Vec<Event>, waypoints: &[Waypoint], distances: &
 ///
 /// 1. 経路の両端に出発と到着を置く。経由点のイベントを、いまの経由点の位置に置く
 /// 2. 動画で確定した時刻を、カメラの時刻と時計の補正値から求め直す
-/// 3. 時刻だけが分かっているイベントの位置を、時刻から求める
-/// 4. 確定していないイベントの時刻を推定する
+/// 3. 時刻だけが分かっているイベントの位置を、時刻から求める。停車のイベントも、ここで置く
+/// 4. 確定していないイベントの時刻を推定する。停車していた間は、進んでいないものとする
 ///
 /// 位置が先なのに時刻が後になっている、確定済みのイベントの ID を返す。
 pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
@@ -164,13 +240,14 @@ pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
     }
 
     let knots = knots(events);
+    let stops = stops(events);
     for event in events.iter_mut() {
         if event.detail.by_time {
-            if let Some(route_m) = event.time_ms.and_then(|t| position_at(&knots, t)) {
+            if let Some(route_m) = event.time_ms.and_then(|t| position_at(&knots, &stops, t)) {
                 event.route_m = route_m;
             }
         } else if event.status != EventStatus::Confirmed {
-            event.time_ms = time_at(&knots, event.route_m);
+            event.time_ms = time_at(&knots, &stops, event.route_m);
         }
     }
     // 同じ位置なら、出発を先頭に、到着を最後にする。
@@ -226,28 +303,28 @@ mod tests {
     #[test]
     fn time_is_interpolated_by_distance() {
         let knots = [knot(0.0, 0), knot(1000.0, 100), knot(3000.0, 500)];
-        assert_eq!(time_at(&knots, 500.0), Some(50_000));
-        assert_eq!(time_at(&knots, 2000.0), Some(300_000));
-        assert_eq!(time_at(&knots, 1000.0), Some(100_000));
+        assert_eq!(time_at(&knots, &[], 500.0), Some(50_000));
+        assert_eq!(time_at(&knots, &[], 2000.0), Some(300_000));
+        assert_eq!(time_at(&knots, &[], 1000.0), Some(100_000));
     }
 
     #[test]
     fn nothing_is_estimated_outside_the_knots() {
         let knots = [knot(1000.0, 100), knot(3000.0, 500)];
-        assert_eq!(time_at(&knots, 999.0), None);
-        assert_eq!(time_at(&knots, 3001.0), None);
-        assert_eq!(time_at(&[knot(1000.0, 100)], 1000.0), Some(100_000));
-        assert_eq!(time_at(&[knot(1000.0, 100)], 1001.0), None);
-        assert_eq!(time_at(&[], 0.0), None);
+        assert_eq!(time_at(&knots, &[], 999.0), None);
+        assert_eq!(time_at(&knots, &[], 3001.0), None);
+        assert_eq!(time_at(&[knot(1000.0, 100)], &[], 1000.0), Some(100_000));
+        assert_eq!(time_at(&[knot(1000.0, 100)], &[], 1001.0), None);
+        assert_eq!(time_at(&[], &[], 0.0), None);
     }
 
     #[test]
     fn position_is_the_inverse_of_time() {
         let knots = [knot(0.0, 0), knot(1000.0, 100), knot(3000.0, 500)];
-        assert_eq!(position_at(&knots, 50_000), Some(500.0));
-        assert_eq!(position_at(&knots, 300_000), Some(2000.0));
-        assert_eq!(position_at(&knots, -1), None);
-        assert_eq!(position_at(&knots, 500_001), None);
+        assert_eq!(position_at(&knots, &[], 50_000), Some(500.0));
+        assert_eq!(position_at(&knots, &[], 300_000), Some(2000.0));
+        assert_eq!(position_at(&knots, &[], -1), None);
+        assert_eq!(position_at(&knots, &[], 500_001), None);
     }
 
     #[test]
@@ -259,9 +336,9 @@ mod tests {
             knot(1000.0, 400),
             knot(2000.0, 500),
         ];
-        assert_eq!(position_at(&knots, 250_000), Some(1000.0));
-        assert_eq!(position_at(&knots, 450_000), Some(1500.0));
-        assert_eq!(time_at(&knots, 1500.0), Some(450_000));
+        assert_eq!(position_at(&knots, &[], 250_000), Some(1000.0));
+        assert_eq!(position_at(&knots, &[], 450_000), Some(1500.0));
+        assert_eq!(time_at(&knots, &[], 1500.0), Some(450_000));
     }
 
     fn event(id: &str, kind: EventKind, route_m: f64, time_s: Option<i64>) -> Event {
@@ -501,6 +578,95 @@ mod tests {
         assert_eq!(memo.route_m.round(), 1000.0);
         // 手動のイベントを基準にしていれば、x は 100 秒と 400 秒の間で補間されて 300 秒より後になる。
         assert_eq!(times(&doc)[2], ("x", Some(300)));
+    }
+
+    fn stop(id: &str, start_s: i64, stay_s: i64) -> Event {
+        let mut event = event(id, EventKind::Stop, 0.0, Some(start_s));
+        event.hidden = true;
+        event.detail.by_time = true;
+        event.detail.stay_ms = Some(stay_s * 1000);
+        event
+    }
+
+    #[test]
+    fn time_does_not_move_the_position_during_a_stop() {
+        // 0 秒に 0 m、1000 秒に 4000 m。その間の 200 秒から 800 秒まで停車していた。
+        // 走っていたのは 400 秒なので、1 秒に 10 m 進む。
+        let knots = [knot(0.0, 0), knot(4000.0, 1000)];
+        let stops = [Stop {
+            start_ms: 200_000,
+            end_ms: 800_000,
+        }];
+        assert_eq!(position_at(&knots, &stops, 100_000), Some(1000.0));
+        assert_eq!(position_at(&knots, &stops, 200_000), Some(2000.0));
+        assert_eq!(position_at(&knots, &stops, 500_000), Some(2000.0));
+        assert_eq!(position_at(&knots, &stops, 800_000), Some(2000.0));
+        assert_eq!(position_at(&knots, &stops, 900_000), Some(3000.0));
+
+        assert_eq!(time_at(&knots, &stops, 1000.0), Some(100_000));
+        // 停車した場所そのものは、着いた時刻にする。
+        assert_eq!(time_at(&knots, &stops, 2000.0), Some(200_000));
+        assert_eq!(time_at(&knots, &stops, 3000.0), Some(900_000));
+    }
+
+    #[test]
+    fn stops_that_overlap_count_once() {
+        let events = [stop("a", 100, 200), stop("b", 250, 150), stop("c", 900, 0)];
+        assert_eq!(
+            stops(&events),
+            [Stop {
+                start_ms: 100_000,
+                end_ms: 400_000
+            }]
+        );
+    }
+
+    #[test]
+    fn a_stop_event_shifts_the_estimates_and_is_placed_where_it_happened() {
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(0)),
+                event("x", EventKind::Tunnel, 1000.0, None),
+                event("y", EventKind::Bridge, 3000.0, None),
+                event("a", EventKind::Arrival, 4000.0, Some(1000)),
+                stop("s", 200, 600),
+            ],
+        );
+        refresh(&mut doc);
+        let found: Vec<_> = doc
+            .events
+            .iter()
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.route_m.round(),
+                    e.time_ms.map(|t| t / 1000),
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("d", 0.0, Some(0)),
+                ("x", 1000.0, Some(100)),
+                ("s", 2000.0, Some(200)),
+                ("y", 3000.0, Some(900)),
+                ("a", 4000.0, Some(1000))
+            ]
+        );
+    }
+
+    #[test]
+    fn two_knots_inside_one_stop_do_not_break_the_estimate() {
+        let knots = [knot(0.0, 300), knot(1000.0, 400)];
+        let stops = [Stop {
+            start_ms: 200_000,
+            end_ms: 800_000,
+        }];
+        assert_eq!(time_at(&knots, &stops, 500.0), Some(300_000));
+        assert_eq!(position_at(&knots, &stops, 350_000), Some(0.0));
     }
 
     #[test]

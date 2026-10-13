@@ -12,6 +12,9 @@
    * 上の細い帯は全体で、太い帯はその一部を広げたものである。細い帯の枠が、広げている範囲を示す。
    *
    * 動画の帯を右クリックすると、その動画を走行から外せる。外した動画は薄く残り、押すと戻せる。
+   *
+   * 録画の止まっていた間を右クリックすると、その間を停車にできる。停車にした間は、進んでいない
+   * ものとして時刻が推定される。
    */
   let {
     timeline,
@@ -23,6 +26,8 @@
     onseek,
     onselect,
     onexclude,
+    onstop,
+    onunstop,
   }: {
     /** 開いている走行に使う動画。無ければ null */
     timeline: Timeline | null;
@@ -39,6 +44,10 @@
     onselect: (event: RideEvent) => void;
     /** 動画を走行から外す。`excluded` が偽なら、外した動画を戻す */
     onexclude: (name: string, excluded: boolean) => void;
+    /** その間を停車にする */
+    onstop: (startMs: number, endMs: number) => void;
+    /** 停車をやめる。停車のイベントを消す */
+    onunstop: (id: string) => void;
   } = $props();
 
   const JST_MS = 9 * 3_600_000;
@@ -62,6 +71,9 @@
   /** 右クリックで開いた、動画 1 本の操作の板。開いていなければ null */
   let menu = $state<{ clip: ExcludedClip; label: string; out: boolean; left: number; bottom: number } | null>(null);
   let menuElement = $state<HTMLDivElement>();
+  /** 右クリックで開いた、録画停止 1 つの操作の板。`stay` は、その間に重なる停車のイベント */
+  let gapMenu = $state<{ gap: Gap; stay: RideEvent | null; left: number; bottom: number } | null>(null);
+  let gapMenuElement = $state<HTMLDivElement>();
 
   const spans = $derived(timeline?.spans ?? []);
   const gaps = $derived(timeline?.gaps ?? []);
@@ -119,6 +131,16 @@
     return rest;
   });
 
+  /** その録画停止に重なる、停車のイベント。無ければ null。 */
+  function stayOver(gap: Gap): RideEvent | null {
+    const overlaps = (event: RideEvent) =>
+      event.kind === "stop" &&
+      event.time_ms !== null &&
+      event.time_ms < gap.end_ms &&
+      event.time_ms + (event.detail.stay_ms ?? 0) > gap.start_ms;
+    return events.find(overlaps) ?? null;
+  }
+
   // 走行や時計の補正が変わって軸が動いたら、全体に戻す。
   $effect(() => {
     void [startMs, endMs];
@@ -137,6 +159,7 @@
   $effect(() => {
     void [timeline, excluded];
     menu = null;
+    gapMenu = null;
   });
 
   /** `start` から `length` の範囲を広げて出す。全体からはみ出さないようにする。 */
@@ -194,18 +217,43 @@
     menu = null;
   }
 
+  /** 録画停止 1 つの操作の板を、その帯のすぐ上に出す。 */
+  function openGapMenu(event: MouseEvent, gap: Gap) {
+    event.preventDefault();
+    const band = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = null;
+    gapMenu = {
+      gap,
+      stay: stayOver(gap),
+      left: Math.max(Math.min(event.clientX - 24, window.innerWidth - MENU_PX - 12), 12),
+      bottom: window.innerHeight - band.top + 6,
+    };
+  }
+
+  function chooseGapMenu() {
+    if (gapMenu === null) return;
+    if (gapMenu.stay === null) onstop(gapMenu.gap.start_ms, gapMenu.gap.end_ms);
+    else onunstop(gapMenu.stay.id);
+    gapMenu = null;
+  }
+
   /** 板の外を押すか、Esc を押したら、板を閉じる。 */
   function onpointerdown(event: PointerEvent) {
-    if (menu !== null && !(event.target instanceof Node && menuElement?.contains(event.target))) menu = null;
+    const inside = (element: HTMLElement | undefined) => event.target instanceof Node && element?.contains(event.target);
+    if (menu !== null && !inside(menuElement)) menu = null;
+    if (gapMenu !== null && !inside(gapMenuElement)) gapMenu = null;
   }
 
   function onkeydown(event: KeyboardEvent) {
-    if (event.key === "Escape") menu = null;
+    if (event.key !== "Escape") return;
+    menu = null;
+    gapMenu = null;
   }
 
   function onwheel(event: WheelEvent) {
     if (!shown) return;
     menu = null;
+    gapMenu = null;
     event.preventDefault();
     const at = from + ((event.clientX - box.getBoundingClientRect().left) / Math.max(width, 1)) * span;
     zoom(event.deltaY < 0 ? 0.5 : 2, at);
@@ -216,8 +264,9 @@
     view: view === null ? "全体" : `${clock(view.start)}-${clock(view.end)}`,
     clips: spans.length,
     excluded: excluded.map((clip) => `${clock(clip.start_ms)}-${clock(clip.end_ms)}`),
-    stops: stops.map((gap) => `${clock(gap.start_ms)}-${clock(gap.end_ms)}`),
+    stops: stops.map((gap) => `${clock(gap.start_ms)}-${clock(gap.end_ms)}${stayOver(gap) === null ? "" : " 停車"}`),
     menu: menu === null ? null : `${menu.label} ${menu.out ? "走行に戻す" : "走行から外す"}`,
+    gapMenu: gapMenu === null ? null : gapMenu.stay === null ? "停車にする" : "停車をやめる",
     marks: marks.map((mark) => `${clock(mark.time)} ${mark.event.kind}${mark.warned ? " 警告" : ""}`),
     head: clock(nowMs),
   });
@@ -235,9 +284,19 @@
     return true;
   }
 
+  /** 自動の確認が使う口。`index` 番目の録画停止を右クリックしたことにする。出ていなければ false。 */
+  export function rightClickGap(index: number): boolean {
+    const band = box.querySelectorAll<HTMLElement>(".stop")[index];
+    if (band === undefined) return false;
+    const at = band.getBoundingClientRect();
+    const [clientX, clientY] = [at.left + at.width / 2, at.top + at.height / 2];
+    band.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY, button: 2 }));
+    return true;
+  }
+
   /** 開いている板のボタンを押したことにする。 */
   export function pressMenu() {
-    menuElement?.querySelector("button")?.click();
+    (menuElement ?? gapMenuElement)?.querySelector("button")?.click();
   }
 </script>
 
@@ -360,12 +419,21 @@
             </button>
           {/if}
         {/each}
+        <!-- 録画の止まっていた間。右クリックで、停車にするかどうかを切り替える。 -->
         {#each stops as gap (gap.start_ms)}
           {@const left = Math.max(x(gap.start_ms), 0)}
           {@const right = Math.min(x(gap.end_ms), width)}
-          {#if right - left >= GAP_LABEL_PX}
-            <div class="stop" style:left="{left}px" style:width="{right - left}px">
-              停止 {short(gap.end_ms - gap.start_ms)}
+          {@const stay = stayOver(gap) !== null}
+          {#if right > left}
+            <div
+              class="stop"
+              class:stay
+              style:left="{left}px"
+              style:width="{right - left}px"
+              title="{stay ? '停車' : '録画停止'}　{clock(gap.start_ms)} – {clock(gap.end_ms)}　右クリックで{stay ? '停車をやめる' : '停車にする'}"
+              oncontextmenu={(event) => openGapMenu(event, gap)}
+            >
+              {#if right - left >= GAP_LABEL_PX}{stay ? "停車" : "停止"} {short(gap.end_ms - gap.start_ms)}{/if}
             </div>
           {/if}
         {/each}
@@ -400,6 +468,30 @@
     </div>
   </div>
 
+  {#if gapMenu !== null}
+    <div
+      class="menu"
+      bind:this={gapMenuElement}
+      style:left="{gapMenu.left}px"
+      style:bottom="{gapMenu.bottom}px"
+      style:width="{MENU_PX}px"
+    >
+      <div class="about">
+        <b>{gapMenu.stay === null ? "録画停止" : "停車"}</b>
+        <span class="mono">{clock(gapMenu.gap.start_ms)} – {clock(gapMenu.gap.end_ms)}</span>
+      </div>
+      <div class="act">
+        <span class="fine">
+          {gapMenu.stay === null
+            ? "同じ場所で止まっていたなら、停車にします。この間は進んでいないものとして、時刻を推定します。"
+            : "やめると、この間も走っていたものとして、時刻を推定します。"}
+        </span>
+        <button type="button" class="btn" onclick={chooseGapMenu}>
+          {gapMenu.stay === null ? "停車にする" : "停車をやめる"}
+        </button>
+      </div>
+    </div>
+  {/if}
   {#if menu !== null}
     <div
       class="menu"
@@ -601,7 +693,14 @@
     line-height: 22px;
     text-align: center;
     white-space: nowrap;
-    pointer-events: none;
+  }
+  /* 停車にした間は、斜線の地を塗りつぶして見分ける。 */
+  .stop.stay {
+    border-radius: 3px;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--ink-4);
+    color: var(--ink);
+    font-weight: 700;
   }
 
   /* イベントの時刻を指す線。確定は実線、推定は破線にする。 */

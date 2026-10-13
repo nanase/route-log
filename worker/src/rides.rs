@@ -1,7 +1,8 @@
 //! 走行の保存と読み出し。走行・経由点・イベントは D1 に、経路の線は R2 に置く。
 
-use routelog_core::{Event, Ride, RideDocument, Route, Waypoint};
+use routelog_core::{Ride, RideDocument, Route, Waypoint};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use worker::wasm_bindgen::JsValue;
 use worker::{D1Database, Env, Request, Response};
 
@@ -15,6 +16,31 @@ fn database(env: &Env) -> Result<D1Database, Failure> {
 
 fn route_key(id: &str) -> String {
     format!("rides/{id}/route.json")
+}
+
+/// 送り受けする走行。イベントは中身を見ずに、送られてきた形のまま持つ。
+///
+/// イベントの種類と項目は、アプリの側で増える。ここで形を決めると、Worker を入れ替えるまで、
+/// 新しいアプリの走行を読めずに 400 で拒むことになる。列に出す値は、SQL が JSON から取り出す。
+#[derive(Serialize, Deserialize)]
+struct Document {
+    ride: Ride,
+    #[serde(default)]
+    waypoints: Vec<Waypoint>,
+    #[serde(default)]
+    route: Route,
+    #[serde(default)]
+    events: Vec<Value>,
+}
+
+/// イベントが、列に出す値を持っているか。無いと、D1 に入れるときに失敗する。
+fn storable(event: &Value) -> bool {
+    let text = |key: &str| event.get(key).and_then(Value::as_str);
+    text("id").is_some_and(|id| !id.is_empty())
+        && text("kind").is_some()
+        && text("label").is_some()
+        && text("status").is_some()
+        && event.get("route_m").is_some_and(Value::is_number)
 }
 
 /// 一覧に出す、走行の要約。
@@ -84,7 +110,7 @@ pub async fn get(env: &Env, id: &str) -> Reply {
         .all()
         .await?
         .results::<EventRow>()?;
-    let events: Vec<Event> = rows
+    let events: Vec<Value> = rows
         .iter()
         .filter_map(|row| serde_json::from_str(&row.json).ok())
         .collect();
@@ -95,7 +121,7 @@ pub async fn get(env: &Env, id: &str) -> Reply {
         },
         None => Route::default(),
     };
-    Ok(Response::from_json(&RideDocument {
+    Ok(Response::from_json(&Document {
         ride: Ride {
             id: ride.id,
             title: ride.title,
@@ -120,13 +146,28 @@ pub async fn get(env: &Env, id: &str) -> Reply {
 /// 全部を消して入れ直すと、D1 の書き込みの行数が、編集の回数にイベントの数を掛けただけ増える。
 /// 書いた行数は、確かめられるよう応答に入れて返す。
 pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
-    let doc: RideDocument = req
+    // 読めない理由を返す。アプリと Worker の版が食い違ったときに、何が合わないのかが分かる。
+    let body: Document = req
         .json()
         .await
-        .map_err(|_| Failure::new(400, "走行のデータを読めません"))?;
-    if doc.ride.id != id {
+        .map_err(|e| Failure::new(400, format!("走行のデータを読めません: {e}")))?;
+    if body.ride.id != id {
         return Err(Failure::new(400, "パスの ID と走行の ID が違います"));
     }
+    if !body.events.iter().all(storable) {
+        return Err(Failure::new(
+            400,
+            "イベントに、ID・種類・名前・位置・状態のどれかがありません",
+        ));
+    }
+    let events = body.events;
+    // 経路の形は、イベントを除いて確かめる。
+    let doc = RideDocument {
+        ride: body.ride,
+        waypoints: body.waypoints,
+        route: body.route,
+        events: Vec::new(),
+    };
     doc.validate()
         .map_err(|reason| Failure::new(400, reason.to_string()))?;
 
@@ -190,7 +231,7 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
             "DELETE FROM events WHERE ride_id = ?1 \
              AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?2))",
         )
-        .bind(&[id.into(), json(&doc.events)?])?,
+        .bind(&[id.into(), json(&events)?])?,
         // ほかの走行が同じ ID のイベントを持っていても、それは書き換えない。
         db.prepare(
             "INSERT INTO events (id, ride_id, seq, kind, label, route_m, time_ms, status, json) \
@@ -204,7 +245,7 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
              WHERE events.ride_id = excluded.ride_id \
              AND (events.seq IS NOT excluded.seq OR events.json IS NOT excluded.json)",
         )
-        .bind(&[id.into(), json(&doc.events)?])?,
+        .bind(&[id.into(), json(&events)?])?,
     ];
     let mut rows_written = 0;
     for result in db.batch(statements).await? {

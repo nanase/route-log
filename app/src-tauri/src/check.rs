@@ -13,6 +13,8 @@
 //! - `ROUTELOG_CHECK_SYNC`: クラウドとの同期を確かめる。値は API の URL で、手元で動かした Worker を指す
 //! - `ROUTELOG_CHECK_STEP`: 同期の確認の、どの段を行うか。同期は 2 つの端末の間で確かめるので、データの
 //!   置き場所を変えながら何度か起動する。段の名前と順番は、画面側の `sync-check.ts` にある
+//!   - 地図の確認に `close` を足すと、編集した直後に窓を閉じる。保存を待っていた編集が書かれたかは、
+//!     データの置き場所の走行のファイルを見て確かめる。報告は書かない
 //! - `ROUTELOG_CHECK_REPORT`: 報告（JSON）の書き先。画面の写しは同じ場所に PNG で書く
 
 use std::path::PathBuf;
@@ -73,6 +75,13 @@ pub fn finish_check(app: tauri::AppHandle, report: String) -> Result<(), String>
     std::fs::write(&path, report).map_err(|e| format!("{}: {e}", path.display()))?;
     app.exit(0);
     Ok(())
+}
+
+/// 人が窓を閉じたのと同じに、窓を閉じるよう頼む。画面側は、閉じる前にすることを済ませられる。
+#[tauri::command]
+pub fn close_check(window: tauri::WebviewWindow) -> Result<(), String> {
+    report_path()?;
+    window.close().map_err(|e| e.to_string())
 }
 
 /// 確認のために書くファイルの場所。報告と同じ場所で、名前に `name` を足す。

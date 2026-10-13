@@ -62,8 +62,16 @@ if (process.argv.includes("--token")) {
 }
 
 let failed = 0;
+/** キーの順をそろえる。Worker は、イベントのキーを並べ替えて返すことがある。 */
+const sorted = (value) =>
+  Array.isArray(value)
+    ? value.map(sorted)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])]))
+      : value;
+
 function check(name, actual, expected) {
-  const same = JSON.stringify(actual) === JSON.stringify(expected);
+  const same = JSON.stringify(sorted(actual)) === JSON.stringify(sorted(expected));
   if (!same) failed += 1;
   console.log(`${same ? "ok  " : "NG  "} ${name}${same ? "" : `\n      期待 ${JSON.stringify(expected)}\n      実際 ${JSON.stringify(actual)}`}`);
 }
@@ -107,14 +115,19 @@ try {
   check("経由点とイベントを空にできる", (await call("PUT", `/api/rides/${ID}`, { body: shorter, ifMatch: "t2" })).status, 200);
   check("空にしたものが返る", (await call("GET", `/api/rides/${ID}`)).body, shorter);
 
-  // 以前の形（字幕にしないことを状態で持つ）で置いても、いまの形で返る。
+  // イベントは、中身を見ずに往復させる。Worker の知らない種類や項目があっても、そのまま返る。
   const hiddenEvent = (extra) => ({ id: "0199c0de-0000-7000-8000-0000000000e3", kind: "bridge", label: "小さな橋", route_m: 300, time_ms: null, ...extra, detail: {} });
   const old = { ...shorter, ride: { ...shorter.ride, updated_at: "t3a" }, events: [hiddenEvent({ status: "hidden" })] };
   check("以前の形のイベントを置ける", (await call("PUT", `/api/rides/${ID}`, { body: old, ifMatch: "t3" })).status, 200);
-  check("字幕にしないことが、状態とは別に返る", (await call("GET", `/api/rides/${ID}`)).body.events, [hiddenEvent({ status: "estimated", hidden: true })]);
-  const timed = { ...old, ride: { ...old.ride, updated_at: "t3b" }, events: [hiddenEvent({ status: "confirmed", hidden: true, time_ms: 1790000000000 })] };
-  check("字幕にしないまま、時刻を確定して置ける", (await call("PUT", `/api/rides/${ID}`, { body: timed, ifMatch: "t3a" })).status, 200);
-  check("確定した時刻と、字幕にしないことが、両方返る", (await call("GET", `/api/rides/${ID}`)).body.events, timed.events);
+  check("以前の形のまま返る。いまの形に直すのはアプリ", (await call("GET", `/api/rides/${ID}`)).body.events, old.events);
+  const newer = { id: "0199c0de-0000-7000-8000-0000000000e4", kind: "まだ無い種類", label: "", route_m: 400.5, time_ms: 1790000000000, status: "confirmed", hidden: true, まだ無い項目: [1, 2], detail: { stay_ms: 60000, 先の項目: { a: 1 } } };
+  const timed = { ...old, ride: { ...old.ride, updated_at: "t3b" }, events: [hiddenEvent({ status: "confirmed", hidden: true, time_ms: 1790000000000 }), newer] };
+  check("字幕にしないまま時刻を確定したものと、知らない種類のイベントを置ける", (await call("PUT", `/api/rides/${ID}`, { body: timed, ifMatch: "t3a" })).status, 200);
+  check("知らない種類と項目も、そのまま返る", (await call("GET", `/api/rides/${ID}`)).body.events, timed.events);
+  const nameless = await call("PUT", `/api/rides/${ID}`, { body: { ...timed, events: [{ kind: "bridge", label: "", route_m: 1, status: "estimated" }] }, ifMatch: "t3b" });
+  check("ID の無いイベントは 400 で、理由が返る", [nameless.status, typeof nameless.body.error], [400, "string"]);
+  const unreadable = await call("PUT", `/api/rides/${ID}`, { body: { ...timed, waypoints: [{ lon: "東" }] }, ifMatch: "t3b" });
+  check("読めない走行は 400 で、読めない所が返る", [unreadable.status, unreadable.body.error.startsWith("走行のデータを読めません: ")], [400, true]);
 
   // 書く行は、変わったものだけにする。数は、走行の 1 行と、変わった経由点・イベントの行と、その索引。
   const big = (updated_at, change = (events) => events) => ({

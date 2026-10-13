@@ -58,6 +58,7 @@ pub fn run() {
             check::check_target,
             check::finish_check,
             check::capture_check,
+            check::close_check,
             check::check_path,
             config::get_config,
             config::open_road_data,

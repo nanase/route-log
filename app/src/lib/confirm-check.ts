@@ -1,7 +1,7 @@
 /** 動画を見ながらの時刻の確定を、画面を人が見なくても確かめる。キーは実際のキーイベントで送る。 */
 
 import { invoke } from "@tauri-apps/api/core";
-import { confirmTyped } from "./events";
+import { confirmTyped, unconfirm } from "./events";
 import { clock, jstToMs } from "./time";
 import type { LonLat, RideEvent, Timeline } from "./types";
 import type { Mode } from "./ui";
@@ -45,6 +45,8 @@ interface TimelineHandle {
   zoomOut(): void;
   /** その名前の動画の帯を右クリックする */
   rightClick(name: string): boolean;
+  /** その番号の録画停止を右クリックする */
+  rightClickGap(index: number): boolean;
   /** 開いている板のボタンを押す */
   pressMenu(): void;
   snapshot(): Record<string, unknown>;
@@ -302,6 +304,51 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
     window: `${window.innerWidth}x${window.innerHeight}`,
   });
 
+  // 停車。録画の止まっていた間を停車にすると、その間は進んでいないものとして時刻を推定する。
+  // 到着を、最初の録画停止の 10 分後にしておく。経由点から到着までの間に、録画停止が挟まる。
+  const gap = timeline.gaps[0];
+  const boundaryNow = find("pref_boundary");
+  if (boundaryNow) await app.changeEvent(boundaryNow.id, unconfirm);
+  const arrivalNow = find("arrival");
+  if (arrivalNow) await app.changeEvent(arrivalNow.id, (event) => confirmTyped(event, gap.end_ms + 600_000));
+  await app.settled();
+  const estimate = () => {
+    const time = find("bridge")?.time_ms ?? null;
+    return time === null ? null : clock(time);
+  };
+  const [from, to, bridge] = [find("waypoint"), find("arrival"), find("bridge")];
+  let expectedBridge = "";
+  if (from?.time_ms != null && to?.time_ms != null && bridge) {
+    const moving = to.time_ms - from.time_ms - (gap.end_ms - gap.start_ms);
+    expectedBridge = clock(from.time_ms + (moving * (bridge.route_m - from.route_m)) / (to.route_m - from.route_m));
+  }
+  const bridgeBefore = estimate();
+  app.timeline()?.rightClickGap(0);
+  await sleep(300);
+  const asked = app.timeline()?.snapshot().gapMenu;
+  const stopMenu = await invoke<string>("capture_check", { name: "stop-menu" }).catch((e) => `写せない: ${e}`);
+  app.timeline()?.pressMenu();
+  await sleep(300);
+  await app.settled();
+  note(
+    "到着を最初の録画停止の 10 分後にして、その録画停止を右クリックし、停車にする",
+    `停車のイベントができる。始まりは ${clock(gap.start_ms)}、長さは録画停止と同じ。橋の推定が ${expectedBridge} に早まり、録画停止より前になる`,
+    { asked, stop: find("stop"), bridgeBefore, bridgeAfter: estimate(), stops: app.timeline()?.snapshot().stops },
+  );
+  const stopped = await invoke<string>("capture_check", { name: "stopped" }).catch((e) => `写せない: ${e}`);
+  app.timeline()?.rightClickGap(0);
+  await sleep(300);
+  const askedAgain = app.timeline()?.snapshot().gapMenu;
+  app.timeline()?.pressMenu();
+  await sleep(300);
+  await app.settled();
+  note("同じ録画停止をもう一度右クリックし、停車をやめる", "停車のイベントが消え、橋の推定が元に戻る", {
+    asked: askedAgain,
+    stop: find("stop") ?? null,
+    bridgeAfter: estimate(),
+    stops: app.timeline()?.snapshot().stops,
+  });
+
   // 動画の無い走行。動画の無い日付の走行を作り、経路を引いて、時刻を一覧で手で入れる。
   const errors: string[] = [];
   const caught = (event: ErrorEvent | PromiseRejectionEvent) =>
@@ -373,5 +420,5 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   window.removeEventListener("error", caught);
   window.removeEventListener("unhandledrejection", caught);
 
-  return { steps, transport, captures: [next, captured, bulk, wide, empty, filled], csv, message: exported };
+  return { steps, transport, captures: [next, captured, bulk, wide, stopMenu, stopped, empty, filled], csv, message: exported };
 }

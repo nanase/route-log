@@ -9,7 +9,10 @@ import {
   nextConfirmable,
   patch,
   positionAt,
+  retimeStop,
   setHidden,
+  stopBetween,
+  stopsOf,
   unconfirm,
   waypointEvent,
   waypointEventAt,
@@ -36,18 +39,32 @@ describe("いまの位置", () => {
   ];
 
   test("基準の間は時刻で補間する", () => {
-    expect(positionAt(knots, 50_000)).toBe(500);
-    expect(positionAt(knots, 450_000)).toBe(1500);
+    expect(positionAt(knots, [], 50_000)).toBe(500);
+    expect(positionAt(knots, [], 450_000)).toBe(1500);
   });
 
   test("止まっていた間は同じ位置にいる", () => {
-    expect(positionAt(knots, 250_000)).toBe(1000);
+    expect(positionAt(knots, [], 250_000)).toBe(1000);
   });
 
   test("基準の外は分からない", () => {
-    expect(positionAt(knots, -1)).toBeNull();
-    expect(positionAt(knots, 500_001)).toBeNull();
-    expect(positionAt([], 0)).toBeNull();
+    expect(positionAt(knots, [], -1)).toBeNull();
+    expect(positionAt(knots, [], 500_001)).toBeNull();
+    expect(positionAt([], [], 0)).toBeNull();
+  });
+
+  test("停車の間は、時刻が進んでも位置が変わらない", () => {
+    // 0 秒に 0 m、1000 秒に 4000 m。その間の 200 秒から 800 秒まで停車していた。
+    const ends = [
+      { route_m: 0, time_ms: 0 },
+      { route_m: 4000, time_ms: 1_000_000 },
+    ];
+    const stops = [{ start_ms: 200_000, end_ms: 800_000 }];
+    const at = (seconds: number) => positionAt(ends, stops, seconds * 1000);
+    expect([at(100), at(200), at(500), at(800), at(900)]).toEqual([1000, 2000, 2000, 2000, 3000]);
+    // 重なる停車は、1 度だけ引く。
+    const twice = [...stops, { start_ms: 300_000, end_ms: 800_000 }];
+    expect(positionAt(ends, twice, 900_000)).toBe(3000);
   });
 
   test("基準になるのは、確定していて時刻から置いたものでないイベントだけ", () => {
@@ -151,6 +168,27 @@ describe("確定", () => {
     const events = [event("x", 500, "estimated"), made];
     expect(waypointEventAt(events, [138.5, 36.5])?.id).toBe(made.id);
     expect(waypointEventAt(events, [138.5, 36.6])).toBeNull();
+  });
+
+  test("停車のイベントは、始まりの時刻と長さを持ち、基準にはならない", () => {
+    const stop = stopBetween(100_000.4, 400_000.2, 30_000);
+    expect(stop).toMatchObject({ kind: "stop", status: "confirmed", hidden: true, time_ms: 100_000 });
+    expect(stop.detail).toEqual({ by_time: true, camera_ms: 70_000, stay_ms: 300_000 });
+    expect(stopsOf([event("x", 500, "estimated"), stop])).toEqual([{ start_ms: 100_000, end_ms: 400_000 }]);
+    expect(knotsOf([stop])).toEqual([]);
+  });
+
+  test("停車の始まりと終わりは、もう一方を動かさずに直せる", () => {
+    const stop = stopBetween(100_000, 400_000, 30_000);
+    const later = retimeStop(stop, "end", 500_000);
+    expect([later.time_ms, later.detail.stay_ms, later.detail.camera_ms]).toEqual([100_000, 400_000, 70_000]);
+    const earlier = retimeStop(stop, "start", 40_000);
+    expect([earlier.time_ms, earlier.detail.stay_ms]).toEqual([40_000, 360_000]);
+    // 手で入れた始まりは、時計の補正値と一緒には動かさない。
+    expect("camera_ms" in earlier.detail).toBe(false);
+    // 始まりが終わりより後になる直し方は、受け付けない。
+    expect(retimeStop(stop, "start", 400_000)).toBe(stop);
+    expect(retimeStop(stop, "end", 100_000)).toBe(stop);
   });
 
   test("手動のイベントは、時刻から置く印を持つ", () => {

@@ -324,12 +324,30 @@ impl Api {
     }
 }
 
+/// クラウドが断るときに返す本文。
+#[derive(Deserialize)]
+struct Refusal {
+    error: String,
+}
+
 fn explain(error: ureq::Error) -> String {
     match error {
         ureq::Error::Status(403, _) => {
             "クラウドに拒まれました。サービストークンを確かめてください".into()
         }
-        ureq::Error::Status(code, _) => format!("クラウドが {code} を返しました"),
+        ureq::Error::Status(code, response) => {
+            // 断った理由が本文にあれば添える。400 は、送った走行をクラウドが読めなかったときに返る。
+            let reason = response
+                .into_json::<Refusal>()
+                .map(|refusal| format!("（{}）", refusal.error))
+                .unwrap_or_default();
+            let advice = if code == 400 {
+                "。クラウドの側（Worker）が古いと、新しい形の走行を読めません。デプロイし直してください"
+            } else {
+                ""
+            };
+            format!("クラウドが {code} を返しました{reason}{advice}")
+        }
         ureq::Error::Transport(transport) => format!("クラウドに繋がりません: {transport}"),
     }
 }

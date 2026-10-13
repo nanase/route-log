@@ -21,6 +21,8 @@ pub enum EventKind {
     MichiNoEki,
     /// 経由点。人が時刻を入れたいと選んだ経由点にだけ作る。
     Waypoint,
+    /// 停車。始まりの時刻と長さを持ち、その間は位置が変わらないものとして時刻を推定する。
+    Stop,
     Custom,
 }
 
@@ -29,7 +31,7 @@ impl EventKind {
     pub fn is_extracted(self) -> bool {
         !matches!(
             self,
-            Self::Departure | Self::Arrival | Self::Waypoint | Self::Custom
+            Self::Departure | Self::Arrival | Self::Waypoint | Self::Stop | Self::Custom
         )
     }
 }
@@ -84,6 +86,11 @@ pub struct EventDetail {
     /// `waypoint`：その経由点の位置。経路を直しても、同じ経由点だと分かる。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<LonLat>,
+    /// `stop`：停車していた長さ（ミリ秒）。終わりの時刻は、通過時刻にこれを足したもの。
+    ///
+    /// 終わりの時刻ではなく長さで持つので、時計の補正値を変えても、長さは変わらない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stay_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

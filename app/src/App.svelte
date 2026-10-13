@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open, save } from "@tauri-apps/plugin-dialog";
   import { onMount, untrack } from "svelte";
   import { runConfirmCheck } from "./lib/confirm-check";
@@ -14,6 +15,8 @@
     patch,
     positionAt,
     setHidden,
+    stopBetween,
+    stopsOf,
     unconfirm,
     waypointEvent,
     waypointEventAt,
@@ -198,7 +201,7 @@
   /** 動画のいまの時刻にいると推定される位置 */
   const here = $derived.by(() => {
     if (timeline === null) return null;
-    const routeM = positionAt(knotsOf(events), nowMs);
+    const routeM = positionAt(knotsOf(events), stopsOf(events), nowMs);
     return routeM === null ? null : pointAt(routeLine, routeM);
   });
   // 経由点のイベントは、地図に経由点の丸があるので、点を重ねない。
@@ -255,6 +258,11 @@
   });
 
   onMount(async () => {
+    // 窓を閉じるときに、保存を待っている編集を手元に書き終える。書き終えると、窓が閉じる。
+    void getCurrentWindow().onCloseRequested(async () => {
+      await editing;
+      await flush();
+    });
     check = await invoke("check_target");
     stored = await invoke("list_rides");
     if (check?.file) return;
@@ -637,6 +645,18 @@
     void editEvents((current) => (waypointEventAt(current, at) === null ? [...current, made] : current));
   }
 
+  /**
+   * 録画の止まっていた間を、停車にする。その間は進んでいないものとして、時刻が推定される。
+   *
+   * 食事などで長く止まり、同じ場所から録画を始め直したときに使う。
+   */
+  function addStop(startMs: number, endMs: number) {
+    const stop = stopBetween(startMs, endMs, clockOffsetMs);
+    return editEvents((current) => [...current, stop]);
+  }
+
+  const removeEvent = (id: string) => editEvents((current) => current.filter((event) => event.id !== id));
+
   /** まとめて選んだイベントを、字幕なし（`hidden` が真）か字幕ありにする。 */
   function hideEvents(ids: string[], hidden: boolean) {
     return editEvents((current) => current.map((event) => (ids.includes(event.id) ? setHidden(event, hidden) : event)));
@@ -910,7 +930,7 @@
         if (!Object.values(view.rides).includes("conflict")) dismiss("sync");
       },
       // 同期できなくても、編集と保存は続けられる。赤い帯は出さず、右下に短く出す。
-      offline: () => tell("クラウドと同期できません。少し置いて、もう一度試します", "warning"),
+      offline: () => tell("手元には保存してあります。クラウドと同期できません。少し置いて、もう一度試します", "warning"),
       conflicted: (id) =>
         report({
           key: "sync",
@@ -1079,11 +1099,28 @@
     await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
   }
 
+  /**
+   * 経路を編集した直後に、窓を閉じる。保存を待っている編集が、閉じる前に書かれることを確かめる。
+   *
+   * 2 つ目の経由点は、保存を待つ時間が過ぎる前に閉じる。書かれたかは、起動した側が走行のファイルを見る。
+   */
+  async function checkClose(map: RouteMap) {
+    await createRide("2031-03-01");
+    map.jump([138.66, 36.35], 12);
+    await map.idle();
+    map.click([138.62, 36.345]);
+    await sleep(1500);
+    map.click([138.7, 36.36]);
+    while ((doc?.waypoints.length ?? 0) < 2) await sleep(10);
+    await invoke("close_check");
+  }
+
   /** 地図の表示と、経路の編集・保存を確かめて、報告を書いて終了する。 */
   async function checkMap(roadDir: string) {
     let report: unknown;
     try {
       while (routeMap === undefined) await sleep(100);
+      if (check?.step === "close") return await checkClose(routeMap);
       report = await runMapCheck(routeMap, {
         loadRoads: roadDir === "-" ? null : () => loadRoads(roadDir),
         loadGeo: check?.geo ? () => loadGeo(check!.geo!) : null,
@@ -1275,7 +1312,7 @@
         onselect={selectEvent}
         onchange={(id, change) => editEvents((current) => patch(current, id, change))}
         onhide={hideEvents}
-        onremove={(id) => editEvents((current) => current.filter((event) => event.id !== id))}
+        onremove={removeEvent}
         onextract={geoReady && doc !== null ? extractAgain : null}
       />
     </div>
@@ -1291,6 +1328,8 @@
         onseek={(realMs) => void player?.seek(realMs)}
         onselect={choose}
         onexclude={setVideoExcluded}
+        onstop={addStop}
+        onunstop={removeEvent}
       />
     </div>
     {#if toast !== ""}

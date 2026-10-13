@@ -18,6 +18,7 @@ fn kind_name(kind: EventKind) -> &'static str {
         EventKind::Tunnel => "tunnel",
         EventKind::MichiNoEki => "michi_no_eki",
         EventKind::Waypoint => "waypoint",
+        EventKind::Stop => "stop",
         EventKind::Custom => "custom",
     }
 }

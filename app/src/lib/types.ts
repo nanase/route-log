@@ -79,6 +79,7 @@ export type EventKind =
   | "tunnel"
   | "michi_no_eki"
   | "waypoint"
+  | "stop"
   | "custom";
 
 /** 時刻が推定か、人が確定したか。字幕にするかどうかは、これとは別に `hidden` で持つ。 */
@@ -113,6 +114,8 @@ export interface RideEvent {
     by_time?: boolean;
     /** 経由点のイベントの、その経由点の位置 */
     at?: LonLat;
+    /** 停車のイベントの、停車していた長さ（ミリ秒）。終わりの時刻は、通過時刻にこれを足したもの */
+    stay_ms?: number;
   };
 }
 

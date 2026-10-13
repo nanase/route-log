@@ -11,6 +11,7 @@ export const KINDS: Record<EventKind, string> = {
   tunnel: "トンネル",
   michi_no_eki: "道の駅",
   waypoint: "経由点",
+  stop: "停車",
   custom: "手動",
 };
 
@@ -27,6 +28,7 @@ export const KIND_MARKS: Record<EventKind, { mark: string; color: string; outlin
   michi_no_eki: { mark: "駅", color: "--kind-station" },
   // 地図の経由点の丸と同じ、白地に経路の赤の枠。
   waypoint: { mark: "点", color: "--kind-waypoint", outline: true },
+  stop: { mark: "停", color: "--kind-stop" },
   custom: { mark: "手", color: "--kind-custom" },
 };
 

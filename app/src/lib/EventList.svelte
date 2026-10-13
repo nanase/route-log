@@ -1,11 +1,11 @@
 <script lang="ts">
   import EventName from "./EventName.svelte";
-  import { confirmTyped, setHidden, unconfirm } from "./events";
+  import { confirmTyped, inStop, retimeStop, setHidden, stopsOf, unconfirm } from "./events";
   import Icon from "./Icon.svelte";
   import { KIND_ORDER, KINDS } from "./kinds";
   import KindTag from "./KindTag.svelte";
   import StatusMark from "./StatusMark.svelte";
-  import { clock, jstToMs } from "./time";
+  import { clock, jstToMs, short } from "./time";
   import type { EventKind, Gap, RideEvent } from "./types";
   import { remembered } from "./ui";
 
@@ -59,7 +59,7 @@
     hidden: "字幕なし",
   };
   /** 人が消せる種類。経路から抽出したものは、消しても次の抽出で戻るので、字幕なしにして隠す */
-  const REMOVABLE: EventKind[] = ["custom", "waypoint"];
+  const REMOVABLE: EventKind[] = ["custom", "waypoint", "stop"];
   const FILTER_KEY = "routelog.event-filter";
 
   let rows: HTMLDivElement;
@@ -93,6 +93,8 @@
     );
   });
   const narrowed = $derived(filter !== "all" || kinds.length > 0 || query.trim() !== "");
+  /** 停車にしてある時間。推定時刻がここに入るのは、止まった場所そのものなので、警告しない */
+  const stays = $derived(stopsOf(events));
   /** チェックを入れていて、いまもあるイベント。抽出し直して消えたものは数えない */
   const picked = $derived(events.filter((event) => checked.has(event.id)).map((event) => event.id));
   /** 出している行に、チェックがいくつ入っているか */
@@ -143,9 +145,15 @@
     }
     const time = event.time_ms;
     const stopped = time !== null && gaps.some((gap) => gap.start_ms <= time && time < gap.end_ms);
-    return stopped && event.status === "estimated" && !event.hidden
+    return stopped && event.status === "estimated" && !event.hidden && !inStop(stays, time ?? 0)
       ? { short: "録画停止の間", long: "推定時刻が録画停止の間にあります" }
       : null;
+  }
+
+  /** 停車の始まりか終わりの時刻を、手で直す。読めない値と、始まりが後になる値は、受け付けない。 */
+  function typeStop(event: RideEvent, edge: "start" | "end", value: string) {
+    const time = jstToMs(rideDate, value);
+    if (time !== null) onchange(event.id, (current) => retimeStop(current, edge, time));
   }
 
   function typeTime(event: RideEvent, value: string) {
@@ -283,6 +291,7 @@
             {#if warn !== null}
               <span class="warn" title={warn.long}><Icon name="warning" size={13} />{warn.short}</span>
             {/if}
+            {#if event.kind === "stop"}<span class="stay mono">{short(event.detail.stay_ms ?? 0)}</span>{/if}
             {#if target && event.status !== "confirmed"}<span class="next">次</span>{/if}
           </span>
         </button>
@@ -300,6 +309,22 @@
                 }}
               />
             </label>
+            {#if event.kind === "stop" && event.time_ms !== null}
+              <!-- 停車は、始まりと終わりの時刻を持つ。その間は、進んでいないものとして推定する。 -->
+              {#each [["start", "始まり", event.time_ms], ["end", "終わり", event.time_ms + (event.detail.stay_ms ?? 0)]] as const as [edge, name, time] (edge)}
+                <label>
+                  {name}
+                  <input
+                    class="field mono"
+                    type="time"
+                    step="1"
+                    aria-label="停車の{name}の時刻"
+                    value={clock(time)}
+                    onchange={(e) => typeStop(event, edge, e.currentTarget.value)}
+                  />
+                </label>
+              {/each}
+            {:else}
             <label>
               時刻
               <input
@@ -312,8 +337,9 @@
                 onchange={(e) => typeTime(event, e.currentTarget.value)}
               />
             </label>
+            {/if}
             <div class="buttons">
-            {#if event.status === "confirmed"}
+            {#if event.status === "confirmed" && event.kind !== "stop"}
               <button type="button" class="btn" onclick={() => onchange(event.id, unconfirm)}>確定を外す</button>
             {/if}
             <!-- 字幕なしにしても、確定した時刻は残り、時刻推定の基準になる。 -->
@@ -562,6 +588,11 @@
     color: #fff;
     font-size: 11px;
     font-weight: 700;
+  }
+  /* 停車していた長さ */
+  .stay {
+    color: var(--ink-3);
+    font-size: 12px;
   }
   .warn {
     display: flex;
