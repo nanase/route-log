@@ -134,6 +134,14 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     });
     captures.push(await capture("snapped"));
 
+    const middle = line(app.path())[50];
+    map.click(middle);
+    await sleep(2500);
+    note("線の途中をクリック", "経由点が 3 個になり、どちらの区間も吸着のまま。線の点の数はほぼ変わらない", {
+      points: line(app.path()).length,
+      modes: app.path().waypoints.map((w) => w.segment_mode),
+    });
+
     // 道から 150 m ほど外れた所をクリックする。縮尺 13 では画面上で 10 px ほどなので、道の上へ寄る。
     const off: LonLat = [from[0] + 0.0012, from[1] + 0.0011];
     await app.create("2026-10-06");
@@ -149,7 +157,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
 
     map.shiftClick(from);
     await sleep(2500);
-    note("Shift を押しながら経由点 1 をクリック", "区間が直線に戻り、頂点が 2 個になる", {
+    note("Shift を押しながら経由点 1 をクリック", "最初の区間だけが直線に戻る", {
       points: line(app.path()).length,
       modes: app.path().waypoints.map((w) => w.segment_mode),
     });

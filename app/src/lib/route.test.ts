@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   appendWaypoint,
   insertVertex,
+  insertWaypoint,
   line,
   moveVertex,
   moveWaypoint,
@@ -88,6 +89,40 @@ describe("頂点", () => {
     const path = build(A, B);
     insertVertex(path, 0, 0, P);
     expect(line(path)).toEqual([A, B]);
+  });
+});
+
+describe("途中に経由点を足す", () => {
+  test("直線の区間は、2 つの直線になる", () => {
+    const path = insertWaypoint(build(A, C), 0, 0, B);
+    expect(line(path)).toEqual([A, B, C]);
+    expect(modes(path)).toEqual(["straight", "straight", "straight"]);
+    expect(path.route.segments).toEqual([[], []]);
+  });
+
+  test("手で置いた頂点は、足した位置の前後に振り分ける", () => {
+    const manual = insertVertex(insertVertex(build(A, C), 0, 0, P), 0, 1, Q);
+    // P と Q の間の区切り（番号 1）に足す。
+    const path = insertWaypoint(manual, 0, 1, B);
+    expect(line(path)).toEqual([A, P, B, Q, C]);
+    expect(modes(path)).toEqual(["manual", "manual", "straight"]);
+    // 最初の区切り（番号 0）に足すと、手前の区間は直線になる。
+    expect(modes(insertWaypoint(manual, 0, 0, B))).toEqual(["straight", "manual", "straight"]);
+  });
+
+  test("吸着の区間は、どちらも吸着のまま引き直しを待つ", () => {
+    const snapped: Path = {
+      waypoints: [A, C].map(([lon, lat], i) => ({ lon, lat, segment_mode: i === 0 ? "snap" : "straight" })),
+      route: { segments: [[P, Q]] },
+    };
+    const path = insertWaypoint(snapped, 0, 1, B);
+    expect(modes(path)).toEqual(["snap", "snap", "straight"]);
+    expect(path.route.segments).toEqual([[], []]);
+  });
+
+  test("無い区間は何も変えない", () => {
+    const path = build(A, B);
+    expect(insertWaypoint(path, 1, 0, C)).toBe(path);
   });
 });
 

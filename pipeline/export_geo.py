@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+from array import array
 from collections import defaultdict
 from pathlib import Path
 
@@ -41,10 +42,11 @@ MIN_AREA_DEGREES2 = 1e-6
 # 同じ道の駅とみなす距離（度）。約 300 m。駐車場と建物が別々に名前を持つ。
 SAME_STATION_DEGREES = 0.003
 
-# 国道・都道府県道でなくても、吸着の相手にする道の格。2 車線の市町村道は、ほぼ tertiary である。
-# unclassified まで足すと way が 234 万本増え、道路データが数倍になるので足していない。
+# 国道・都道府県道でなくても、吸着の相手にする道の格。2 車線の市町村道は tertiary が多いが、
+# 広域農道のように unclassified で描かれた 2 車線の道もある。車線の数のタグは大半の道に無く、
+# 2 車線だけを選り分けられないので、unclassified は丸ごと足す。
 EXTRA_GRADES = {
-    "trunk", "primary", "secondary", "tertiary",
+    "trunk", "primary", "secondary", "tertiary", "unclassified",
     "trunk_link", "primary_link", "secondary_link", "tertiary_link",
 }
 # 車で入れない道。
@@ -105,68 +107,80 @@ def read_kokudo_ways(kokudo: Path) -> dict[int, dict]:
     return ways
 
 
+def describe(tags: dict[str, str]) -> tuple[str, int, str, str]:
+    """way のタグから、道の格・自動車専用の印・橋やトンネルの種類・その名前を読む。"""
+    bridge, tunnel = tags.get("bridge", "no"), tags.get("tunnel", "no")
+    if tunnel == "yes":
+        structure, name = "tunnel", tags.get("tunnel:name")
+    elif tunnel in SHED_VALUES:
+        structure, name = "shed", tags.get("tunnel:name")
+    elif bridge != "no":
+        structure, name = "bridge", tags.get("bridge:name")
+    else:
+        structure, name = "", None
+    if structure and not name and STRUCTURE_NAME.search(tags.get("name", "")):
+        name = tags["name"]
+    return tags.get("highway", ""), int(tags.get("motorroad") == "yes"), structure, name or ""
+
+
 def export_roads(kokudo: Path, out: Path, started: float) -> None:
     ways = read_kokudo_ways(kokudo)
     log(started, f"国道マップの way {len(ways):,} 本")
 
-    # pbf を 1 回読む。国道マップの way にはタグを足し、それ以外の主要な道は線形ごと集める。
-    tags: dict[int, dict[str, str]] = {}
-    extra = 0
+    # pbf を 1 回読む。国道マップの way にはタグを足し、それ以外の道は線形ごと集める。
+    # 足す道は 280 万本あるので、点を Python のリストで持たず、平らな配列に並べる。
+    described: dict[int, tuple[str, int, str, str]] = {}
+    extra_ids: list[int] = []
+    extra_counts: list[int] = []
+    extra_points = array("d")
+    extra_described: list[tuple[str, int, str, str]] = []
     reader = osmium.FileProcessor(str(kokudo / "build" / "pbf" / "japan-latest.osm.pbf"))
     for way in reader.with_locations().with_filter(osmium.filter.KeyFilter("highway")):
         if not way.is_way():
             continue
-        if way.id in ways:
-            tags[way.id] = {t.k: t.v for t in way.tags}
-            continue
         t = way.tags
+        if way.id in ways:
+            described[way.id] = describe({tag.k: tag.v for tag in t})
+            continue
         if t["highway"] not in EXTRA_GRADES or t.get("area") == "yes":
             continue
         if t.get("access") in NO_ENTRY or t.get("motor_vehicle") in NO_ENTRY:
             continue
-        coords = [[n.lon, n.lat] for n in way.nodes if n.location.valid()]
-        if len(coords) < 2:
+        before = len(extra_points)
+        for node in way.nodes:
+            if node.location.valid():
+                extra_points.append(node.lon)
+                extra_points.append(node.lat)
+        count = (len(extra_points) - before) // 2
+        if count < 2:
+            del extra_points[before:]
             continue
-        ways[way.id] = {"coords": coords, "national": set(), "prefectural": set(), "kind": "road", "former": 0}
-        tags[way.id] = {t.k: t.v for t in way.tags}
-        extra += 1
-    log(started, f"pbf でタグを引けた way {len(tags) - extra:,} 本、足した主要な道 {extra:,} 本")
+        extra_ids.append(way.id)
+        extra_counts.append(count)
+        extra_described.append(describe({tag.k: tag.v for tag in t}))
+    log(started, f"pbf でタグを引けた way {len(described):,} 本、足した道 {len(extra_ids):,} 本")
 
     ids = sorted(ways)
-    structure, structure_name = [], []
-    for wid in ids:
-        t = tags.get(wid, {})
-        bridge, tunnel = t.get("bridge", "no"), t.get("tunnel", "no")
-        if tunnel == "yes":
-            kind, name = "tunnel", t.get("tunnel:name")
-        elif tunnel in SHED_VALUES:
-            kind, name = "shed", t.get("tunnel:name")
-        elif bridge != "no":
-            kind, name = "bridge", t.get("bridge:name")
-        else:
-            kind, name = "", None
-        if kind and not name and STRUCTURE_NAME.search(t.get("name", "")):
-            name = t["name"]
-        structure.append(kind)
-        structure_name.append(name or "")
-
     numeric = lambda refs: ";".join(sorted(refs, key=lambda r: (r.rsplit("-", 1)[0], int(r.rsplit("-", 1)[-1]))))
+    rows = [described.get(w, ("", 0, "", "")) for w in ids] + extra_described
     # 点の数が way ごとに違うので、平らに並べて、どの way の点かを添える。
-    counts = [len(ways[w]["coords"]) for w in ids]
-    lines = shapely.linestrings(
+    counts = [len(ways[w]["coords"]) for w in ids] + extra_counts
+    points = np.concatenate([
         np.concatenate([np.asarray(ways[w]["coords"], dtype=float) for w in ids]),
-        indices=np.repeat(np.arange(len(ids)), counts),
-    )
+        np.frombuffer(extra_points, dtype=float).reshape(-1, 2),
+    ])
+    lines = shapely.linestrings(points, indices=np.repeat(np.arange(len(counts)), counts))
+    plain = len(extra_ids)
     write(out / "roads.fgb", "LineString", lines, {
-        "id": np.array(ids, dtype=np.int64),
-        "national": np.array([numeric(ways[w]["national"]) for w in ids], dtype=object),
-        "prefectural": np.array([numeric(ways[w]["prefectural"]) for w in ids], dtype=object),
-        "kind": np.array([ways[w]["kind"] for w in ids], dtype=object),
-        "grade": np.array([tags.get(w, {}).get("highway", "") for w in ids], dtype=object),
-        "former": np.array([ways[w]["former"] for w in ids], dtype=np.int32),
-        "motorroad": np.array([int(tags.get(w, {}).get("motorroad") == "yes") for w in ids], dtype=np.int32),
-        "structure": np.array(structure, dtype=object),
-        "structure_name": np.array(structure_name, dtype=object),
+        "id": np.array(ids + extra_ids, dtype=np.int64),
+        "national": np.array([numeric(ways[w]["national"]) for w in ids] + [""] * plain, dtype=object),
+        "prefectural": np.array([numeric(ways[w]["prefectural"]) for w in ids] + [""] * plain, dtype=object),
+        "kind": np.array([ways[w]["kind"] for w in ids] + ["road"] * plain, dtype=object),
+        "grade": np.array([r[0] for r in rows], dtype=object),
+        "former": np.array([ways[w]["former"] for w in ids] + [0] * plain, dtype=np.int32),
+        "motorroad": np.array([r[1] for r in rows], dtype=np.int32),
+        "structure": np.array([r[2] for r in rows], dtype=object),
+        "structure_name": np.array([r[3] for r in rows], dtype=object),
     })
 
 

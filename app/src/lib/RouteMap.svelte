@@ -9,6 +9,7 @@
   import {
     appendWaypoint,
     insertVertex,
+    insertWaypoint,
     line,
     moveVertex,
     moveWaypoint,
@@ -24,6 +25,7 @@
    * 地図の上で経路を編集する。
    *
    * - 地図をクリックすると、終わりに経由点を足す
+   * - 経路の線の上をクリックすると、そこに経由点を足して区間を 2 つに分ける
    * - 経由点と頂点はドラッグで動かし、右クリックで消す
    * - 線の途中の小さな丸をドラッグすると、そこに頂点を足す
    * - Shift を押しながら経由点をクリックすると、次の経由点までの結び方を吸着と直線で切り替える
@@ -83,6 +85,24 @@
     const pixel = map.project(at);
     const edge = map.unproject([pixel.x + SNAP_PX, pixel.y]).toArray();
     return (await onsnap(at, distanceM(at, edge))) ?? at;
+  }
+
+  /** 線の上とみなす、線からの距離（画面上の px） */
+  const ON_LINE_PX = 8;
+
+  /** クリックした位置が経路の線の上なら、その線の区切り。 */
+  function pieceAt(at: LonLat) {
+    if (map === undefined) return null;
+    const p = map.project(at);
+    let best: { piece: ReturnType<typeof pieces>[number]; distance: number } | null = null;
+    for (const piece of pieces(path)) {
+      const [a, b] = [map.project(piece.from), map.project(piece.to)];
+      const length2 = a.dist(b) ** 2;
+      const t = length2 === 0 ? 0 : Math.min(1, Math.max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / length2));
+      const distance = Math.hypot(p.x - (a.x + (b.x - a.x) * t), p.y - (a.y + (b.y - a.y) * t));
+      if (distance <= ON_LINE_PX && (best === null || distance < best.distance)) best = { piece, distance };
+    }
+    return best?.piece ?? null;
   }
 
   const lineData = (points: LonLat[]): Feature => ({
@@ -239,12 +259,30 @@
     });
     created.on("click", async (event) => {
       const clicked = event.lngLat.toArray();
+      const piece = pieceAt(clicked);
+      if (piece !== null) {
+        const snapped = path.waypoints[piece.segment].segment_mode === "snap";
+        const at = snapped ? await onRoad(clicked) : clicked;
+        onchange(insertWaypoint(path, piece.segment, piece.index, at));
+        return;
+      }
       if (!snap) {
         onchange(appendWaypoint(path, clicked));
         return;
       }
       const at = await onRoad(clicked);
       onchange(appendWaypoint(path, at, "snap"));
+    });
+    // 線の上では、押すと経由点が足されることをカーソルで知らせる。
+    // 動かすたびに線の区切りを総当たりすると、長い経路で重い。描かれた線に当たるかだけを見る。
+    created.on("mousemove", (event) => {
+      const { x, y } = event.point;
+      const box: [[number, number], [number, number]] = [
+        [x - ON_LINE_PX, y - ON_LINE_PX],
+        [x + ON_LINE_PX, y + ON_LINE_PX],
+      ];
+      const onLine = ready && created.queryRenderedFeatures(box, { layers: ["route"] }).length > 0;
+      created.getCanvas().style.cursor = onLine ? "copy" : "";
     });
     created.on("moveend", () => {
       localStorage.setItem(VIEW_KEY, JSON.stringify({ center: created.getCenter().toArray(), zoom: created.getZoom() }));

@@ -65,6 +65,32 @@ export function appendWaypoint(path: Path, at: LonLat, mode: "straight" | "snap"
   };
 }
 
+/**
+ * 区間の途中に経由点を足し、区間を 2 つに分ける。`index` は、線の区切りの番号。
+ *
+ * 分けた 2 つの区間は、元の結び方を受け継ぐ。手で置いた頂点は、前後に振り分ける。吸着の
+ * 区間は、どちらも引き直しを待つ。
+ */
+export function insertWaypoint(path: Path, segment: number, index: number, at: LonLat): Path {
+  const before = path.waypoints[segment];
+  const vertices = path.route.segments[segment];
+  if (before === undefined || vertices === undefined) return path;
+  const snap = before.segment_mode === "snap";
+  const [head, tail] = snap ? [[], []] : [vertices.slice(0, index), vertices.slice(index)];
+  const mode = (part: LonLat[]) => (snap ? "snap" : part.length > 0 ? "manual" : "straight");
+  return {
+    waypoints: [
+      ...path.waypoints.slice(0, segment),
+      { ...before, segment_mode: mode(head) },
+      { lon: at[0], lat: at[1], segment_mode: mode(tail) },
+      ...path.waypoints.slice(segment + 1),
+    ],
+    route: {
+      segments: [...path.route.segments.slice(0, segment), head, tail, ...path.route.segments.slice(segment + 1)],
+    },
+  };
+}
+
 export function moveWaypoint(path: Path, index: number, to: LonLat): Path {
   const moved = {
     ...path,
