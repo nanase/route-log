@@ -5,6 +5,7 @@
  * いつも経由点の数より 1 つ少ない。
  */
 
+import { distanceM } from "./geo";
 import type { LonLat, Route, Waypoint } from "./types";
 
 /** 経路の形。走行のデータのうち、線を決める部分。 */
@@ -52,6 +53,14 @@ export function pieces(path: Path): Piece[] {
   return path.route.segments.flatMap((vertices, segment) => {
     const points = [point(path.waypoints[segment]), ...vertices, point(path.waypoints[segment + 1])];
     return points.slice(1).map((to, index) => ({ segment, index, from: points[index], to }));
+  });
+}
+
+/** 区間ごとの長さ（m）。経由点の一覧に、そこまでの距離と次の点までの距離を出すのに使う。 */
+export function segmentLengths(path: Path): number[] {
+  return path.route.segments.map((vertices, segment) => {
+    const points = [point(path.waypoints[segment]), ...vertices, point(path.waypoints[segment + 1])];
+    return points.slice(1).reduce((sum, to, i) => sum + distanceM(points[i], to), 0);
   });
 }
 

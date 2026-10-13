@@ -1,0 +1,69 @@
+/*
+ * BIZ UD ゴシックを同梱する。通信できない環境でも同じ字で出る。
+ *
+ * 配布元の CSS は woff も読むが、WebView は woff2 を読めるので、woff2 だけを束ねる。
+ * 日本語のファイルを先に、欧文のファイルを後に書く。欧文の範囲の字は、後に書いたほうが使われる。
+ */
+
+@font-face {
+  font-family: "BIZ UDPGothic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("@fontsource/biz-udpgothic/files/biz-udpgothic-japanese-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "BIZ UDPGothic";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("@fontsource/biz-udpgothic/files/biz-udpgothic-japanese-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "BIZ UDPGothic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("@fontsource/biz-udpgothic/files/biz-udpgothic-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122, U+2212;
+}
+@font-face {
+  font-family: "BIZ UDPGothic";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("@fontsource/biz-udpgothic/files/biz-udpgothic-latin-700-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122, U+2212;
+}
+
+/* 等幅。時刻・距離・日付に使い、桁を揃える。 */
+@font-face {
+  font-family: "BIZ UDGothic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("@fontsource/biz-udgothic/files/biz-udgothic-japanese-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "BIZ UDGothic";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("@fontsource/biz-udgothic/files/biz-udgothic-japanese-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "BIZ UDGothic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("@fontsource/biz-udgothic/files/biz-udgothic-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122, U+2212;
+}
+@font-face {
+  font-family: "BIZ UDGothic";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("@fontsource/biz-udgothic/files/biz-udgothic-latin-700-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122, U+2212;
+}

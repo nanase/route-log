@@ -10,6 +10,7 @@ import {
   pieces,
   removeVertex,
   removeWaypoint,
+  segmentLengths,
   toggleSnap,
 } from "./route";
 import type { LonLat } from "./types";
@@ -169,4 +170,16 @@ test("線の区切りは、頂点を足す場所を順に指す", () => {
     { segment: 1, index: 0, from: B, to: C },
   ]);
   expect(pieces(build(A))).toEqual([]);
+});
+
+test("区間の長さは、頂点を通った道のりで測る", () => {
+  const straight = segmentLengths(build(A, B, C));
+  expect(straight).toHaveLength(2);
+  // 北緯 36 度で経度 0.1 度は、およそ 9 km。
+  expect(straight[0]).toBeGreaterThan(8900);
+  expect(straight[0]).toBeLessThan(9100);
+  const bent = segmentLengths(insertVertex(build(A, B, C), 0, 0, P));
+  expect(bent[0]).toBeGreaterThan(straight[0]);
+  expect(bent[1]).toBe(straight[1]);
+  expect(segmentLengths(build(A))).toEqual([]);
 });

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirmTyped } from "./events";
 import { clock, jstToMs } from "./time";
 import type { LonLat, RideEvent, Timeline } from "./types";
+import type { Mode } from "./ui";
 
 interface PlayerHandle {
   seek(realMs: number): Promise<void>;
@@ -18,6 +19,8 @@ interface MapHandle {
 }
 
 interface AppHandle {
+  /** 経路を入れる画面と、時刻を確定する画面を切り替える */
+  setMode(mode: Mode): void;
   events(): RideEvent[];
   target(): string | null;
   choose(id: string): void;
@@ -29,6 +32,14 @@ interface AppHandle {
   /** CSV を報告の隣に書き出し、その場所を返す */
   exportCsv(): Promise<string>;
   message(): string;
+  /** タイムライン。動画が無い間は無い */
+  timeline(): TimelineHandle | undefined;
+}
+
+interface TimelineHandle {
+  zoomIn(): void;
+  zoomOut(): void;
+  snapshot(): Record<string, unknown>;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,13 +57,18 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   const targetLabel = () => app.events().find((e) => e.id === app.target())?.label ?? null;
   const find = (kind: string) => app.events().find((e) => e.kind === kind);
 
-  // 碓氷峠。軽井沢町から安中市へ、県境をまたぐ線を引く。
+  // 碓氷峠。軽井沢町から安中市へ、県境をまたぐ線を引く。経路は、経路を入れる画面で引く。
+  app.setMode("route");
   map.jump([138.66, 36.35], 12);
   await map.idle();
   map.click([138.62, 36.345]);
   await sleep(300);
   map.click([138.7, 36.36]);
-  await sleep(2500);
+  // 判定用データを初めて読むので、抽出に時間がかかる。
+  for (let i = 0; i < 75 && app.events().length === 0; i++) await sleep(200);
+  await sleep(500);
+  app.setMode("confirm");
+  await sleep(500);
   note("線を引く", "出発・県境・市区町村境・到着が並び、どれも時刻が無い。次の相手は出発");
 
   const start = timeline.spans[0].start_ms;
@@ -73,6 +89,26 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   const expectedBoundary = boundary ? start + 60_000 + (1_200_000 * boundary.route_m) / length : 0;
   note("到着を選び、21 分の所で Enter", `到着が確定し、県境の推定が ${clock(expectedBoundary)} になる`, {
     here: map.snapshot().here,
+  });
+
+  // 何も選んでいなければ、推定時刻がいまより後の最初のイベントが、次の相手になる。
+  await player.seek(expectedBoundary - 20_000);
+  await sleep(1500);
+  note("県境の推定の 20 秒前へ", "次の相手が県境になる。案内に「あと 0:20」と出る", {
+    timeline: app.timeline()?.snapshot(),
+  });
+  const next = await invoke<string>("capture_check", { name: "next" }).catch((e) => `写せない: ${e}`);
+
+  app.timeline()?.zoomIn();
+  app.timeline()?.zoomIn();
+  await sleep(300);
+  const zoomed = app.timeline()?.snapshot();
+  app.timeline()?.zoomOut();
+  app.timeline()?.zoomOut();
+  await sleep(300);
+  note("タイムラインを 2 段広げて、2 段戻す", "広げると範囲が全体の 4 分の 1 になり、再生位置がその中にある。戻すと全体", {
+    zoomed,
+    timeline: app.timeline()?.snapshot(),
   });
 
   await player.seek(start + 60_000 + 300_000);
@@ -128,5 +164,5 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
     "K のあと 2 秒（動かない）": await moved(["l", "k"], 2000),
   };
 
-  return { steps, transport, captures: [captured], csv, message: app.message() };
+  return { steps, transport, captures: [next, captured], csv, message: app.message() };
 }

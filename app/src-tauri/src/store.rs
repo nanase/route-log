@@ -100,6 +100,16 @@ impl Store {
         std::fs::write(&partial, json).map_err(io(&partial))?;
         std::fs::rename(&partial, &path).map_err(io(&path))
     }
+
+    /// 走行のファイルを消す。もう無ければ、何もしない。動画には触らない。
+    pub fn delete(&self, id: &str) -> Result<(), Error> {
+        let path = self.path(id)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Error::Io(path, e)),
+        }
+    }
 }
 
 fn read(path: &Path) -> Result<RideDocument, Error> {
@@ -180,10 +190,29 @@ mod tests {
     }
 
     #[test]
+    fn a_deleted_ride_is_gone_and_the_others_stay() {
+        let (store, dir) = temp_store("delete");
+        store.save(&document(FIRST, "2026-10-03")).unwrap();
+        store.save(&document(SECOND, "2026-10-10")).unwrap();
+        store.delete(FIRST).unwrap();
+        let ids: Vec<_> = store.list().unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, [SECOND]);
+        assert!(matches!(store.load(FIRST), Err(Error::Io(..))));
+        store.delete(FIRST).unwrap();
+        assert_eq!(
+            store.list().unwrap().len(),
+            1,
+            "もう無いものを消しても、何も起きない"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn an_id_that_is_not_a_uuid_never_becomes_a_path() {
         let (store, dir) = temp_store("id");
         for id in ["../escape", "", "0199C0DE-0000-7000-8000-000000000001", "x"] {
             assert!(matches!(store.load(id), Err(Error::Id(_))), "{id}");
+            assert!(matches!(store.delete(id), Err(Error::Id(_))), "{id}");
             assert!(matches!(
                 store.save(&document(id, "2026-10-03")),
                 Err(Error::Id(_))

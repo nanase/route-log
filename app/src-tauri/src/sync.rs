@@ -82,7 +82,20 @@ impl Synced {
     fn set(&self, id: &str, updated_at: &str) -> Result<(), String> {
         let mut map = self.map.lock().unwrap();
         map.insert(id.to_owned(), updated_at.to_owned());
-        let json = serde_json::to_string_pretty(&*map).map_err(|e| e.to_string())?;
+        self.write(&map)
+    }
+
+    /// 走行を消したときに、同期の覚えも消す。覚えが無ければ、何も書かない。
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        let mut map = self.map.lock().unwrap();
+        if map.remove(id).is_none() {
+            return Ok(());
+        }
+        self.write(&map)
+    }
+
+    fn write(&self, map: &HashMap<String, String>) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
         std::fs::write(&self.path, json).map_err(|e| format!("{}: {e}", self.path.display()))
     }
 }
@@ -183,6 +196,14 @@ impl Api {
                 let stamp: Stamp = response.into_json().map_err(|e| e.to_string())?;
                 Ok(Err(stamp.updated_at))
             }
+            Err(error) => Err(explain(error)),
+        }
+    }
+
+    /// 走行を消す。クラウドにもう無ければ、消えたものとして扱う。
+    fn delete(&self, id: &str) -> Result<(), String> {
+        match self.request("DELETE", &format!("/api/rides/{id}")).call() {
+            Ok(_) | Err(ureq::Error::Status(404, _)) => Ok(()),
             Err(error) => Err(explain(error)),
         }
     }
@@ -338,6 +359,16 @@ pub async fn sync_pull(app: tauri::AppHandle, id: String) -> Result<(), String> 
     .await
 }
 
+/// クラウドの走行を消す。手元の走行は残す。同期の覚えは消すので、残した走行は「手元だけ」になる。
+#[tauri::command]
+pub async fn sync_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    blocking(&app, move |app| {
+        Api::new(&app.state::<ConfigFile>())?.delete(&id)?;
+        app.state::<Synced>().remove(&id)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +425,27 @@ mod tests {
         assert_eq!(
             Synced::open(path).get("x").as_deref(),
             Some("2026-10-03T05:00:00+09:00")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_removed_record_of_syncing_stays_removed() {
+        let dir =
+            std::env::temp_dir().join(format!("routelog-synced-remove-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sync.json");
+        let synced = Synced::open(path.clone());
+        synced.remove("x").unwrap();
+        assert!(!path.exists(), "覚えが無ければ、ファイルを作らない");
+        synced.set("x", "2026-10-03T05:00:00+09:00").unwrap();
+        synced.set("y", "2026-10-04T05:00:00+09:00").unwrap();
+        synced.remove("x").unwrap();
+        let reopened = Synced::open(path);
+        assert_eq!(reopened.get("x"), None);
+        assert_eq!(
+            reopened.get("y").as_deref(),
+            Some("2026-10-04T05:00:00+09:00")
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -1,0 +1,322 @@
+/*
+ * 画面全体で使う色・書体・寸法と、どの部品でも同じ形で出す小さな部品。
+ *
+ * 配色はライト。地は白と淡い灰、操作の主色は標識の青、経路は赤、確定は緑にする。
+ */
+
+:root {
+  /* 字と線 */
+  --ink: #1a1d21;
+  --ink-2: #3d4650;
+  --ink-3: #56606b;
+  --ink-4: #6b7480;
+  --line: #d3d8de;
+  --line-strong: #c3cad2;
+  --line-soft: #e3e6ea;
+  --line-input: #9aa6b4;
+  --line-key: #b4bcc6;
+  --mark-muted: #9aa2ab;
+
+  /* 地 */
+  --surface: #fff;
+  --surface-2: #f3f5f7;
+  --surface-3: #f7f8fa;
+  --map-ground: #f7f6f1;
+  --hatch: #d9dee4;
+  --hatch-gap: #eef1f4;
+
+  /* 操作の主色（標識の青） */
+  --primary: #1f4fa3;
+  --primary-soft: #e3ecfa;
+  --primary-softer: #eef3fb;
+  --primary-line: #b9cbea;
+  --primary-ink: #1b3f80;
+
+  /* 経路 */
+  --route: #d7263d;
+
+  /* 状態 */
+  --ok: #0b7a53;
+  --ok-soft: #e2f3ec;
+  --ok-ink: #075c3f;
+  --warn: #d98209;
+  --warn-soft: #fef0d2;
+  --warn-ink: #8a4204;
+  --warn-line: #ebc47a;
+  --warn-text: #6b3303;
+  --warn-ring: #f0a63a;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --danger-line: #e7a39b;
+  --danger-ink: #7a1810;
+
+  /* イベントの種類。一覧・タイムライン・地図の点で同じ色を使う */
+  --kind-ends: #1a1d21;
+  --kind-road: #1f4fa3;
+  --kind-boundary: #7a2e8e;
+  --kind-bridge: #0e7490;
+  --kind-tunnel: #5b4636;
+  --kind-station: #b45309;
+  --kind-custom: #be185d;
+
+  /* 地図に重ねる道路の線 */
+  --road-national: #1f4fa3;
+  --road-prefectural: #178a45;
+
+  /* 動画とタイムライン */
+  --video-ground: #1b2027;
+  --video-chip: rgba(15, 18, 22, 0.72);
+  --clip: #7f97b8;
+  --clip-current: #2f5f9e;
+
+  --font-ui: "BIZ UDPGothic", "Yu Gothic UI", Meiryo, sans-serif;
+  --font-mono: "BIZ UDGothic", "MS Gothic", monospace;
+
+  --radius-control: 6px;
+  --radius-tile: 8px;
+  --radius-panel: 10px;
+  --radius-card: 12px;
+  --shadow-float: 0 2px 8px rgba(26, 29, 33, 0.12);
+  --shadow-pop: 0 4px 12px rgba(26, 29, 33, 0.18);
+  --shadow-card: 0 8px 24px rgba(26, 29, 33, 0.14);
+
+  /* 寸法 */
+  --gutter: 12px;
+  --bar: 44px;
+  --control: 28px;
+  --row: 26px;
+}
+
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--ink);
+  font: 13px/1.4 var(--font-ui);
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* 等幅。時刻・距離・日付に使う */
+.mono {
+  font-family: var(--font-mono);
+}
+
+.icon {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon.solid {
+  fill: currentColor;
+}
+
+/* キーの手がかり */
+kbd {
+  display: inline-block;
+  min-width: 8px;
+  padding: 0 5px;
+  border: 1px solid var(--line-key);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 700 11px/16px var(--font-mono);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ボタン */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: var(--control);
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn:disabled {
+  color: var(--ink-4);
+  opacity: 0.6;
+}
+.btn.primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--primary-ink);
+}
+.btn.danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+  font-weight: 700;
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--danger-ink);
+}
+.btn.icon-only {
+  justify-content: center;
+  width: var(--control);
+  padding: 0;
+}
+.btn.ghost {
+  border-color: transparent;
+  background: none;
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn.small {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.btn.small.icon-only {
+  width: 24px;
+  padding: 0;
+}
+
+/* 2 つから選ぶ切り替え */
+.seg {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control);
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  white-space: nowrap;
+}
+.seg button:hover:not(.on):not(:disabled) {
+  background: var(--surface-2);
+}
+.seg button.on {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+}
+.seg button:disabled {
+  color: var(--ink-4);
+}
+
+/* 字を入れる欄 */
+.field {
+  box-sizing: border-box;
+  height: var(--control);
+  padding: 0 8px;
+  border: 1px solid var(--line-input);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+
+/* 状態を 1 語で出すラベル */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pill.ok {
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+}
+.pill.warn {
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+}
+.pill.info {
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+.pill.danger {
+  background: var(--danger);
+  color: #fff;
+  font-weight: 700;
+}
+.pill.muted {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+/* 地図の上に浮かせる板 */
+.float {
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+/* 小さな補足の字 */
+.sub {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.fine {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+/* ダイアログ */
+dialog.card {
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+}
+/* 開いたときにダイアログそのものを選ぶ。その枠は出さない。 */
+dialog.card:focus {
+  outline: none;
+}
+dialog.card::backdrop {
+  background: rgba(26, 29, 33, 0.28);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

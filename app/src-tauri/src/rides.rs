@@ -11,6 +11,7 @@ use tauri::Manager;
 use crate::config::ConfigFile;
 use crate::events::Extractor;
 use crate::store::{RideSummary, Store};
+use crate::sync::Synced;
 
 /// いまの時刻。更新時刻は、手元とクラウドのどちらが新しいかを見分けるのに使う。同じ秒の
 /// うちに保存と同期が続いても見分けられるよう、ミリ秒まで持つ。
@@ -51,6 +52,17 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
     };
     store.save(&doc).map_err(|e| e.to_string())?;
     Ok(doc)
+}
+
+/// 手元の走行の記録を消す。同期の覚えも消す。動画のファイルと、クラウドの走行には触らない。
+#[tauri::command]
+pub fn delete_ride(
+    store: tauri::State<Store>,
+    synced: tauri::State<Synced>,
+    id: String,
+) -> Result<(), String> {
+    store.delete(&id).map_err(|e| e.to_string())?;
+    synced.remove(&id)
 }
 
 /// クリックした点を、近い道の上へ寄せる。判定用データを開いていないか、`radius_m` 以内に

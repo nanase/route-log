@@ -1,11 +1,14 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import type { Feature } from "geojson";
+  import type { Feature, FeatureCollection } from "geojson";
   import maplibregl from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
   import { Protocol } from "pmtiles";
   import { onMount, untrack } from "svelte";
   import { distanceM } from "./geo";
+  import Icon from "./Icon.svelte";
+  import { KIND_MARKS, KIND_ORDER } from "./kinds";
+  import KindTag from "./KindTag.svelte";
   import {
     appendWaypoint,
     insertVertex,
@@ -19,7 +22,8 @@
     removeWaypoint,
     toggleSnap,
   } from "./route";
-  import type { LonLat, RoadData } from "./types";
+  import type { EventKind, LonLat, RoadData } from "./types";
+  import type { Basemap } from "./ui";
 
   /**
    * 地図の上で経路を編集する。
@@ -29,42 +33,87 @@
    * - 経由点と頂点はドラッグで動かし、右クリックで消す
    * - 線の途中の小さな丸をドラッグすると、そこに頂点を足す
    * - Shift を押しながら経由点をクリックすると、次の経由点までの結び方を吸着と直線で切り替える
+   * - 経由点をクリックすると選び、結び方の切り替えと削除のボタンをそばに出す
+   *
+   * `editable` でなければ、経路は見るだけになる。時刻を確定するときに使う。
    */
   let {
     path,
     rideId,
+    editable = true,
     roads = null,
+    showRoads = true,
+    basemap = "pale",
     marks = [],
+    callout = null,
     here = null,
+    follow = false,
     snap = false,
+    canSnap = false,
+    selected = null,
+    pad = { top: 60, right: 60, bottom: 60, left: 60 },
     onsnap,
+    onselect,
     onchange,
   }: {
     path: Path;
     /** 走行が変わったら、経路の全体が見えるように地図を動かす */
     rideId: string | null;
+    editable?: boolean;
     roads?: RoadData | null;
-    /** イベントの位置。地図に点で出す */
-    marks?: { at: LonLat; label: string; hidden: boolean }[];
-    /** 新しく足す区間を、道に沿わせるか */
-    snap?: boolean;
-    /** 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。近くに道が無ければ null を返す */
-    onsnap?: (at: LonLat, radiusM: number) => Promise<LonLat | null>;
+    /** 道路の線を重ねるか */
+    showRoads?: boolean;
+    basemap?: Basemap;
+    /** イベントの位置。地図に、種類の色の点で出す */
+    marks?: { at: LonLat; kind: EventKind; hidden: boolean }[];
+    /** 名前を添えて目立たせるイベント。次に確定する相手か、一覧で選んだもの */
+    callout?: { at: LonLat; kind: EventKind; label: string; note: string } | null;
     /** 動画のいまの時刻にいると推定される位置 */
     here?: LonLat | null;
+    /** 現在位置が画面の端へ寄ったら、地図を動かして追う */
+    follow?: boolean;
+    /** 新しく足す区間を、道に沿わせるか */
+    snap?: boolean;
+    /** 道に沿わせることができるか。判定用データを開いていなければ、できない */
+    canSnap?: boolean;
+    /** 選んでいる経由点の番号 */
+    selected?: number | null;
+    /** 浮かせた板に隠れる幅（px）。経路の全体を出すときに、ここを避ける */
+    pad?: { top: number; right: number; bottom: number; left: number };
+    /** 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。近くに道が無ければ null を返す */
+    onsnap?: (at: LonLat, radiusM: number) => Promise<LonLat | null>;
+    onselect?: (index: number | null) => void;
     onchange: (path: Path) => void;
   } = $props();
 
   const VIEW_KEY = "routelog.map-view";
   /** これより短い区切りには、頂点を足す丸を出さない（画面上の px） */
   const MIN_PIECE_PX = 48;
-  const GSI = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
+  /** 現在位置を追うとき、画面の縁からこの割合より外へ出たら地図を動かす */
+  const FOLLOW_MARGIN = 0.2;
+  const GSI = "https://cyberjapandata.gsi.go.jp/xyz";
+  const GSI_CREDIT = '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>';
+  /** 背景地図。どれも地理院タイルで、縮尺 5 から 18 まである */
+  const BASEMAPS: Record<Basemap, { tiles: string; attribution: string }> = {
+    pale: { tiles: `${GSI}/pale/{z}/{x}/{y}.png`, attribution: GSI_CREDIT },
+    std: { tiles: `${GSI}/std/{z}/{x}/{y}.png`, attribution: GSI_CREDIT },
+    // 写真は、縮尺の小さいところで衛星画像を使っている。その出典も添える。
+    photo: {
+      tiles: `${GSI}/seamlessphoto/{z}/{x}/{y}.jpg`,
+      attribution: `${GSI_CREDIT}（Landsat8 画像: GSI, TSIC, GEO Grid/AIST, courtesy of the U.S. Geological Survey。海底地形: GEBCO）`,
+    },
+  };
 
   let container: HTMLDivElement;
+  let calloutElement: HTMLDivElement;
+  let popoverElement: HTMLDivElement;
   let map: maplibregl.Map | undefined;
   let ready = $state(false);
   let markers: maplibregl.Marker[] = [];
   const errors: string[] = [];
+
+  /** `app.css` で決めた色。地図の線と点にも同じ色を使う。 */
+  const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   function savedView(): { center: LonLat; zoom: number } {
     try {
@@ -105,35 +154,49 @@
     return best?.piece ?? null;
   }
 
-  const lineData = (points: LonLat[]): Feature => ({
-    type: "Feature",
-    properties: {},
-    geometry: { type: "LineString", coordinates: points },
-  });
-
-  function draw(next: Path) {
-    (map?.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData(lineData(line(next)));
+  /** 経路の線。区間ごとに分け、道に沿わせた区間は実線、それ以外は破線で描けるようにする。 */
+  function routeData(next: Path): FeatureCollection {
+    const features: Feature[] = next.route.segments.map((vertices, i) => {
+      const [from, to] = [next.waypoints[i], next.waypoints[i + 1]];
+      return {
+        type: "Feature",
+        properties: { snap: from.segment_mode === "snap" },
+        geometry: { type: "LineString", coordinates: [[from.lon, from.lat], ...vertices, [to.lon, to.lat]] },
+      };
+    });
+    return { type: "FeatureCollection", features };
   }
 
-  function handle(kind: "waypoint" | "waypoint snap" | "vertex" | "middle", at: LonLat, label = "") {
+  function draw(next: Path) {
+    (map?.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData(routeData(next));
+  }
+
+  function handle(kind: string, at: LonLat, label = "") {
     const element = document.createElement("div");
     element.className = `handle ${kind}`;
     element.textContent = label;
+    let onshiftclick: (() => void) | undefined;
+    let onplainclick: (() => void) | undefined;
     // 丸の上のクリックで、地図に経由点を足さない。
     element.addEventListener("click", (event) => {
       event.stopPropagation();
       if (event.shiftKey) onshiftclick?.();
+      else onplainclick?.();
     });
-    let onshiftclick: (() => void) | undefined;
-    const marker = new maplibregl.Marker({ element, draggable: true }).setLngLat(at).addTo(map!);
+    const marker = new maplibregl.Marker({ element, draggable: editable }).setLngLat(at).addTo(map!);
     markers.push(marker);
     return {
-      /** ドラッグの間は線だけを描き直し、離したときに確定する */
-      /** `settle` があれば、離した位置をそれで直してから確定する */
+      /**
+       * ドラッグの間は線だけを描き直し、離したときに確定する。`settle` があれば、離した位置を
+       * それで直してから確定する。
+       */
       ondrag(moved: (to: LonLat) => Path, settle?: (to: LonLat) => Promise<LonLat>) {
         const to = (): LonLat => marker.getLngLat().toArray();
         marker.on("drag", () => draw(moved(to())));
         marker.on("dragend", async () => onchange(moved(settle ? await settle(to()) : to())));
+      },
+      onclick(clicked: () => void) {
+        onplainclick = clicked;
       },
       onshiftclick(changed: () => Path) {
         onshiftclick = () => onchange(changed());
@@ -152,6 +215,23 @@
     for (const marker of markers) marker.remove();
     markers = [];
     if (map === undefined) return;
+    const last = current.waypoints.length - 1;
+    const waypointClass = (index: number) =>
+      [
+        "waypoint",
+        current.waypoints[index].segment_mode === "snap" ? "snap" : "",
+        index === 0 || index === last ? "end" : "",
+        index === selected ? "selected" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    if (!editable) {
+      // 見るだけのときは、経由点を小さく出す。つかめないし、押しても何も起きない。
+      current.waypoints.forEach((waypoint, index) => {
+        handle(`${waypointClass(index)} fixed`, [waypoint.lon, waypoint.lat], String(index + 1));
+      });
+      return;
+    }
     // 吸着の区間の線は道が決めるので、頂点も、頂点を足す丸も出さない。
     const snapped = (segment: number) => current.waypoints[segment].segment_mode === "snap";
     for (const piece of pieces(current)) {
@@ -170,8 +250,8 @@
       });
     });
     current.waypoints.forEach((waypoint, index) => {
-      const kind = waypoint.segment_mode === "snap" ? "waypoint snap" : "waypoint";
-      const waypointHandle = handle(kind, [waypoint.lon, waypoint.lat], String(index + 1));
+      const waypointHandle = handle(waypointClass(index), [waypoint.lon, waypoint.lat], String(index + 1));
+      waypointHandle.onclick(() => onselect?.(index === selected ? null : index));
       waypointHandle.onshiftclick(() => toggleSnap(current, index));
       // 前後のどちらかが吸着の区間なら、離した位置を道の上へ寄せる。
       const beside = snapped(index) || (index > 0 && snapped(index - 1));
@@ -179,6 +259,9 @@
       waypointHandle.onremove(() => removeWaypoint(current, index));
     });
   }
+
+  /** 浮かせた板に隠れない所の、まん中からのずれ。 */
+  const padOffset = (): [number, number] => [(pad.left - pad.right) / 2, (pad.top - pad.bottom) / 2];
 
   function fit(current: Path) {
     const points = line(current);
@@ -188,27 +271,57 @@
       return;
     }
     const bounds = points.reduce((box, p) => box.extend(p), new maplibregl.LngLatBounds(points[0], points[0]));
-    map.fitBounds(bounds, { padding: 60, maxZoom: 15, animate: false });
+    const margin = 40;
+    map.fitBounds(bounds, {
+      padding: {
+        top: pad.top + margin,
+        right: pad.right + margin,
+        bottom: pad.bottom + margin,
+        left: pad.left + margin,
+      },
+      maxZoom: 15,
+      animate: false,
+    });
+  }
+
+  /** イベントの点に使う、種類の色の小さな四角。 */
+  function markImage(color: string, outline: boolean) {
+    const [size, ratio] = [14, 2];
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size * ratio;
+    const context = canvas.getContext("2d")!;
+    context.scale(ratio, ratio);
+    context.beginPath();
+    context.roundRect(1.5, 1.5, size - 3, size - 3, 3);
+    context.fillStyle = outline ? "#fff" : color;
+    context.fill();
+    context.lineWidth = outline ? 2 : 1.5;
+    context.strokeStyle = outline ? color : "#fff";
+    context.stroke();
+    return context.getImageData(0, 0, canvas.width, canvas.height);
   }
 
   onMount(() => {
     const protocol = new Protocol();
     maplibregl.addProtocol("pmtiles", protocol.tile);
+    const names = Object.keys(BASEMAPS) as Basemap[];
     const created = new maplibregl.Map({
       container,
       style: {
         version: 8,
-        sources: {
-          base: {
-            type: "raster",
-            tiles: [GSI],
-            tileSize: 256,
-            minzoom: 5,
-            maxzoom: 18,
-            attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>',
-          },
-        },
-        layers: [{ id: "base", type: "raster", source: "base" }],
+        sources: Object.fromEntries(
+          names.map((name) => [
+            `base-${name}`,
+            { type: "raster", tileSize: 256, minzoom: 5, maxzoom: 18, ...BASEMAPS[name], tiles: [BASEMAPS[name].tiles] },
+          ]),
+        ),
+        // 選んでいない背景は隠しておく。隠した層のタイルは読まれない。
+        layers: names.map((name) => ({
+          id: `base-${name}`,
+          type: "raster",
+          source: `base-${name}`,
+          layout: { visibility: name === untrack(() => basemap) ? "visible" : "none" },
+        })),
       },
       ...savedView(),
       minZoom: 5,
@@ -223,41 +336,68 @@
     map = created;
     created.touchZoomRotate.disableRotation();
     created.keyboard.disableRotation();
-    created.addControl(new maplibregl.NavigationControl({ showCompass: false }));
     created.addControl(new maplibregl.ScaleControl());
     created.on("error", (event) => errors.push(String(event.error?.message ?? event.error)));
     created.on("load", () => {
-      created.addSource("route", { type: "geojson", data: lineData([]) });
+      created.addSource("route", { type: "geojson", data: routeData({ waypoints: [], route: { segments: [] } }) });
       const round = { "line-join": "round", "line-cap": "round" } as const;
       created.addLayer({
         id: "route-casing",
         type: "line",
         source: "route",
         layout: round,
-        paint: { "line-color": "#fff", "line-width": 7 },
+        paint: { "line-color": "#fff", "line-width": 8 },
       });
       created.addLayer({
-        id: "route",
+        id: "route-snap",
         type: "line",
         source: "route",
+        filter: ["get", "snap"],
         layout: round,
-        paint: { "line-color": "#e03131", "line-width": 4 },
+        paint: { "line-color": token("--route"), "line-width": 4.5 },
       });
-      created.addSource("marks", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      // 道に沿わせていない区間は、破線にして見分ける。
+      created.addLayer({
+        id: "route-straight",
+        type: "line",
+        source: "route",
+        filter: ["!", ["get", "snap"]],
+        layout: { "line-join": "round" },
+        paint: { "line-color": token("--route"), "line-width": 4.5, "line-dasharray": [2.4, 1.5] },
+      });
+      for (const kind of KIND_ORDER) {
+        const mark = KIND_MARKS[kind];
+        created.addImage(`kind-${kind}`, markImage(token(mark.color), mark.outline === true), { pixelRatio: 2 });
+      }
+      const empty: FeatureCollection = { type: "FeatureCollection", features: [] };
+      created.addSource("callout", { type: "geojson", data: empty });
+      created.addLayer({
+        id: "callout",
+        type: "circle",
+        source: "callout",
+        paint: {
+          "circle-radius": 13,
+          "circle-color": "rgba(255, 255, 255, 0.35)",
+          "circle-stroke-color": token("--primary"),
+          "circle-stroke-width": 2,
+        },
+      });
+      created.addSource("marks", { type: "geojson", data: empty });
       created.addLayer({
         id: "marks",
-        type: "circle",
+        type: "symbol",
         source: "marks",
-        paint: {
-          "circle-radius": 5,
-          "circle-color": ["case", ["get", "hidden"], "#adb5bd", "#f59f00"],
-          "circle-stroke-color": "#fff",
-          "circle-stroke-width": 1.5,
+        layout: {
+          "icon-image": ["concat", "kind-", ["get", "kind"]],
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
         },
+        paint: { "icon-opacity": ["case", ["get", "hidden"], 0.45, 1] },
       });
       ready = true;
     });
     created.on("click", async (event) => {
+      if (!editable) return;
       const clicked = event.lngLat.toArray();
       const piece = pieceAt(clicked);
       if (piece !== null) {
@@ -281,7 +421,8 @@
         [x - ON_LINE_PX, y - ON_LINE_PX],
         [x + ON_LINE_PX, y + ON_LINE_PX],
       ];
-      const onLine = ready && created.queryRenderedFeatures(box, { layers: ["route"] }).length > 0;
+      const layers = ["route-snap", "route-straight"];
+      const onLine = ready && editable && created.queryRenderedFeatures(box, { layers }).length > 0;
       created.getCanvas().style.cursor = onLine ? "copy" : "";
     });
     created.on("moveend", () => {
@@ -297,6 +438,8 @@
 
   $effect(() => {
     if (!ready) return;
+    // 選んでいる経由点と、編集できるかどうかで、丸の見た目が変わる。
+    void [selected, editable];
     draw(path);
     place(path);
   });
@@ -306,14 +449,59 @@
     if (ready) untrack(() => fit(path));
   });
 
+  // 見るだけのときは、矢印キーを動画の送り戻しに使う。地図がキーで動かないようにする。
+  $effect(() => {
+    if (!ready) return;
+    if (editable) map?.keyboard.enable();
+    else map?.keyboard.disable();
+  });
+
+  $effect(() => {
+    if (!ready) return;
+    for (const name of Object.keys(BASEMAPS)) {
+      map?.setLayoutProperty(`base-${name}`, "visibility", name === basemap ? "visible" : "none");
+    }
+  });
+
   $effect(() => {
     if (!ready) return;
     const features: Feature[] = marks.map((mark) => ({
       type: "Feature",
-      properties: { label: mark.label, hidden: mark.hidden },
+      properties: { kind: mark.kind, hidden: mark.hidden },
       geometry: { type: "Point", coordinates: mark.at },
     }));
     (map?.getSource("marks") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features });
+  });
+
+  // 名前を添えるイベント。丸で囲み、吹き出しをそばに出す。吹き出しの中身は下のマークアップが描く。
+  let calloutMarker: maplibregl.Marker | undefined;
+  const calloutAt = $derived(callout === null ? null : `${callout.at[0]},${callout.at[1]}`);
+  $effect(() => {
+    if (!ready || map === undefined) return;
+    const at = calloutAt === null ? null : (calloutAt.split(",").map(Number) as LonLat);
+    const features: Feature[] =
+      at === null ? [] : [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: at } }];
+    const source = map.getSource("callout") as maplibregl.GeoJSONSource | undefined;
+    source?.setData({ type: "FeatureCollection", features });
+    if (at === null) {
+      calloutMarker?.remove();
+      return;
+    }
+    calloutMarker ??= new maplibregl.Marker({ element: calloutElement, anchor: "left", offset: [20, -18] });
+    calloutMarker.setLngLat(at).addTo(map);
+  });
+
+  // 選んだ経由点のそばに出す、結び方の切り替えと削除のボタン。
+  let popoverMarker: maplibregl.Marker | undefined;
+  const chosen = $derived(editable && selected !== null ? (path.waypoints[selected] ?? null) : null);
+  $effect(() => {
+    if (!ready || map === undefined) return;
+    if (chosen === null) {
+      popoverMarker?.remove();
+      return;
+    }
+    popoverMarker ??= new maplibregl.Marker({ element: popoverElement, anchor: "top-left", offset: [-40, 20] });
+    popoverMarker.setLngLat([chosen.lon, chosen.lat]).addTo(map);
   });
 
   let hereMarker: maplibregl.Marker | undefined;
@@ -331,12 +519,28 @@
     } else {
       hereMarker.setLngLat(here);
     }
+    if (!follow) return;
+    // 現在位置が、浮かせた板を除いた画面の縁へ寄ったら、まん中へ戻す。
+    const { x, y } = map.project(here);
+    const { clientWidth: width, clientHeight: height } = container;
+    const [w, h] = [width - pad.left - pad.right, height - pad.top - pad.bottom];
+    const inside =
+      x > pad.left + w * FOLLOW_MARGIN &&
+      x < pad.left + w * (1 - FOLLOW_MARGIN) &&
+      y > pad.top + h * FOLLOW_MARGIN &&
+      y < pad.top + h * (1 - FOLLOW_MARGIN);
+    if (!inside && !map.isMoving()) map.easeTo({ center: here, offset: padOffset() });
   });
 
   // 道路の線は経路の下に重ねる。
   $effect(() => {
-    if (!ready || roads === null || map === undefined || map.getSource("national")) return;
-    const overlay = (id: "national" | "prefectural", file: string, color: string, width: number) => {
+    if (!ready || roads === null || map === undefined) return;
+    const visibility = showRoads ? "visible" : "none";
+    if (map.getSource("national")) {
+      for (const id of ["national", "prefectural"]) map.setLayoutProperty(id, "visibility", visibility);
+      return;
+    }
+    const overlay = (id: "national" | "prefectural", file: string, color: string, opacity: number) => {
       map!.addSource(id, {
         type: "vector",
         url: `pmtiles://${convertFileSrc(file)}`,
@@ -349,24 +553,35 @@
           source: id,
           "source-layer": "routes",
           filter: ["==", ["get", "kind"], "road"],
-          layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": color, "line-width": width, "line-opacity": 0.55 },
+          layout: { "line-join": "round", "line-cap": "round", visibility },
+          // 背景地図の道をなぞる、太く透けた帯にする。
+          paint: {
+            "line-color": color,
+            "line-width": ["interpolate", ["linear"], ["zoom"], 7, 2.5, 11, 5, 15, 9],
+            "line-opacity": opacity,
+          },
         },
         "route-casing",
       );
     };
-    overlay("prefectural", roads.prefectural, "#2f9e44", 2);
-    overlay("national", roads.national, "#1c7ed6", 3);
+    overlay("prefectural", roads.prefectural, token("--road-prefectural"), 0.34);
+    overlay("national", roads.national, token("--road-national"), 0.3);
   });
 
-  let popup: maplibregl.Popup | undefined;
+  /** その位置を、浮かせた板に隠れない所のまん中に出す。 */
+  export function focus(at: LonLat) {
+    map?.easeTo({ center: at, zoom: Math.max(map.getZoom(), 13), offset: padOffset() });
+  }
 
-  /** その位置を地図のまん中に出し、名前を添える。 */
-  export function focus(at: LonLat, label: string) {
-    if (map === undefined) return;
-    popup?.remove();
-    popup = new maplibregl.Popup({ closeButton: false, offset: 10 }).setLngLat(at).setText(label).addTo(map);
-    map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 13) });
+  /** 経路の全体が見えるように、地図を動かす。 */
+  export function fitRoute() {
+    fit(path);
+  }
+
+  /** 地図を 1 段、拡大（正）または縮小（負）する。 */
+  export function zoomBy(step: 1 | -1) {
+    if (step > 0) map?.zoomIn();
+    else map?.zoomOut();
   }
 
   /** 自動の確認が使う口。 */
@@ -409,6 +624,12 @@
     mouse("mouseup", to, canvas);
   }
 
+  /** `at` にいちばん近い丸をクリックしたことにする。 */
+  export function clickHandle(at: LonLat) {
+    if (map === undefined || markers.length === 0) return;
+    nearest(at).getElement().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  }
+
   /** `at` にいちばん近い丸を、Shift を押しながらクリックしたことにする。 */
   export function shiftClick(at: LonLat) {
     if (map === undefined || markers.length === 0) return;
@@ -434,68 +655,236 @@
   export function snapshot() {
     const count = (id: string) =>
       map?.getSource(id) ? map.querySourceFeatures(id, { sourceLayer: "routes" }).length : null;
+    const shown = (id: string) => map?.getLayer(id) !== undefined && map.getLayoutProperty(id, "visibility") !== "none";
     return {
       zoom: map?.getZoom() ?? null,
       center: map?.getCenter().toArray() ?? null,
       tilesLoaded: map?.areTilesLoaded() ?? false,
+      basemap: Object.keys(BASEMAPS).filter((name) => shown(`base-${name}`)),
       handles: {
         waypoint: container.querySelectorAll(".handle.waypoint").length,
         vertex: container.querySelectorAll(".handle.vertex").length,
         middle: container.querySelectorAll(".handle.middle").length,
       },
-      roads: { national: count("national"), prefectural: count("prefectural") },
+      roads: { national: count("national"), prefectural: count("prefectural"), shown: shown("national") },
+      selected,
       here: hereMarker?.getLngLat().toArray() ?? null,
       errors: [...errors],
     };
   }
+
+  /** 板の上の操作を、下の地図に渡さない。地図が動いたり、経由点が足されたりしないようにする。 */
+  const hold = (event: Event) => event.stopPropagation();
 </script>
 
 <div class="map" bind:this={container} oncontextmenu={(event) => event.preventDefault()} role="application"></div>
+
+<!-- 地図の上の吹き出し。置く場所は地図が決め、中身はここで描く。 -->
+<div class="parked">
+  <div class="callout" bind:this={calloutElement}>
+    {#if callout !== null}
+      <KindTag kind={callout.kind} />
+      <b>{callout.label}</b>
+      {#if callout.note !== ""}<span class="mono note">{callout.note}</span>{/if}
+    {/if}
+  </div>
+  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+  <div
+    class="popover"
+    bind:this={popoverElement}
+    onclick={hold}
+    onmousedown={hold}
+    ondblclick={hold}
+    oncontextmenu={hold}
+    onwheel={hold}
+  >
+    {#if chosen !== null && selected !== null}
+      {@const index = selected}
+      <b>経由点 {index + 1}</b>
+      {#if index < path.waypoints.length - 1}
+        <span class="to">次の点まで</span>
+        <div class="seg">
+          <button
+            type="button"
+            class:on={chosen.segment_mode === "snap"}
+            disabled={!canSnap && chosen.segment_mode !== "snap"}
+            title={canSnap ? "" : "判定データを選ぶと使えます"}
+            onclick={() => chosen.segment_mode !== "snap" && onchange(toggleSnap(path, index))}
+          >
+            道に沿わせる
+          </button>
+          <button
+            type="button"
+            class:on={chosen.segment_mode !== "snap"}
+            onclick={() => chosen.segment_mode === "snap" && onchange(toggleSnap(path, index))}
+          >
+            直線
+          </button>
+        </div>
+      {:else}
+        <span class="to">終わり</span>
+      {/if}
+      <button
+        type="button"
+        class="btn icon-only remove"
+        aria-label="この点を消す"
+        title="この点を消す"
+        onclick={() => onchange(removeWaypoint(path, index))}
+      >
+        <Icon name="trash" />
+      </button>
+    {/if}
+  </div>
+</div>
 
 <style>
   .map {
     width: 100%;
     height: 100%;
+    font-family: var(--font-ui);
+  }
+  /* 吹き出しは、地図に渡すまでここに置いておく。 */
+  .parked {
+    display: none;
   }
   .map :global(.handle) {
     box-sizing: border-box;
     border-radius: 50%;
     cursor: grab;
   }
+  /* 途中の経由点は白地に経路の赤の輪、始点と終点は黒、選んだ点は青にする。 */
   .map :global(.handle.waypoint) {
-    width: 22px;
-    height: 22px;
-    border: 2px solid #fff;
-    background: #e03131;
-    box-shadow: 0 0 2px #000;
-    color: #fff;
-    font: bold 11px/18px system-ui, sans-serif;
+    width: 26px;
+    height: 26px;
+    border: 3px solid var(--route);
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(26, 29, 33, 0.35);
+    color: var(--ink);
+    font: 700 13px/20px var(--font-mono);
     text-align: center;
   }
-  .map :global(.handle.waypoint.snap) {
-    background: #1c7ed6;
+  .map :global(.handle.waypoint.end) {
+    border: 2.5px solid #fff;
+    background: var(--ink);
+    color: #fff;
+    line-height: 21px;
+  }
+  .map :global(.handle.waypoint.selected) {
+    width: 28px;
+    height: 28px;
+    border: 2.5px solid #fff;
+    background: var(--primary);
+    box-shadow:
+      0 0 0 7px rgba(31, 79, 163, 0.2),
+      0 1px 3px rgba(26, 29, 33, 0.35);
+    color: #fff;
+    line-height: 23px;
+  }
+  .map :global(.handle.waypoint.fixed) {
+    width: 16px;
+    height: 16px;
+    border-width: 2px;
+    font-size: 9px;
+    line-height: 12px;
+    cursor: default;
+    pointer-events: none;
   }
   .map :global(.handle.vertex) {
     width: 14px;
     height: 14px;
-    border: 2px solid #e03131;
+    border: 2.5px solid var(--route);
     background: #fff;
-  }
-  .map :global(.here) {
-    width: 16px;
-    height: 16px;
-    box-sizing: border-box;
-    border: 3px solid #fff;
-    border-radius: 50%;
-    background: #1c7ed6;
-    box-shadow: 0 0 0 2px #1c7ed6;
-    pointer-events: none;
   }
   .map :global(.handle.middle) {
-    width: 10px;
-    height: 10px;
-    border: 1px solid #e03131;
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--route);
     background: #fff;
-    opacity: 0.6;
+    opacity: 0.75;
+  }
+  .map :global(.handle.middle:hover) {
+    opacity: 1;
+  }
+  .map :global(.here) {
+    box-sizing: border-box;
+    width: 14px;
+    height: 14px;
+    border: 2.5px solid #fff;
+    border-radius: 50%;
+    background: var(--primary);
+    box-shadow: 0 0 0 8px rgba(31, 79, 163, 0.18);
+    pointer-events: none;
+  }
+
+  .callout {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 8px 0 4px;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    box-shadow: 0 2px 8px rgba(26, 29, 33, 0.16);
+    color: var(--ink);
+    font: 13px/1.4 var(--font-ui);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .callout .note {
+    color: var(--ink-3);
+  }
+  .popover {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-sizing: border-box;
+    height: 40px;
+    padding: 0 8px 0 12px;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-tile);
+    background: var(--surface);
+    box-shadow: var(--shadow-pop);
+    color: var(--ink);
+    font: 13px/1.4 var(--font-ui);
+    white-space: nowrap;
+    cursor: default;
+  }
+  .popover .to {
+    color: var(--ink-3);
+  }
+  .popover .seg button {
+    height: 26px;
+    padding: 0 10px;
+  }
+  .popover .remove {
+    width: 26px;
+    height: 26px;
+    color: var(--danger);
+  }
+
+  /* 縮尺と出典は、浮かせた板を避けて置く。避ける幅は、地図を置く側が変数で渡す。 */
+  .map :global(.maplibregl-ctrl-bottom-left) {
+    bottom: 2px;
+    left: var(--map-left, 0);
+  }
+  .map :global(.maplibregl-ctrl-bottom-right) {
+    right: var(--map-right, 0);
+    bottom: 2px;
+  }
+  .map :global(.maplibregl-ctrl-scale) {
+    border-color: var(--ink-3);
+    background: rgba(255, 255, 255, 0.7);
+    color: var(--ink-3);
+    font: 11px/1.2 var(--font-mono);
+  }
+  .map :global(.maplibregl-ctrl-attrib) {
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.85);
+    color: var(--ink-3);
+    font: 11px/1.6 var(--font-ui);
+  }
+  .map :global(.maplibregl-ctrl-attrib a) {
+    color: inherit;
   }
 </style>
