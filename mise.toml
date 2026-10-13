@@ -1,0 +1,9 @@
+# フロントエンド（app/）のビルドに使う道具の版。Rust は rustup が持つ。
+[tools]
+node = "26.10.0"
+bun = "1.4.2"
+
+[settings]
+# ここで固定した版を、PATH に先に入っている別の node より優先させる。
+# これがないと、bun から呼ばれる vite や svelte-check が別の版の node で動く。
+activate_aggressive = true
