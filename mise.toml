@@ -1,7 +1,9 @@
-# フロントエンド（app/）のビルドに使う道具の版。Rust は rustup が持つ。
+# ビルドと実行に使う道具の版。Rust は rustup が持つ。
 [tools]
 node = "26.10.0"
 bun = "1.4.2"
+# 動画の長さを読む ffprobe のために入れる。
+"conda:ffmpeg" = "9.0.2"
 
 [settings]
 # ここで固定した版を、PATH に先に入っている別の node より優先させる。

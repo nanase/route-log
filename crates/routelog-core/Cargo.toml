@@ -1,0 +1,8 @@
+[package]
+name = "routelog-core"
+version.workspace = true
+edition.workspace = true
+description = "ルートログのデータ型と時刻の変換。アプリと Worker の両方が使う"
+
+[dependencies]
+serde.workspace = true

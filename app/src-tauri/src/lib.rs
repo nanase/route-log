@@ -1,4 +1,5 @@
 mod check;
+mod videos;
 
 use std::path::PathBuf;
 
@@ -32,10 +33,15 @@ fn allow_video_file(app: tauri::AppHandle, path: String) -> Result<VideoFile, St
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(videos::State::default())
         .invoke_handler(tauri::generate_handler![
             allow_video_file,
             check::check_target,
             check::finish_check,
+            videos::scan_videos,
+            videos::build_timeline,
+            videos::locate,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the app");

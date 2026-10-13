@@ -12,6 +12,9 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+routelog-core.workspace = true
+routelog-video.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"

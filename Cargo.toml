@@ -1,14 +1,18 @@
 [workspace]
 resolver = "3"
-members = ["app/src-tauri"]
+members = ["crates/routelog-core", "crates/routelog-video", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+routelog-core = { path = "crates/routelog-core" }
+routelog-video = { path = "crates/routelog-video" }
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
 
 # target/ の肥大を抑える。自前のクレートは行番号だけを残し、依存クレートの
 # デバッグ情報は作らない。スタックトレースの行番号は残るが、デバッガで変数の
