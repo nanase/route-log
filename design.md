@@ -473,6 +473,10 @@ API は走行単位の REST とし、同期は「走行全体を送る」単純�
 - Worker 側でも `Cf-Access-Jwt-Assertion` の署名・`iss`・`aud`・期限を検証する
   - Access のポリシーが外れたときに、書き込みの経路へ要求が素通りしないためである
   - 設定が欠けているときは、すべての要求を拒む
+- 検証は `routelog-access` crate が持つ。入出力を持たない純粋な Rust で、RS256 の署名・`iss`・`aud`・期限を確かめる
+  - 人のログインは `email`、サービストークンは `common_name`（クライアント ID）を持ち主として読む
+  - 拒んだ理由は外へ出さず、どれも同じ 403 で返す
+- Access の公開鍵は Worker が取りに行き、1 時間使い回す
 
 **Worker の実装**
 
@@ -484,6 +488,23 @@ API は走行単位の REST とし、同期は「走行全体を送る」単純�
   - Access のチームのドメインは `[vars]`、`aud` はシークレットに置く
   - マイグレーションは連番の SQL と戻し用の SQL を持ち、デプロイの前に適用する
 - `routelog-core` は wasm で通る依存に絞る。Tokio のようなスレッド型のランタイムは Worker で使えない
+- イベントは、絞り込みに使う値（kind・label・route\_m・time\_ms・status）を列に出し、全体を `json` の列に持つ。項目が増えても列を足さずに往復できる
+- 経路の線は、区間ごとの頂点（`route.segments`）を JSON にして R2 の `rides/<ID>/route.json` に置く
+- PUT は、すでにある走行について `If-Match` がサーバの持つ更新時刻と同じときだけ置き換える。違えば 412 と、いまの更新時刻を返す
+- リリースのプロファイルに `strip` は付けない。付けると wasm-bindgen が要る情報まで消え、ビルドが止まる
+- Worker は wasm 向けなので、Cargo workspace の `default-members` から外す。ふだんの `cargo test` や `cargo clippy` の対象にならない
+
+**手元での確認**
+
+`worker/` で次を行うと、Cloudflare に触らずに API を一通り確かめられます。20 項目が通っています。
+
+1. `.dev.vars` に `ACCESS_TEAM_DOMAIN`・`ACCESS_AUD`・`ACCESS_CERTS_URL` を書く。値は `test/local.mjs` の先頭にある
+2. `bun run migrate:local` で、手元の D1 にスキーマを当てる
+3. `node test/local.mjs` を起動し、続けて `bun run dev` を起動する
+
+- 確認用のスクリプトは、その場で作った鍵でトークンに署名し、公開鍵を配る。本物の Access には触らない
+- `ACCESS_CERTS_URL` は、鍵を取る場所を差し替えるための設定である。本番の設定には置かない
+- `worker-build` は `cargo install worker-build` で入れる。wasm 用の道具は、初回のビルドで自動で取ってくる
 
 **D1 の上限**
 
@@ -538,12 +559,13 @@ time_jst,source_file,source_offset,kind,label,routes,status
 route-log/
 ├─ crates/
 │  ├─ routelog-core/   # データ型、時刻変換、時刻推定（純粋ロジック、テスト重視）
+│  ├─ routelog-access/ # Cloudflare Access のトークンの検証
 │  ├─ routelog-geo/    # 判定用データの読み込み、イベント抽出、吸着グラフ
 │  └─ routelog-video/  # ファイル名解析、ffprobe / ffmpeg 呼び出し
 ├─ app/
 │  ├─ src-tauri/       # Tauri コマンド、ローカル保存、API クライアント
 │  └─ src/             # フロントエンド（TypeScript + Svelte 5 + MapLibre）
-├─ worker/             # Cloudflare Worker（workers-rs）、D1 マイグレーション
+├─ worker/             # Cloudflare Worker（workers-rs）、D1 マイグレーション、手元での確認
 ├─ pipeline/           # 判定用データの書き出し（Python、uv）
 ├─ data/               # 書き出した判定用データ。git では追跡しない
 ├─ scripts/resolve/    # Resolve 用 Python スクリプト（MVP 後）
@@ -560,7 +582,7 @@ route-log/
 5. 時刻確定：時刻推定と、動画を見ながらのキー確定（済み）
 6. 出力：通過時刻一覧（CSV）（済み）
 7. 吸着：国道・都道府県道グラフへの吸着（済み）
-8. クラウド：Worker、D1、R2、Access、同期
+8. クラウド：Worker、D1、R2、Access、同期（Worker と手元での確認まで済み。アプリからの同期と、Cloudflare への作成・デプロイが残る）
 9. MVP 後：Resolve マーカー、GPX / KML、共有ページ、GPS ロガー取り込み
 
 **決定事項**
@@ -584,13 +606,13 @@ route-log/
 - 判定用データの書き出し：ルートログのリポジトリに置く。国道マップは読むだけで、手を入れない
 - N03 の簡略化：境を共有したまま、約 10 m のずれまで許す
 - 時計の補正値を後から変えたとき：動画で確定した時刻は一緒に動かし、手で入れた時刻は動かさない
+- Access の JWT 検証：純粋な Rust（`rsa` crate）で書く。サービストークンは `common_name` を持ち主として読む。本物のサービストークンでの確認はまだ
 
 **未決事項**
 
 - [ ] 判定用データの同梱方法。いまはフォルダをアプリで選ぶ
 - [ ] 吸着を諦める倍率（いまは直線距離の 1.5 倍）。峠道では経由点を細かく置く必要がある
 - [ ] 経由点に時刻を入れて基準にする操作。いまはイベントの時刻を確定するか、手で入れるかで代える
-- [ ] Access の JWT 検証を Rust でどう書くか
-- [ ] サービストークンの JWT が持つクレーム。人のログインと違い `email` を持たない見込みで、検証の条件に関わる
 - [ ] D1 のバッチの中の文が、1 回の呼び出しのクエリ数に 1 つずつ数えられるか
-- [ ] API のホスト名
+- [ ] API のホスト名と、Access のチームのドメイン。`wrangler.toml` は空にしてある
+- [ ] D1 のデータベースと R2 のバケットの作成。作ったら `database_id` を書き換える

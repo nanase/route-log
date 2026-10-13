@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS idx_events_ride;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS waypoints;
+DROP TABLE IF EXISTS rides;

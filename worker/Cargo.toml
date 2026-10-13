@@ -1,0 +1,15 @@
+[package]
+name = "routelog-worker"
+version.workspace = true
+edition.workspace = true
+description = "走行ログの API。Cloudflare Workers で動く"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+routelog-access.workspace = true
+routelog-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+worker = { version = "0.8", features = ["d1"] }

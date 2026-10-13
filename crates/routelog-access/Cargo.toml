@@ -1,0 +1,15 @@
+[package]
+name = "routelog-access"
+version.workspace = true
+edition.workspace = true
+description = "Cloudflare Access が発行したトークンの検証"
+
+[dependencies]
+base64 = "0.22"
+rsa = { version = "0.9", default-features = false, features = ["sha2"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rand = "0.8"

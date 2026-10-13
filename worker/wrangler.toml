@@ -1,0 +1,38 @@
+# Cloudflare Workers の設定。
+#
+# account_id は書かない。手元では `wrangler login` が残したセッションから、Actions では
+# environment のシークレットから渡す。
+
+name = "routelog"
+main = "build/index.js"
+compatibility_date = "2026-09-16"
+
+# workers.dev のサブドメインは使わない。アカウントの名前が入るためである。
+workers_dev = false
+
+[build]
+command = "worker-build --release"
+
+# 走行・経由点・イベント。
+[[d1_databases]]
+binding = "DB"
+database_name = "routelog"
+# `wrangler d1 create routelog` が割り当てる。作ったら書き換える。
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# 経路の線。
+[[r2_buckets]]
+binding = "ROUTES"
+bucket_name = "routelog-routes"
+
+# Access のチームのドメイン。`<team>.cloudflareaccess.com` の形で、秘密ではない。
+# 空のあいだは、すべての要求を拒む。
+[vars]
+ACCESS_TEAM_DOMAIN = ""
+
+# ホスト名は決まってから足す。
+# [[routes]]
+# pattern = "routelog.example.com"
+# custom_domain = true
+
+# シークレットはここに書かない。`wrangler secret put ACCESS_AUD` で置く。

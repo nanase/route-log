@@ -1,6 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/routelog-access",
+    "crates/routelog-core",
+    "crates/routelog-geo",
+    "crates/routelog-video",
+    "app/src-tauri",
+    "worker",
+]
+# Worker は wasm 向けなので、ふだんの cargo test や clippy の対象から外す。
+default-members = [
+    "crates/routelog-access",
     "crates/routelog-core",
     "crates/routelog-geo",
     "crates/routelog-video",
@@ -12,6 +22,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+routelog-access = { path = "crates/routelog-access" }
 routelog-core = { path = "crates/routelog-core" }
 routelog-geo = { path = "crates/routelog-geo" }
 routelog-video = { path = "crates/routelog-video" }
@@ -35,3 +46,10 @@ opt-level = 3
 
 [profile.dev.package.routelog-geo]
 opt-level = 2
+
+# Worker は大きさに上限があるので、小ささを優先する。strip は付けない。付けると
+# wasm-bindgen が要る情報まで消え、Worker のビルドが「externref table required」で止まる。
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
