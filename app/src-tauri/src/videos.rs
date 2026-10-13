@@ -8,6 +8,8 @@ use routelog_video::{Ffprobe, NamePattern, Skipped};
 use serde::Serialize;
 use tauri::Manager;
 
+use crate::config::ConfigFile;
+
 /// いま開いている走行のタイムライン。時刻と位置の変換は、ここに問い合わせる。
 #[derive(Default)]
 pub struct State {
@@ -20,9 +22,15 @@ pub struct Scan {
     skipped: Vec<Skipped>,
 }
 
-/// フォルダの下の動画を読み、日ごとに分ける。そのフォルダをアセットプロトコルで読めるようにする。
+/// フォルダの下の動画を読み、日ごとに分ける。そのフォルダをアセットプロトコルで読めるようにし、
+/// 次の起動でも開けるよう場所を覚える。
 #[tauri::command]
-pub async fn scan_videos(app: tauri::AppHandle, dir: String) -> Result<Scan, String> {
+pub async fn scan_videos(
+    app: tauri::AppHandle,
+    config: tauri::State<'_, ConfigFile>,
+    dir: String,
+) -> Result<Scan, String> {
+    config.update(|c| c.video_dir = Some(dir.clone()))?;
     let dir = PathBuf::from(dir);
     let scanned = {
         let dir = dir.clone();

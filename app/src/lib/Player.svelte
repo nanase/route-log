@@ -112,8 +112,8 @@
 
   <p class="now">
     <strong>{clock(realMs)}</strong>
-    <span>{timeline.files[file]?.name ?? ""}</span>
     <span>{hms(offsetMs)}</span>
+    <span>{timeline.files[file]?.name ?? ""}</span>
   </p>
 
   <div class="bar">
@@ -161,6 +161,7 @@
   section {
     display: grid;
     grid-template-rows: minmax(0, 1fr) auto auto auto minmax(0, 12rem);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.25rem;
     height: 100%;
     min-height: 0;
@@ -176,6 +177,8 @@
     gap: 1rem;
     align-items: baseline;
     margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .now strong {
@@ -224,6 +227,7 @@
     display: block;
     overflow: auto;
     border-collapse: collapse;
+    white-space: nowrap;
     font-size: 0.85rem;
     font-variant-numeric: tabular-nums;
   }

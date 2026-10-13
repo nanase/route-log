@@ -2526,6 +2526,9 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "uuid",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]
@@ -2533,6 +2536,7 @@ name = "routelog-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,4 +1,7 @@
 mod check;
+mod config;
+mod rides;
+mod store;
 mod videos;
 
 use std::path::PathBuf;
@@ -35,10 +38,23 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(videos::State::default())
+        .setup(|app| {
+            let dir = config::data_dir(app.handle())?;
+            app.manage(store::Store::new(dir.join("rides")));
+            app.manage(config::ConfigFile::open(dir.join("config.json")));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             allow_video_file,
             check::check_target,
             check::finish_check,
+            check::capture_check,
+            config::get_config,
+            config::open_road_data,
+            rides::list_rides,
+            rides::load_ride,
+            rides::create_ride,
+            rides::save_ride,
             videos::scan_videos,
             videos::build_timeline,
             videos::locate,

@@ -6,3 +6,6 @@ description = "ルートログのデータ型と時刻の変換。アプリと W
 
 [dependencies]
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

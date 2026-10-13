@@ -2,35 +2,185 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
+  import { runMapCheck } from "./lib/map-check";
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
+  import type { Path } from "./lib/route";
+  import RouteMap from "./lib/RouteMap.svelte";
   import { hms } from "./lib/time";
   import { runTimelineCheck } from "./lib/timeline-check";
-  import type { RideVideos, Scan, Timeline } from "./lib/types";
+  import type { Config, RideDocument, RideSummary, RideVideos, RoadData, Scan, Timeline } from "./lib/types";
+
+  /** 保存を待つ時間。続けて編集している間は書かない */
+  const SAVE_DELAY_MS = 400;
+  const EMPTY: Path = { waypoints: [], route: { segments: [] } };
 
   /** 自動の確認の対象。`undefined` は問い合わせ中 */
-  let check = $state<{ file: string | null; dir: string | null } | undefined>(undefined);
+  let check = $state<{ file: string | null; dir: string | null; map: string | null } | undefined>(undefined);
   let player = $state<Player>();
-  let dir = $state("");
+  let routeMap = $state<RouteMap>();
   let message = $state("");
-  let rides = $state<RideVideos[]>([]);
-  let selected = $state<RideVideos | null>(null);
-  let clockOffsetSeconds = $state(0);
+  let videos = $state<RideVideos[]>([]);
+  let stored = $state<RideSummary[]>([]);
+  let roads = $state<RoadData | null>(null);
+  /** 開いている走行の日付 */
+  let date = $state<string | null>(null);
+  /** 開いている走行。まだ何も記録していない日付では null */
+  let doc = $state<RideDocument | null>(null);
+  let lengthM = $state(0);
   let timeline = $state<Timeline | null>(null);
+  let newDate = $state("");
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** 動画のある日付と、記録のある日付を合わせた一覧。新しい順 */
+  const dates = $derived(
+    [...new Set([...videos.map((v) => v.date), ...stored.map((s) => s.ride_date)])].sort().reverse(),
+  );
+  const files = $derived(videos.find((v) => v.date === date)?.files ?? []);
+  const clockOffsetMs = $derived(doc?.ride.clock_offset_ms ?? 0);
 
   onMount(async () => {
     check = await invoke("check_target");
-    if (check?.dir) await checkTimeline(check.dir);
+    stored = await invoke("list_rides");
+    if (check?.file) return;
+    if (check?.dir) return checkTimeline(check.dir);
+    if (check?.map) return checkMap(check.map);
+    const config = await invoke<Config>("get_config");
+    if (config.road_data_dir) await loadRoads(config.road_data_dir);
+    if (config.video_dir) await loadVideos(config.video_dir);
   });
+
+  async function loadVideos(dir: string) {
+    message = "動画を読み込み中…";
+    try {
+      const scan = await invoke<Scan>("scan_videos", { dir });
+      videos = scan.rides;
+      const count = videos.reduce((n, ride) => n + ride.files.length, 0);
+      message = `動画 ${count} 本`;
+      if (scan.skipped.length > 0) {
+        message += `、読めないファイル ${scan.skipped.length} 本（${scan.skipped[0].reason}）`;
+      }
+      if (date === null && dates.length > 0) await select(dates[0]);
+    } catch (e) {
+      message = String(e);
+    }
+  }
+
+  async function loadRoads(dir: string) {
+    try {
+      roads = await invoke<RoadData>("open_road_data", { dir });
+    } catch (e) {
+      message = String(e);
+    }
+  }
+
+  async function pick(title: string, load: (dir: string) => Promise<void>) {
+    const picked = await open({ directory: true, title });
+    if (picked !== null) await load(picked);
+  }
+
+  async function select(next: string) {
+    await flush();
+    const summary = stored.find((s) => s.ride_date === next);
+    doc = summary ? await invoke<RideDocument>("load_ride", { id: summary.id }) : null;
+    lengthM = summary?.length_m ?? 0;
+    date = next;
+  }
+
+  /** 開いている日付の走行を、無ければ作って返す。日付を選んでいなければ null。 */
+  async function ensureDoc(): Promise<RideDocument | null> {
+    if (doc === null && date !== null) {
+      doc = await invoke<RideDocument>("create_ride", { rideDate: date });
+      stored = await invoke("list_rides");
+    }
+    return doc;
+  }
+
+  async function edit(change: (current: RideDocument) => RideDocument) {
+    const current = await ensureDoc();
+    if (current === null) {
+      message = "走行を選ぶか、日付を入れて作ってください";
+      return;
+    }
+    doc = change(current);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flush, SAVE_DELAY_MS);
+  }
+
+  /** 待っている保存があれば、いま書く。 */
+  async function flush() {
+    if (saveTimer === undefined || doc === null) return;
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    const saving = doc;
+    try {
+      const saved = await invoke<{ updated_at: string; length_m: number }>("save_ride", { doc: saving });
+      lengthM = saved.length_m;
+      stored = stored.map((s) =>
+        s.id === saving.ride.id
+          ? { ...s, updated_at: saved.updated_at, length_m: saved.length_m, waypoints: saving.waypoints.length }
+          : s,
+      );
+    } catch (e) {
+      message = `保存できません: ${e}`;
+    }
+  }
+
+  async function createRide() {
+    if (newDate === "") return;
+    await select(newDate);
+    await ensureDoc();
+    newDate = "";
+  }
+
+  $effect(() => {
+    if (files.length === 0) {
+      timeline = null;
+      return;
+    }
+    void invoke<Timeline>("build_timeline", { files, clockOffsetMs }).then((built) => {
+      timeline = built;
+    });
+  });
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   /** フォルダを読み、最初の走行でファイルをまたぐ再生を確かめて、報告を書いて終了する。 */
   async function checkTimeline(target: string) {
     let report: unknown;
     try {
-      await load(target);
-      while (timeline === null || player === undefined) await new Promise((r) => setTimeout(r, 100));
+      await loadVideos(target);
+      await select(dates[dates.length - 1]);
+      while (timeline === null || player === undefined) await sleep(100);
       report = await runTimelineCheck(timeline, player, async (seconds) => {
-        clockOffsetSeconds = seconds;
+        await edit((current) => ({ ...current, ride: { ...current.ride, clock_offset_ms: seconds * 1000 } }));
+      });
+      await invoke("capture_check", { name: "played" });
+    } catch (e) {
+      report = { error: String(e), message };
+    }
+    await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
+  }
+
+  /** 地図の表示と、経路の編集・保存を確かめて、報告を書いて終了する。 */
+  async function checkMap(roadDir: string) {
+    let report: unknown;
+    try {
+      while (routeMap === undefined) await sleep(100);
+      report = await runMapCheck(routeMap, {
+        loadRoads: roadDir === "-" ? null : () => loadRoads(roadDir),
+        create: async (rideDate) => {
+          newDate = rideDate;
+          await createRide();
+        },
+        edit: (change) => edit((current) => ({ ...current, ...change(current) })),
+        path: () => doc ?? EMPTY,
+        saved: async () => {
+          await flush();
+          return doc === null ? null : await invoke<RideDocument>("load_ride", { id: doc.ride.id });
+        },
+        list: () => invoke<RideSummary[]>("list_rides"),
+        message: () => message,
       });
     } catch (e) {
       report = { error: String(e), message };
@@ -38,42 +188,8 @@
     await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
   }
 
-  async function openFolder() {
-    const picked = await open({ directory: true, title: "動画フォルダを選ぶ" });
-    if (picked !== null) await load(picked);
-  }
-
-  async function load(picked: string) {
-    dir = picked;
-    message = "読み込み中…";
-    rides = [];
-    selected = null;
-    try {
-      const scan = await invoke<Scan>("scan_videos", { dir });
-      rides = scan.rides;
-      selected = rides[0] ?? null;
-      const count = rides.reduce((n, ride) => n + ride.files.length, 0);
-      message = `${count} 本`;
-      if (scan.skipped.length > 0) {
-        message += `、読めないファイル ${scan.skipped.length} 本（${scan.skipped[0].reason}）`;
-      }
-    } catch (e) {
-      message = String(e);
-    }
-  }
-
-  $effect(() => {
-    const ride = selected;
-    const clockOffsetMs = Math.round((clockOffsetSeconds || 0) * 1000);
-    if (ride === null) {
-      timeline = null;
-      return;
-    }
-    void invoke<Timeline>("build_timeline", { files: ride.files, clockOffsetMs }).then((built) => {
-      timeline = built;
-    });
-  });
-
+  const summaryOf = (rideDate: string) => stored.find((s) => s.ride_date === rideDate);
+  const videosOf = (rideDate: string) => videos.find((v) => v.date === rideDate);
   const totalMs = (ride: RideVideos) => ride.files.reduce((sum, file) => sum + file.duration_ms, 0);
 </script>
 
@@ -82,25 +198,63 @@
 {:else if check !== undefined}
   <main>
     <header>
-      <button type="button" onclick={openFolder}>動画フォルダを開く</button>
-      <span class="dir">{dir}</span>
-      <span>{message}</span>
-      <label>
-        時計の補正（秒）
-        <input type="number" step="1" bind:value={clockOffsetSeconds} />
-      </label>
+      <button type="button" onclick={() => pick("動画フォルダを選ぶ", loadVideos)}>動画フォルダを開く</button>
+      <button type="button" onclick={() => pick("道路データのフォルダを選ぶ", loadRoads)}>道路データを開く</button>
+      <span class="message">{message}</span>
+      {#if date !== null}
+        <input
+          class="title"
+          aria-label="走行の題"
+          value={doc?.ride.title ?? date}
+          onchange={(event) => {
+            const title = event.currentTarget.value.trim() || date!;
+            void edit((current) => ({ ...current, ride: { ...current.ride, title } }));
+          }}
+        />
+        <span>経由点 {doc?.waypoints.length ?? 0}・{(lengthM / 1000).toFixed(1)} km</span>
+        <label>
+          時計の補正（秒）
+          <input
+            type="number"
+            step="1"
+            value={clockOffsetMs / 1000}
+            onchange={(event) => {
+              const clock_offset_ms = Math.round((event.currentTarget.valueAsNumber || 0) * 1000);
+              void edit((current) => ({ ...current, ride: { ...current.ride, clock_offset_ms } }));
+            }}
+          />
+        </label>
+      {/if}
     </header>
     <nav>
-      {#each rides as ride (ride.date)}
-        <button type="button" class:selected={ride === selected} onclick={() => (selected = ride)}>
-          <strong>{ride.date}</strong>
-          <span>{ride.files.length} 本・{hms(totalMs(ride))}</span>
+      <form onsubmit={(event) => (event.preventDefault(), createRide())}>
+        <input type="date" aria-label="新しい走行の日付" bind:value={newDate} />
+        <button type="submit" disabled={newDate === ""}>作る</button>
+      </form>
+      {#each dates as rideDate (rideDate)}
+        {@const ride = videosOf(rideDate)}
+        {@const summary = summaryOf(rideDate)}
+        <button type="button" class="ride" class:selected={rideDate === date} onclick={() => select(rideDate)}>
+          <strong>{rideDate}</strong>
+          <span>{ride ? `動画 ${ride.files.length} 本・${hms(totalMs(ride))}` : "動画なし"}</span>
+          <span>{summary ? `経路 ${(summary.length_m / 1000).toFixed(1)} km` : "記録なし"}</span>
         </button>
       {/each}
     </nav>
+    <div class="map">
+      <RouteMap
+        bind:this={routeMap}
+        path={doc ?? EMPTY}
+        rideId={date}
+        {roads}
+        onchange={(path) => edit((current) => ({ ...current, ...path }))}
+      />
+    </div>
     <div class="player">
       {#if timeline !== null}
-        <Player bind:this={player} {timeline} muted={check?.dir != null} />
+        <Player bind:this={player} {timeline} muted={check.dir !== null} />
+      {:else if date !== null}
+        <p>この日付の動画はありません。</p>
       {/if}
     </div>
   </main>
@@ -109,11 +263,12 @@
 <style>
   :global(body) {
     margin: 0;
+    overflow: hidden;
     font-family: system-ui, sans-serif;
   }
   main {
     display: grid;
-    grid-template: auto minmax(0, 1fr) / 12rem minmax(0, 1fr);
+    grid-template: auto minmax(0, 1fr) / 11rem minmax(0, 3fr) minmax(0, 2fr);
     gap: 0.5rem;
     height: 100vh;
     box-sizing: border-box;
@@ -126,7 +281,7 @@
     align-items: center;
     font-size: 0.9rem;
   }
-  .dir {
+  .message {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -136,13 +291,24 @@
   label input {
     width: 5rem;
   }
+  .title {
+    width: 14rem;
+  }
   nav {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
     overflow: auto;
   }
-  nav button {
+  nav form {
+    display: flex;
+    gap: 0.25rem;
+  }
+  nav form input {
+    min-width: 0;
+    flex: 1;
+  }
+  .ride {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -150,14 +316,21 @@
     border: 1px solid #ccc;
     background: #fff;
     font: inherit;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     cursor: pointer;
   }
-  nav button.selected {
+  .ride.selected {
     border-color: #1f4e79;
     background: #e6eef7;
   }
+  .map,
   .player {
+    min-width: 0;
     min-height: 0;
+    overflow: hidden;
+  }
+  .player p {
+    color: #777;
+    font-size: 0.9rem;
   }
 </style>
