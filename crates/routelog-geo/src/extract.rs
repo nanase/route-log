@@ -270,6 +270,13 @@ impl Prepared {
         graph.on_road(segment.data.0, segment.data.1, t)
     }
 
+    /// 吸着に使う道の辺の総数と、いちばん大きい繋がりに入る辺の数。
+    pub fn road_connectivity(&self) -> (usize, usize) {
+        self.graph
+            .get_or_init(|| Graph::new(&self.data.roads))
+            .connectivity()
+    }
+
     /// その点にいちばん近い、道の上の点。吸着に使える道が `radius_m` 以内に無ければ `None`。
     pub fn snap_point(&self, point: LonLat, radius_m: f64) -> Option<LonLat> {
         let graph = self.graph.get_or_init(|| Graph::new(&self.data.roads));
@@ -1099,6 +1106,21 @@ mod tests {
         ]);
         let line = snapped(data, at(0.0, 0.0), at(1000.0, 0.0)).unwrap();
         assert_eq!(length(&line), 1000.0);
+    }
+
+    #[test]
+    fn roads_that_share_points_form_one_network() {
+        assert_eq!(prepared(roads(corner())).road_connectivity(), (2, 2));
+        // 端の座標がわずかに違う道は、繋がらない。
+        let apart = roads(vec![
+            road(1, vec![at(0.0, 0.0), at(1000.0, 0.0)], vec![national(19)]),
+            road(
+                2,
+                vec![at(1000.0, 0.1), at(1000.0, 1000.0)],
+                vec![prefectural(80)],
+            ),
+        ]);
+        assert_eq!(prepared(apart).road_connectivity(), (2, 1));
     }
 
     #[test]

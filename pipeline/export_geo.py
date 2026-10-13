@@ -127,57 +127,69 @@ def export_roads(kokudo: Path, out: Path, started: float) -> None:
     ways = read_kokudo_ways(kokudo)
     log(started, f"国道マップの way {len(ways):,} 本")
 
-    # pbf を 1 回読む。国道マップの way にはタグを足し、それ以外の道は線形ごと集める。
-    # 足す道は 280 万本あるので、点を Python のリストで持たず、平らな配列に並べる。
-    described: dict[int, tuple[str, int, str, str]] = {}
-    extra_ids: list[int] = []
-    extra_counts: list[int] = []
-    extra_points = array("d")
-    extra_described: list[tuple[str, int, str, str]] = []
+    # pbf を 1 回読み、国道マップの way と、それ以外の道の、線形とタグを集める。
+    #
+    # 線形は、国道マップの way も pbf から取る。国道マップの GeoJSON は座標を小数 6 桁に
+    # 丸めてあり、pbf の 7 桁と合わない。出どころを混ぜると、国道・都道府県道とそれ以外の
+    # 道が交点で同じ座標にならず、吸着が道の種類の境で止まる。
+    #
+    # way は 330 万本あるので、点を Python のリストで持たず、平らな配列に並べる。
+    ids: list[int] = []
+    counts: list[int] = []
+    points = array("d")
+    rows: list[tuple[str, int, str, str]] = []
     reader = osmium.FileProcessor(str(kokudo / "build" / "pbf" / "japan-latest.osm.pbf"))
     for way in reader.with_locations().with_filter(osmium.filter.KeyFilter("highway")):
         if not way.is_way():
             continue
         t = way.tags
-        if way.id in ways:
-            described[way.id] = describe({tag.k: tag.v for tag in t})
-            continue
-        if t["highway"] not in EXTRA_GRADES or t.get("area") == "yes":
-            continue
-        if t.get("access") in NO_ENTRY or t.get("motor_vehicle") in NO_ENTRY:
-            continue
-        before = len(extra_points)
+        if way.id not in ways:
+            if t["highway"] not in EXTRA_GRADES or t.get("area") == "yes":
+                continue
+            if t.get("access") in NO_ENTRY or t.get("motor_vehicle") in NO_ENTRY:
+                continue
+        before = len(points)
         for node in way.nodes:
             if node.location.valid():
-                extra_points.append(node.lon)
-                extra_points.append(node.lat)
-        count = (len(extra_points) - before) // 2
+                points.append(node.lon)
+                points.append(node.lat)
+        count = (len(points) - before) // 2
         if count < 2:
-            del extra_points[before:]
+            del points[before:]
             continue
-        extra_ids.append(way.id)
-        extra_counts.append(count)
-        extra_described.append(describe({tag.k: tag.v for tag in t}))
-    log(started, f"pbf でタグを引けた way {len(described):,} 本、足した道 {len(extra_ids):,} 本")
+        ids.append(way.id)
+        counts.append(count)
+        rows.append(describe({tag.k: tag.v for tag in t}))
+    in_pbf = set(ids)
+    designated = sum(1 for w in ids if w in ways)
+    log(started, f"pbf から読んだ way {len(ids):,} 本（うち国道マップの way {designated:,} 本）")
 
-    ids = sorted(ways)
+    # pbf に無い国道マップの way は、GeoJSON の線形で足す。ほかの道とは繋がらないが、数は少ない。
+    missing = [w for w in sorted(ways) if w not in in_pbf]
+    for w in missing:
+        coords = ways[w]["coords"]
+        for lon, lat in coords:
+            points.append(lon)
+            points.append(lat)
+        ids.append(w)
+        counts.append(len(coords))
+        rows.append(("", 0, "", ""))
+    log(started, f"pbf に無く、国道マップの線形で足した way {len(missing):,} 本")
+
     numeric = lambda refs: ";".join(sorted(refs, key=lambda r: (r.rsplit("-", 1)[0], int(r.rsplit("-", 1)[-1]))))
-    rows = [described.get(w, ("", 0, "", "")) for w in ids] + extra_described
+    of = lambda w, key, default: ways[w][key] if w in ways else default
     # 点の数が way ごとに違うので、平らに並べて、どの way の点かを添える。
-    counts = [len(ways[w]["coords"]) for w in ids] + extra_counts
-    points = np.concatenate([
-        np.concatenate([np.asarray(ways[w]["coords"], dtype=float) for w in ids]),
-        np.frombuffer(extra_points, dtype=float).reshape(-1, 2),
-    ])
-    lines = shapely.linestrings(points, indices=np.repeat(np.arange(len(counts)), counts))
-    plain = len(extra_ids)
+    lines = shapely.linestrings(
+        np.frombuffer(points, dtype=float).reshape(-1, 2),
+        indices=np.repeat(np.arange(len(counts)), counts),
+    )
     write(out / "roads.fgb", "LineString", lines, {
-        "id": np.array(ids + extra_ids, dtype=np.int64),
-        "national": np.array([numeric(ways[w]["national"]) for w in ids] + [""] * plain, dtype=object),
-        "prefectural": np.array([numeric(ways[w]["prefectural"]) for w in ids] + [""] * plain, dtype=object),
-        "kind": np.array([ways[w]["kind"] for w in ids] + ["road"] * plain, dtype=object),
+        "id": np.array(ids, dtype=np.int64),
+        "national": np.array([numeric(of(w, "national", ())) for w in ids], dtype=object),
+        "prefectural": np.array([numeric(of(w, "prefectural", ())) for w in ids], dtype=object),
+        "kind": np.array([of(w, "kind", "road") for w in ids], dtype=object),
         "grade": np.array([r[0] for r in rows], dtype=object),
-        "former": np.array([ways[w]["former"] for w in ids] + [0] * plain, dtype=np.int32),
+        "former": np.array([of(w, "former", 0) for w in ids], dtype=np.int32),
         "motorroad": np.array([r[1] for r in rows], dtype=np.int32),
         "structure": np.array([r[2] for r in rows], dtype=object),
         "structure_name": np.array([r[3] for r in rows], dtype=object),

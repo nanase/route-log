@@ -179,6 +179,44 @@ impl Graph {
         }
     }
 
+    /// 辺の総数と、いちばん大きい繋がりに入る辺の数。
+    ///
+    /// 道路データの繋がり具合を見るのに使う。交点の座標が道ごとにわずかに違うと、道が
+    /// 繋がらず、吸着が道の種類の境で止まる。
+    pub fn connectivity(&self) -> (usize, usize) {
+        let mut group = vec![usize::MAX; self.adjacency.len()];
+        let mut sizes: Vec<usize> = Vec::new();
+        for start in 0..group.len() {
+            if group[start] != usize::MAX {
+                continue;
+            }
+            let id = sizes.len();
+            let mut edges = 0;
+            let mut stack = vec![start];
+            group[start] = id;
+            while let Some(node) = stack.pop() {
+                for &e in &self.adjacency[node] {
+                    let edge = &self.edges[e];
+                    // 辺は、始まりの側の交点で 1 度だけ数える。
+                    if edge.from == node {
+                        edges += 1;
+                    }
+                    let next = if edge.from == node {
+                        edge.to
+                    } else {
+                        edge.from
+                    };
+                    if group[next] == usize::MAX {
+                        group[next] = id;
+                        stack.push(next);
+                    }
+                }
+            }
+            sizes.push(edges);
+        }
+        (self.edges.len(), sizes.into_iter().max().unwrap_or(0))
+    }
+
     /// 道の線分の上の点を、グラフの上の位置にする。`t` は線分の始点からの割合。
     pub fn on_road(&self, road: usize, segment: usize, t: f64) -> Option<OnRoad> {
         let (edge, index) = *self.places.get(road)?.get(segment)?;

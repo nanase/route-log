@@ -100,6 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let prepared = Prepared::new(data, bbox);
     let built = started.elapsed();
+    let (edges, largest) = prepared.road_connectivity();
+    println!(
+        "道の繋がり: 辺 {edges} 本のうち {largest} 本（{:.1}%）が、いちばん大きい繋がりに入る",
+        largest as f64 / edges.max(1) as f64 * 100.0
+    );
+
     // たどった線の上の 2 点を吸着で結び、たどった道のりと比べる。
     let pick = |m: f64| {
         let mut rest = m;
