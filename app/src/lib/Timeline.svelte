@@ -117,6 +117,14 @@
     }),
   );
 
+  /** 停車にしてある時間。動画の帯の下の縁に、細い帯で出す */
+  const stays = $derived(
+    events.flatMap((event) => {
+      const [start, stay] = [event.time_ms, event.detail.stay_ms ?? 0];
+      return event.kind === "stop" && start !== null && stay > 0 ? [{ id: event.id, start, end: start + stay }] : [];
+    }),
+  );
+
   /** 録画停止のうち、外した動画の帯に隠れない所。「停止」と長さは、ここに書く */
   const stops = $derived.by(() => {
     let rest: Gap[] = gaps;
@@ -419,6 +427,14 @@
             </button>
           {/if}
         {/each}
+        <!-- 停車にしてある時間。録画したまま止まっていた間も、ここで見える。 -->
+        {#each stays as stay (stay.id)}
+          {@const left = Math.max(x(stay.start), 0)}
+          {@const right = Math.min(x(stay.end), width)}
+          {#if right > left}
+            <div class="stay-band" style:left="{left}px" style:width="{Math.max(right - left, 2)}px"></div>
+          {/if}
+        {/each}
         <!-- 録画の止まっていた間。右クリックで、停車にするかどうかを切り替える。 -->
         {#each stops as gap (gap.start_ms)}
           {@const left = Math.max(x(gap.start_ms), 0)}
@@ -693,6 +709,17 @@
     line-height: 22px;
     text-align: center;
     white-space: nowrap;
+  }
+  .stay-band {
+    position: absolute;
+    bottom: 0;
+    z-index: 1;
+    box-sizing: border-box;
+    height: 6px;
+    border: 1px solid var(--kind-stop);
+    border-radius: 2px;
+    background: #fff;
+    pointer-events: none;
   }
   /* 停車にした間は、斜線の地を塗りつぶして見分ける。 */
   .stop.stay {

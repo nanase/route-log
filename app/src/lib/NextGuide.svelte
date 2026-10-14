@@ -16,10 +16,12 @@
     nowMs,
     hasVideo,
     canUndo,
+    stopOpen,
     onconfirm,
     onmove,
     onundo,
     onadd,
+    onstop,
   }: {
     /** 次の候補。無ければ null */
     target: RideEvent | null;
@@ -31,10 +33,14 @@
     hasVideo: boolean;
     /** 取り消せる確定があるか */
     canUndo: boolean;
+    /** 始まりだけを入れて、終わりをまだ入れていない停車があるか */
+    stopOpen: boolean;
     onconfirm: () => void;
     onmove: (step: 1 | -1) => void;
     onundo: () => void;
     onadd: () => void;
+    /** 動画のいまの位置を、停車の始まりか終わりにする */
+    onstop: () => void;
   } = $props();
 
   const confirmed = $derived(target?.status === "confirmed");
@@ -114,6 +120,18 @@
       >
         追加<kbd>A</kbd>
       </button>
+      <button
+        type="button"
+        class="btn"
+        class:open={stopOpen}
+        onclick={onstop}
+        disabled={!hasVideo}
+        title={stopOpen
+          ? "いまの位置を、停車の終わりにする"
+          : "いまの位置から停車にする。録画したまま止まっていたときに使う。出るところで、もう一度押す"}
+      >
+        {stopOpen ? "停車おわり" : "停車"}<kbd>S</kbd>
+      </button>
     </div>
   </div>
 </section>
@@ -192,5 +210,12 @@
   .more .btn {
     height: 22px;
     padding: 0 6px;
+  }
+  /* 停車の終わりを待っている間は、押す所が分かるようにする。 */
+  .more .btn.open {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fff;
+    font-weight: 700;
   }
 </style>

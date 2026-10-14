@@ -176,9 +176,10 @@
     query = "";
   }
 
-  // 次の候補が動画に合わせて進んでも、その行が見えているようにする。
+  // 次の候補が動画に合わせて進んでも、その行が見えているようにする。並び直しで行が動いたときも追う。
+  const targetIndex = $derived(shown.findIndex((event) => event.id === targetId));
   $effect(() => {
-    if (targetId === null) return;
+    if (targetId === null || targetIndex < 0) return;
     rows.querySelector(`[data-id="${CSS.escape(targetId)}"]`)?.scrollIntoView({ block: "nearest" });
   });
 </script>
@@ -291,7 +292,10 @@
             {#if warn !== null}
               <span class="warn" title={warn.long}><Icon name="warning" size={13} />{warn.short}</span>
             {/if}
-            {#if event.kind === "stop"}<span class="stay mono">{short(event.detail.stay_ms ?? 0)}</span>{/if}
+            {#if event.kind === "stop"}
+              {@const stay = event.detail.stay_ms ?? 0}
+              <span class="stay mono">{stay > 0 ? short(stay) : "終わり未入力"}</span>
+            {/if}
             {#if target && event.status !== "confirmed"}<span class="next">次</span>{/if}
           </span>
         </button>

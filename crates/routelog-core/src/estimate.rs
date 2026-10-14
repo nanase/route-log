@@ -144,6 +144,23 @@ pub fn position_at(knots: &[Knot], stops: &[Stop], time_ms: i64) -> Option<f64> 
     Some(pair[0].route_m + (pair[1].route_m - pair[0].route_m) * t)
 }
 
+/// 時刻だけが分かっているイベントを置く位置。
+///
+/// 基準の間なら、その時刻にいる位置。最初の基準より前なら最初の基準の位置、最後の基準より後なら
+/// 最後の基準の位置にしておく。どこにいたかは分からないが、一覧では位置の順に並べるので、時刻の
+/// 近い基準のそばに出す。経路の始点に置くと、時刻の離れたイベントの間に紛れる。基準が無ければ `None`。
+fn place_at(knots: &[Knot], stops: &[Stop], time_ms: i64) -> Option<f64> {
+    position_at(knots, stops, time_ms).or_else(|| {
+        let first = knots.iter().min_by_key(|k| k.time_ms)?;
+        let last = knots.iter().max_by_key(|k| k.time_ms)?;
+        Some(if time_ms < first.time_ms {
+            first.route_m
+        } else {
+            last.route_m
+        })
+    })
+}
+
 fn endpoint(kind: EventKind, label: &str, route_m: f64) -> Event {
     Event {
         id: String::new(),
@@ -243,7 +260,7 @@ pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
     let stops = stops(events);
     for event in events.iter_mut() {
         if event.detail.by_time {
-            if let Some(route_m) = event.time_ms.and_then(|t| position_at(&knots, &stops, t)) {
+            if let Some(route_m) = event.time_ms.and_then(|t| place_at(&knots, &stops, t)) {
                 event.route_m = route_m;
             }
         } else if event.status != EventStatus::Confirmed {
@@ -654,6 +671,42 @@ mod tests {
                 ("s", 2000.0, Some(200)),
                 ("y", 3000.0, Some(900)),
                 ("a", 4000.0, Some(1000))
+            ]
+        );
+    }
+
+    #[test]
+    fn an_event_known_by_its_time_outside_the_knots_sits_by_the_nearest_knot() {
+        // 確定してあるのは、出発と 1000 m のトンネルだけ。その後の停車と、出発より前のメモは、
+        // どこにいたかが分からない。経路の始点ではなく、時刻の近い基準の位置に出す。
+        let mut memo = event("memo", EventKind::Custom, 0.0, Some(50));
+        memo.detail.by_time = true;
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(100)),
+                event("x", EventKind::Tunnel, 1000.0, Some(200)),
+                event("y", EventKind::Bridge, 3000.0, None),
+                stop("s", 500, 600),
+                memo,
+            ],
+        );
+        refresh(&mut doc);
+        let order: Vec<_> = doc
+            .events
+            .iter()
+            .map(|e| (e.id.as_str(), e.route_m.round()))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("d", 0.0),
+                ("memo", 0.0),
+                ("x", 1000.0),
+                ("s", 1000.0),
+                ("y", 3000.0),
+                ("", 4000.0)
             ]
         );
     }

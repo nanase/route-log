@@ -72,6 +72,31 @@ export function positionAt(knots: Knot[], stops: Stop[], timeMs: number): number
 }
 
 /**
+ * 時刻だけが分かっているイベントを置く位置（m）。
+ *
+ * 基準の間なら、その時刻にいる位置。基準の外なら、時刻の近いほうの端の基準の位置。基準が無ければ 0。
+ * Rust 側が保存のときに求め直すが、それまでの間も、一覧の正しい所に出すために使う。
+ */
+export function placeOf(events: RideEvent[], timeMs: number): number {
+  const knots = knotsOf(events);
+  const at = positionAt(knots, stopsOf(events), timeMs);
+  if (at !== null) return at;
+  const byTime = [...knots].sort((a, b) => a.time_ms - b.time_ms);
+  if (byTime.length === 0) return 0;
+  return timeMs < byTime[0].time_ms ? byTime[0].route_m : byTime[byTime.length - 1].route_m;
+}
+
+/**
+ * イベントを、位置の順を保って足す。同じ位置のイベントがあれば、その後ろに入れる。
+ *
+ * 末尾に足すと、保存の応答で並び直されるまでの間、一覧の最後に出てしまう。
+ */
+export function insertByPosition(events: RideEvent[], added: RideEvent): RideEvent[] {
+  const index = events.findIndex((event) => event.route_m > added.route_m);
+  return index < 0 ? [...events, added] : [...events.slice(0, index), added, ...events.slice(index)];
+}
+
+/**
  * 次の候補として自動で出すイベント。字幕にしないものと、時刻から置いたものは除く。
  *
  * 字幕にしないものも、人が選べば確定できる。自動では出さないだけである。
@@ -147,18 +172,20 @@ export function setHidden(event: RideEvent, hidden: boolean): RideEvent {
 /**
  * 経由点に時刻を入れるためのイベントを作る。字幕にはしない。
  *
- * 位置と名前は、Rust 側が経由点から決める。
+ * `index` は経由点の番号、`routeM` は経路の始点からの距離。位置と名前は、Rust 側が保存のときに
+ * 経由点から決め直す。ここでも入れておくのは、それまでの間も、一覧の正しい所に正しい名前で出すため。
  */
-export function waypointEvent(at: LonLat): RideEvent {
+export function waypointEvent(at: LonLat, index: number, routeM: number): RideEvent {
+  const label = `経由点 ${index + 1}`;
   return {
     id: crypto.randomUUID(),
     kind: "waypoint",
-    label: "",
-    route_m: 0,
+    label,
+    route_m: routeM,
     time_ms: null,
     status: "estimated",
     hidden: true,
-    detail: { at },
+    detail: { at, extracted_label: label },
   };
 }
 
@@ -186,6 +213,24 @@ export function stopBetween(startMs: number, endMs: number, clockOffsetMs: numbe
     hidden: true,
     detail: { by_time: true, camera_ms: start - Math.round(clockOffsetMs), stay_ms: Math.round(endMs) - start },
   };
+}
+
+/** 始まりだけを入れて、終わりをまだ入れていない停車。無ければ null。 */
+export function openStop(events: RideEvent[]): RideEvent | null {
+  return events.find((event) => event.kind === "stop" && event.time_ms !== null && (event.detail.stay_ms ?? 0) <= 0) ?? null;
+}
+
+/**
+ * 始まりだけを入れた停車に、動画のいまの位置でもう一方の端を入れる。
+ *
+ * いまの位置が始まりより前なら、いまの位置を始まりにして、元の始まりを終わりにする。
+ */
+export function closeStop(event: RideEvent, realMs: number, clockOffsetMs: number): RideEvent {
+  const [first, now] = [event.time_ms, Math.round(realMs)];
+  if (first === null || now === first) return event;
+  if (now > first) return { ...event, detail: { ...event.detail, stay_ms: now - first } };
+  const detail = { ...event.detail, camera_ms: now - Math.round(clockOffsetMs), stay_ms: first - now };
+  return { ...event, time_ms: now, detail };
 }
 
 /**

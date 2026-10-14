@@ -7,12 +7,16 @@
   import EventList from "./lib/EventList.svelte";
   import {
     confirmOnVideo,
+    closeStop,
     customAt,
     defaultTarget,
+    insertByPosition,
     knotsOf,
     neighbor,
     nextConfirmable,
+    openStop,
     patch,
+    placeOf,
     positionAt,
     setHidden,
     stopBetween,
@@ -32,7 +36,7 @@
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
   import RidePanel from "./lib/RidePanel.svelte";
-  import { line, type Path, type PathEdit } from "./lib/route";
+  import { line, type Path, type PathEdit, segmentLengths } from "./lib/route";
   import RouteMap from "./lib/RouteMap.svelte";
   import RouteSide from "./lib/RouteSide.svelte";
   import RouteTools from "./lib/RouteTools.svelte";
@@ -640,9 +644,13 @@
       return;
     }
     const at: LonLat = [waypoint.lon, waypoint.lat];
-    const made = waypointEvent(at);
+    // 位置の順の所に足す。末尾に足すと、保存の応答で並び直すまでの間、一覧が最後まで送られてしまう。
+    const routeM = segmentLengths(doc ?? EMPTY)
+      .slice(0, index)
+      .reduce((sum, length) => sum + length, 0);
+    const made = waypointEvent(at, index, routeM);
     chosenId = made.id;
-    void editEvents((current) => (waypointEventAt(current, at) === null ? [...current, made] : current));
+    void editEvents((current) => (waypointEventAt(current, at) === null ? insertByPosition(current, made) : current));
   }
 
   /**
@@ -652,7 +660,26 @@
    */
   function addStop(startMs: number, endMs: number) {
     const stop = stopBetween(startMs, endMs, clockOffsetMs);
-    return editEvents((current) => [...current, stop]);
+    return editEvents((current) => insertByPosition(current, { ...stop, route_m: placeOf(current, startMs) }));
+  }
+
+  /**
+   * 動画のいまの位置を、停車の始まりにする。始まりだけを入れた停車があれば、その終わりにする。
+   *
+   * 給油のように、録画したまま止まっていた間を停車にするのに使う。
+   */
+  function markStop() {
+    const realMs = videoNow();
+    if (realMs === null || doc === null) return;
+    const [open, offsetMs] = [openStop(events), clockOffsetMs];
+    if (open !== null) {
+      void editEvents((current) => patch(current, open.id, (event) => closeStop(event, realMs, offsetMs)));
+      tell("停車の終わりを入れました");
+      return;
+    }
+    const stop = stopBetween(realMs, realMs, offsetMs);
+    void editEvents((current) => insertByPosition(current, { ...stop, route_m: placeOf(current, realMs) }));
+    tell("停車の始まりを入れました。出るところまで動画を進めて、もう一度押します");
   }
 
   const removeEvent = (id: string) => editEvents((current) => current.filter((event) => event.id !== id));
@@ -762,7 +789,7 @@
     // 足したら、すぐ名前を付けられるように、直す欄を開く。
     chosenId = custom.id;
     selectedId = custom.id;
-    void editEvents((current) => [...current, custom]);
+    void editEvents((current) => insertByPosition(current, { ...custom, route_m: placeOf(current, realMs) }));
   }
 
   /** 次の候補を隣のイベントへ移し、動画をその時刻へ動かす。 */
@@ -804,6 +831,7 @@
       else if (key === "p") move(-1);
       else if (key === "backspace") undoConfirm();
       else if (key === "a") addCustom();
+      else if (key === "s") markStop();
       else return;
     }
     event.preventDefault();
@@ -1297,10 +1325,12 @@
         {nowMs}
         hasVideo={timeline !== null}
         canUndo={confirmedOnVideo.length > 0}
+        stopOpen={openStop(events) !== null}
         onconfirm={confirmTarget}
         onmove={move}
         onundo={undoConfirm}
         onadd={addCustom}
+        onstop={markStop}
       />
       <EventList
         {events}

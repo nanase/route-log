@@ -208,6 +208,12 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   app.setMode("confirm");
   await sleep(500);
   map.clickHandle(middle);
+  // 足したイベントが、保存の応答を待つ間も、一覧の正しい所（到着より前）にあることを見る。
+  const placed: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    placed.push(app.events().map((e) => e.kind).join(" "));
+    await sleep(15);
+  }
   await sleep(300);
   await app.settled();
   const chosen = targetLabel();
@@ -218,7 +224,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   note(
     "経路の途中に経由点を足し、時刻入力の画面で地図のその丸を押して、Enter",
     `経由点 2 が次の候補になり、${clock(start + 460_000)} で確定する。字幕なしのまま。動画は、丸を押しても動かない`,
-    { chosen, waypoint: find("waypoint"), handles: map.snapshot().handles },
+    { chosen, waypoint: find("waypoint"), handles: map.snapshot().handles, placed: [...new Set(placed)] },
   );
 
   // 字幕なしにしても、確定した時刻は残る。一覧の行を開いて、切り替えのボタンを押す。
@@ -349,6 +355,36 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
     stops: app.timeline()?.snapshot().stops,
   });
 
+  // 録画したまま止まっていた間。動画の位置で S を押して始まりを入れ、進めてもう一度押して終わりを入れる。
+  const stopButton = () => text(".side > section .more .btn:last-child");
+  const pauseAt = (from?.time_ms ?? start) + 120_000;
+  await player.seek(pauseAt);
+  await sleep(1500);
+  const buttonBefore = stopButton();
+  key("s");
+  await sleep(200);
+  await app.settled();
+  const opened = { button: stopButton(), stop: find("stop"), bridge: estimate(), message: app.message() };
+  await player.seek(pauseAt + 600_000);
+  await sleep(1500);
+  key("s");
+  await sleep(200);
+  await app.settled();
+  note(
+    "経由点の 2 分後で S、その 10 分後でもう一度 S",
+    `1 度目で、始まりが ${clock(pauseAt)} の停車ができ、ボタンが「停車おわり」に変わる。終わりを入れるまで推定は変わらない。2 度目で長さが 10 分になる。橋は停車より先にあるので、推定が遅くなる`,
+    {
+      buttonBefore,
+      opened,
+      button: stopButton(),
+      stop: find("stop"),
+      bridge: estimate(),
+      message: app.message(),
+      order: app.events().map((e) => `${e.kind} ${(e.route_m / 1000).toFixed(2)}`),
+    },
+  );
+  const paused = await invoke<string>("capture_check", { name: "paused" }).catch((e) => `写せない: ${e}`);
+
   // 動画の無い走行。動画の無い日付の走行を作り、経路を引いて、時刻を一覧で手で入れる。
   const errors: string[] = [];
   const caught = (event: ErrorEvent | PromiseRejectionEvent) =>
@@ -420,5 +456,5 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   window.removeEventListener("error", caught);
   window.removeEventListener("unhandledrejection", caught);
 
-  return { steps, transport, captures: [next, captured, bulk, wide, stopMenu, stopped, empty, filled], csv, message: exported };
+  return { steps, transport, captures: [next, captured, bulk, wide, stopMenu, stopped, paused, empty, filled], csv, message: exported };
 }

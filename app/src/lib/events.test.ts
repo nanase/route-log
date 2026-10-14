@@ -9,6 +9,10 @@ import {
   nextConfirmable,
   patch,
   positionAt,
+  closeStop,
+  insertByPosition,
+  openStop,
+  placeOf,
   retimeStop,
   setHidden,
   stopBetween,
@@ -163,8 +167,9 @@ describe("確定", () => {
   });
 
   test("経由点のイベントは、字幕にしないものとして作り、位置で見分ける", () => {
-    const made = waypointEvent([138.5, 36.5]);
-    expect(made).toMatchObject({ kind: "waypoint", status: "estimated", hidden: true, detail: { at: [138.5, 36.5] } });
+    const made = waypointEvent([138.5, 36.5], 2, 700);
+    expect(made).toMatchObject({ kind: "waypoint", status: "estimated", hidden: true, label: "経由点 3", route_m: 700 });
+    expect(made.detail).toEqual({ at: [138.5, 36.5], extracted_label: "経由点 3" });
     const events = [event("x", 500, "estimated"), made];
     expect(waypointEventAt(events, [138.5, 36.5])?.id).toBe(made.id);
     expect(waypointEventAt(events, [138.5, 36.6])).toBeNull();
@@ -176,6 +181,31 @@ describe("確定", () => {
     expect(stop.detail).toEqual({ by_time: true, camera_ms: 70_000, stay_ms: 300_000 });
     expect(stopsOf([event("x", 500, "estimated"), stop])).toEqual([{ start_ms: 100_000, end_ms: 400_000 }]);
     expect(knotsOf([stop])).toEqual([]);
+  });
+
+  test("始まりだけを入れた停車は、動画の位置で終わりを入れる", () => {
+    const open = stopBetween(100_000, 100_000, 30_000);
+    expect(openStop([event("x", 500, "estimated"), open])?.id).toBe(open.id);
+    // 終わりが無いうちは、停車として数えない。
+    expect(stopsOf([open])).toEqual([]);
+    const closed = closeStop(open, 700_000.4, 30_000);
+    expect([closed.time_ms, closed.detail.stay_ms, closed.detail.camera_ms]).toEqual([100_000, 600_000, 70_000]);
+    expect(openStop([closed])).toBeNull();
+    // 始まりより前の位置で押したら、そこを始まりにする。
+    const backwards = closeStop(open, 40_000, 30_000);
+    expect([backwards.time_ms, backwards.detail.stay_ms, backwards.detail.camera_ms]).toEqual([40_000, 60_000, 10_000]);
+    expect(closeStop(open, 100_000, 30_000)).toBe(open);
+  });
+
+  test("足すイベントは、位置の順の所に入る", () => {
+    const events = [event("d", 0, "confirmed", 0), event("x", 500, "confirmed", 50), event("y", 800, "estimated"), event("a", 1000, "estimated")];
+    const order = (added: RideEvent) => insertByPosition(events, added).map((e) => e.id);
+    expect(order(event("n", 600, "estimated"))).toEqual(["d", "x", "n", "y", "a"]);
+    expect(order(event("n", 500, "estimated"))).toEqual(["d", "x", "n", "y", "a"]);
+    expect(order(event("n", 2000, "estimated"))).toEqual(["d", "x", "y", "a", "n"]);
+    // 時刻だけが分かっているものは、基準の間ならその位置、外なら時刻の近い基準の位置に置く。
+    expect([placeOf(events, 25_000), placeOf(events, 90_000), placeOf(events, -5)]).toEqual([250, 500, 0]);
+    expect(placeOf([], 0)).toBe(0);
   });
 
   test("停車の始まりと終わりは、もう一方を動かさずに直せる", () => {
