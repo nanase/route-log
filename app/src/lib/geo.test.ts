@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { distanceM, pointAt } from "./geo";
+import { distanceM, nearestOn, pointAt } from "./geo";
 import type { LonLat } from "./types";
 
 const A: LonLat = [138, 36];
@@ -25,4 +25,21 @@ test("線の外は端に寄せ、線が無ければ null", () => {
   expect(pointAt([A, B], 1e9)).toEqual(B);
   expect(pointAt([A], 100)).toEqual(A);
   expect(pointAt([], 100)).toBeNull();
+});
+
+const east = (m: number): LonLat => [m / 111_195.08, 0];
+
+test("線にいちばん近い所を、始点からの距離で返す", () => {
+  const near = nearestOn([east(0), east(2000)], [east(1000)[0], 30 / 111_195.08], 0)!;
+  expect(near.routeM).toBeCloseTo(1000, 0);
+  expect(near.offM).toBeCloseTo(30, 0);
+  expect(near.at[1]).toBe(0);
+  expect(nearestOn([east(0), east(2000)], east(2500), 0)!.routeM).toBeCloseTo(2000, 0);
+  expect(nearestOn([], east(0), 0)).toBeNull();
+});
+
+test("行って戻る道では、目安の距離に近いほうを選ぶ", () => {
+  const line = [east(0), east(1000), east(0)];
+  expect(nearestOn(line, east(600), 300)!.routeM).toBeCloseTo(600, 0);
+  expect(nearestOn(line, east(600), 1800)!.routeM).toBeCloseTo(1400, 0);
 });

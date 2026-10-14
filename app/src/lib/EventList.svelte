@@ -1,6 +1,6 @@
 <script lang="ts">
   import EventName from "./EventName.svelte";
-  import { confirmTyped, inStop, retimeStop, setHidden, stopsOf, unconfirm } from "./events";
+  import { asideOf, confirmTyped, inStop, retimeStop, setHidden, stopsOf, unconfirm, unpinStop } from "./events";
   import Icon from "./Icon.svelte";
   import { KIND_ORDER, KINDS } from "./kinds";
   import KindTag from "./KindTag.svelte";
@@ -23,10 +23,12 @@
     conflicts,
     gaps,
     rideDate,
+    placingId,
     onselect,
     onchange,
     onhide,
     onremove,
+    onplace,
     onextract,
   }: {
     events: RideEvent[];
@@ -40,11 +42,15 @@
     gaps: Gap[];
     /** 手で入れた時刻に付ける日付。`YYYY-MM-DD` */
     rideDate: string;
+    /** 地図で場所を決めている停車 */
+    placingId: string | null;
     onselect: (event: RideEvent) => void;
     onchange: (id: string, change: (event: RideEvent) => RideEvent) => void;
     /** 選んだイベントを、まとめて字幕なし（`hidden` が真）か字幕ありにする */
     onhide: (ids: string[], hidden: boolean) => void;
     onremove: (id: string) => void;
+    /** 停車の場所を、地図で決め始める。null なら、やめる */
+    onplace: (id: string | null) => void;
     /** 抽出し直す。判定用データを開いていなければ null */
     onextract: (() => void) | null;
   } = $props();
@@ -95,6 +101,8 @@
   const narrowed = $derived(filter !== "all" || kinds.length > 0 || query.trim() !== "");
   /** 停車にしてある時間。推定時刻がここに入るのは、止まった場所そのものなので、警告しない */
   const stays = $derived(stopsOf(events));
+  /** 停車の間に確定したのに、停車の場所と位置が合わないイベント */
+  const aside = $derived(asideOf(events));
   /** チェックを入れていて、いまもあるイベント。抽出し直して消えたものは数えない */
   const picked = $derived(events.filter((event) => checked.has(event.id)).map((event) => event.id));
   /** 出している行に、チェックがいくつ入っているか */
@@ -140,6 +148,12 @@
   const release = (input: HTMLInputElement) => input.blur();
 
   function warning(event: RideEvent): { short: string; long: string } | null {
+    if (aside.includes(event.id)) {
+      return {
+        short: "停車の場所と合いません",
+        long: "停車の間に確定した時刻ですが、停車の場所と位置が違います。時刻の推定には使いません",
+      };
+    }
     if (conflicts.includes(event.id)) {
       return { short: "時刻の順が合いません", long: "位置の順と時刻の順が合いません" };
     }
@@ -328,6 +342,21 @@
                   />
                 </label>
               {/each}
+              <div class="place">
+                場所
+                {#if placingId === event.id}
+                  <span class="fine">地図で、経路の上を押します</span>
+                  <button type="button" class="btn" onclick={() => onplace(null)}>やめる</button>
+                {:else}
+                  <span class="fine">{event.detail.at === undefined ? "前後の時刻から推定" : "地図で決めた所"}</span>
+                  <button type="button" class="btn" onclick={() => onplace(event.id)}>
+                    {event.detail.at === undefined ? "地図で決める" : "決め直す"}
+                  </button>
+                  {#if event.detail.at !== undefined}
+                    <button type="button" class="btn" onclick={() => onchange(event.id, unpinStop)}>推定に戻す</button>
+                  {/if}
+                {/if}
+              </div>
             {:else}
             <label>
               時刻
@@ -634,6 +663,16 @@
   }
   .edit .label {
     width: 132px;
+  }
+  .place {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-2);
+    font-size: 12px;
+  }
+  .place .fine {
+    color: var(--ink-3);
   }
   .buttons {
     display: flex;

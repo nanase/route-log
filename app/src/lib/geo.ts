@@ -28,3 +28,43 @@ export function pointAt(line: LonLat[], routeM: number): LonLat | null {
   }
   return line[line.length - 1];
 }
+
+/** 同じ近さとみなす差（m）。行って戻る道では、近さの同じ所が 2 つある。 */
+const TIE_M = 1;
+
+/**
+ * 折れ線の上で `at` にいちばん近い所。その点と、始点からの距離（m）と、`at` からの距離（m）。
+ *
+ * 同じ道を行って戻る経路では、同じ近さの所がいくつもある。そのときは、始点からの距離が `nearM`
+ * に近いほうを選ぶ。線が無ければ null。Rust 側（routelog-core の geo）の `nearest_m` と同じ決まりである。
+ */
+export function nearestOn(
+  line: LonLat[],
+  at: LonLat,
+  nearM: number,
+): { at: LonLat; routeM: number; offM: number } | null {
+  if (line.length === 0) return null;
+  // 近くだけを見るので、`at` を原点にした平面に直して測る。
+  const scale = (EARTH_RADIUS_M * Math.PI) / 180;
+  const shrink = Math.cos(radians(at[1]));
+  const flat = (p: LonLat) => [(p[0] - at[0]) * scale * shrink, (p[1] - at[1]) * scale];
+  const found = [{ at: line[0], routeM: 0, offM: distanceM(line[0], at) }];
+  let walked = 0;
+  for (let i = 1; i < line.length; i++) {
+    const [from, to] = [line[i - 1], line[i]];
+    const [[ax, ay], [bx, by]] = [flat(from), flat(to)];
+    const length2 = (bx - ax) ** 2 + (by - ay) ** 2;
+    const t = length2 === 0 ? 0 : Math.min(1, Math.max(0, -(ax * (bx - ax) + ay * (by - ay)) / length2));
+    const length = distanceM(from, to);
+    found.push({
+      at: [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t],
+      routeM: walked + length * t,
+      offM: Math.hypot(ax + (bx - ax) * t, ay + (by - ay) * t),
+    });
+    walked += length;
+  }
+  const best = Math.min(...found.map((f) => f.offM));
+  return found
+    .filter((f) => f.offM <= best + TIE_M)
+    .reduce((a, b) => (Math.abs(b.routeM - nearM) < Math.abs(a.routeM - nearM) ? b : a));
+}

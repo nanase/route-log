@@ -5,7 +5,7 @@
   import "maplibre-gl/dist/maplibre-gl.css";
   import { Protocol } from "pmtiles";
   import { onMount, untrack } from "svelte";
-  import { distanceM } from "./geo";
+  import { distanceM, nearestOn } from "./geo";
   import Icon from "./Icon.svelte";
   import { KIND_MARKS, KIND_ORDER } from "./kinds";
   import KindTag from "./KindTag.svelte";
@@ -39,7 +39,7 @@
    * - 経由点をクリックすると選び、結び方の切り替えと削除のボタンをそばに出す
    *
    * `editable` でなければ、経路は見るだけになる。時刻入力のときに使う。経由点の丸は小さく出し、
-   * 押すと `onwaypoint` に知らせる。
+   * 押すと `onwaypoint` に知らせる。`placing` があれば、経路の上を押して停車の場所を決める。
    *
    * 操作の結果は、変えた後の経路ではなく、経路に当てる編集（`PathEdit`）として `onedit` に渡す。
    * 点を道へ寄せるのを待つ間に、次の操作や保存の応答で経路が変わるからである。
@@ -59,10 +59,12 @@
     canSnap = false,
     selected = null,
     timed = [],
+    placing = null,
     pad = { top: 60, right: 60, bottom: 60, left: 60 },
     onsnap,
     onselect,
     onwaypoint,
+    onplace,
     onedit,
   }: {
     path: Path;
@@ -89,6 +91,11 @@
     selected?: number | null;
     /** 通過時刻を確定してある経由点の番号。見るだけのときに、丸を確定の色にする */
     timed?: number[];
+    /**
+     * 停車の場所を決めているときの、その停車のいまの位置（m）。決めていなければ null。
+     * 同じ道を行って戻る経路で、どちらの通過かを選ぶ目安にする。
+     */
+    placing?: number | null;
     /** 浮かせた板に隠れる幅（px）。経路の全体を出すときに、ここを避ける */
     pad?: { top: number; right: number; bottom: number; left: number };
     /** 点を、`radiusM` 以内でいちばん近い道の上へ寄せる。近くに道が無ければ null を返す */
@@ -96,6 +103,8 @@
     onselect?: (index: number | null) => void;
     /** 見るだけのときに、経由点の丸を押した */
     onwaypoint?: (index: number) => void;
+    /** 停車の場所を決めた。`at` は経路の上の点、`routeM` はその始点からの距離 */
+    onplace?: (at: LonLat, routeM: number) => void;
     /**
      * 経路を変える操作を、した順に 1 つずつ経路に入れてもらう。
      *
@@ -171,6 +180,35 @@
 
   /** 線の上とみなす、線からの距離（画面上の px） */
   const ON_LINE_PX = 8;
+  /** 停車の場所として受け付ける、押した所から経路までの距離（画面上の px） */
+  const PLACE_PX = 24;
+
+  /** 画面上の点にいちばん近い、経路の上の点。経路から離れすぎていれば null。 */
+  function placeNear(point: maplibregl.Point) {
+    if (map === undefined || placing === null) return null;
+    const found = nearestOn(line(path), map.unproject(point).toArray(), placing);
+    return found !== null && map.project(found.at).dist(point) <= PLACE_PX ? found : null;
+  }
+
+  let previewMarker: maplibregl.Marker | undefined;
+
+  /** 押せば停車の場所になる点を、カーソルのそばの経路の上に出す。 */
+  function preview(found: { at: LonLat } | null) {
+    if (map === undefined) return;
+    map.getCanvas().style.cursor = found === null ? "" : "crosshair";
+    if (found === null) {
+      previewMarker?.remove();
+      previewMarker = undefined;
+      return;
+    }
+    if (previewMarker === undefined) {
+      const element = document.createElement("div");
+      element.className = "place-preview";
+      previewMarker = new maplibregl.Marker({ element }).setLngLat(found.at).addTo(map);
+    } else {
+      previewMarker.setLngLat(found.at);
+    }
+  }
 
   /** クリックした位置が経路の線の上なら、その線の区切り。 */
   function pieceAt(at: LonLat) {
@@ -355,7 +393,14 @@
         const state = timed.includes(index) ? "fixed timed" : "fixed";
         const title = `経由点 ${index + 1}。押すと、ここを通った時刻を入力できます`;
         const fixed = handle(`${waypointClass(index)} ${state}`, [waypoint.lon, waypoint.lat], String(index + 1), title);
-        fixed.onclick(() => onwaypoint?.(index));
+        fixed.onclick(() => {
+          if (placing === null) {
+            onwaypoint?.(index);
+            return;
+          }
+          const found = nearestOn(line(current), [waypoint.lon, waypoint.lat], placing);
+          if (found !== null) onplace?.(found.at, found.routeM);
+        });
       });
       return;
     }
@@ -526,7 +571,11 @@
       ready = true;
     });
     created.on("click", (event) => {
-      if (!editable) return;
+      if (!editable) {
+        const found = placeNear(event.point);
+        if (found !== null) onplace?.(found.at, found.routeM);
+        return;
+      }
       // 押した所と、そのときの寄せる範囲と結び方を覚えておき、順番が来たら経路に入れる。
       const clicked = event.lngLat.toArray();
       const [radiusM, snapping] = [snapRadiusM(clicked), snap];
@@ -535,6 +584,10 @@
     // 線の上では、押すと経由点が足されることをカーソルで知らせる。
     // 動かすたびに線の区切りを総当たりすると、長い経路で重い。描かれた線に当たるかだけを見る。
     created.on("mousemove", (event) => {
+      if (!editable && placing !== null) {
+        preview(placeNear(event.point));
+        return;
+      }
       const { x, y } = event.point;
       const box: [[number, number], [number, number]] = [
         [x - ON_LINE_PX, y - ON_LINE_PX],
@@ -556,6 +609,10 @@
       created.remove();
       maplibregl.removeProtocol("pmtiles");
     };
+  });
+
+  $effect(() => {
+    if (placing === null) untrack(() => preview(null));
   });
 
   // 時刻を確定してある経由点の並び。配列は保存のたびに作り直されるので、中身で比べる。
@@ -771,6 +828,13 @@
     return waypoints.map((marker) => marker.getLngLat().toArray());
   }
 
+  /** 地図の `at` の所を押したことにする。経由点の丸の上でも、丸ではなく地図を押す。 */
+  export function clickMap(at: LonLat) {
+    if (map === undefined) return;
+    const point = map.project(at);
+    map.fire("click", { point, lngLat: map.unproject(point), originalEvent: new MouseEvent("click") });
+  }
+
   /** `at` にいちばん近い丸をクリックしたことにする。 */
   export function clickHandle(at: LonLat) {
     if (map === undefined || markers.length === 0) return;
@@ -961,6 +1025,15 @@
   }
   .map :global(.handle.middle:hover) {
     opacity: 1;
+  }
+  .map :global(.place-preview) {
+    box-sizing: border-box;
+    width: 16px;
+    height: 16px;
+    border: 3px solid var(--kind-stop);
+    border-radius: 50%;
+    background: #fff;
+    pointer-events: none;
   }
   .map :global(.here) {
     box-sizing: border-box;

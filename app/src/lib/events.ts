@@ -19,10 +19,51 @@ export interface Stop {
   end_ms: number;
 }
 
-const isKnot = (event: RideEvent) => event.status === "confirmed" && event.time_ms !== null && !event.detail.by_time;
+/** 停車の間に確定した時刻のうち、停車の場所からこれ以内のものは、停車の場所にいたものとみなす（m） */
+const STOP_NEAR_M = 30;
 
+/** 位置と時刻の組として確定したイベントか。場所を地図で決めた停車も含む。 */
+const isKnot = (event: RideEvent) => event.status === "confirmed" && event.time_ms !== null && !event.detail.by_time;
+const stays = (event: RideEvent) => (event.detail.stay_ms ?? 0) > 0;
+
+/**
+ * 確定したイベントから、時刻推定の基準を作る。Rust 側（routelog-core の estimate）の `settle` と
+ * 同じ決まりである。
+ *
+ * 停車は、場所が分かれば、着いた時刻と出た時刻の 2 つの基準になる。場所は、地図で決めてあれば
+ * そこ、無ければ停車の間に確定した最初のイベントの位置にする。停車の間に確定した他のイベントは
+ * 基準にしない。停車の場所から離れたものは、`aside` に返す。
+ */
+function settle(events: RideEvent[]): { knots: Knot[]; aside: string[] } {
+  let plain = events
+    .filter((event) => isKnot(event) && !(event.kind === "stop" && stays(event)))
+    .map((event) => ({ id: event.id, route_m: event.route_m, time_ms: event.time_ms as number }))
+    .sort((a, b) => a.time_ms - b.time_ms);
+  const [knots, aside]: [Knot[], string[]] = [[], []];
+  for (const span of mergedStops(stopsOf(events))) {
+    const within = (timeMs: number) => span.start_ms <= timeMs && timeMs <= span.end_ms;
+    const pinned = events
+      .filter((event) => event.kind === "stop" && isKnot(event) && stays(event) && within(event.time_ms as number))
+      .sort((a, b) => (a.time_ms as number) - (b.time_ms as number))[0];
+    const inside = plain.filter((knot) => within(knot.time_ms));
+    plain = plain.filter((knot) => !within(knot.time_ms));
+    const placeM = pinned?.route_m ?? inside[0]?.route_m;
+    if (placeM === undefined) continue;
+    for (const knot of inside) if (Math.abs(knot.route_m - placeM) > STOP_NEAR_M) aside.push(knot.id);
+    knots.push({ route_m: placeM, time_ms: span.start_ms }, { route_m: placeM, time_ms: span.end_ms });
+  }
+  knots.push(...plain.map(({ route_m, time_ms }) => ({ route_m, time_ms })));
+  return { knots: knots.sort((a, b) => a.route_m - b.route_m || a.time_ms - b.time_ms), aside };
+}
+
+/** 時刻推定の基準を、位置の順に並べる。 */
 export function knotsOf(events: RideEvent[]): Knot[] {
-  return events.filter(isKnot).map((event) => ({ route_m: event.route_m, time_ms: event.time_ms as number }));
+  return settle(events).knots;
+}
+
+/** 停車の間に確定したのに、停車の場所と位置が合わないので、時刻推定の基準にしていないイベントの ID。 */
+export function asideOf(events: RideEvent[]): string[] {
+  return settle(events).aside;
 }
 
 /** 停車のイベントを、停車していた時間の並びにする。 */
@@ -31,6 +72,17 @@ export function stopsOf(events: RideEvent[]): Stop[] {
     const [start, stay] = [event.time_ms, event.detail.stay_ms ?? 0];
     return event.kind === "stop" && start !== null && stay > 0 ? [{ start_ms: start, end_ms: start + stay }] : [];
   });
+}
+
+/** 停車を始まりの順に並べ、重なるものを 1 つにまとめる。 */
+function mergedStops(stops: Stop[]): Stop[] {
+  const merged: Stop[] = [];
+  for (const stop of [...stops].sort((a, b) => a.start_ms - b.start_ms)) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && stop.start_ms <= last.end_ms) last.end_ms = Math.max(last.end_ms, stop.end_ms);
+    else merged.push({ ...stop });
+  }
+  return merged;
 }
 
 /** その時刻が、停車の間か。始まりと終わりの時刻も、停車の間に数える。 */
@@ -247,6 +299,23 @@ export function retimeStop(event: RideEvent, edge: "start" | "end", timeMs: numb
   // 手で入れた始まりの時刻は、カメラの時刻を持たない。時計の補正値を変えても動かない。
   const { camera_ms: _, ...detail } = event.detail;
   return { ...event, time_ms: start, detail: { ...detail, stay_ms: until - start } };
+}
+
+/**
+ * 停車の場所を、地図で決めた所にする。`at` は経路の上の点、`routeM` はその始点からの距離。
+ *
+ * 場所を決めた停車は、着いた時刻と出た時刻の基準になる。前後の時刻から位置を求めると、止まる前後の
+ * 遅い所を一定の速さで走ったものとするので、実際より先に出やすい。
+ */
+export function pinStop(event: RideEvent, at: LonLat, routeM: number): RideEvent {
+  const { by_time: _, ...detail } = event.detail;
+  return { ...event, route_m: routeM, detail: { ...detail, at } };
+}
+
+/** 地図で決めた停車の場所を捨てて、前後の確定した時刻から位置を求める形に戻す。 */
+export function unpinStop(event: RideEvent): RideEvent {
+  const { at: _, ...detail } = event.detail;
+  return { ...event, detail: { ...detail, by_time: true } };
 }
 
 /** 動画のいまの位置に、手動のイベントを作る。位置は Rust 側が時刻から求める。 */

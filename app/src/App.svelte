@@ -16,6 +16,7 @@
     nextConfirmable,
     openStop,
     patch,
+    pinStop,
     placeOf,
     positionAt,
     setHidden,
@@ -155,7 +156,9 @@
   let chosenId = $state<string | null>(null);
   /** 一覧で、直す欄を開いているイベント */
   let selectedId = $state<string | null>(null);
-  /** 位置が先なのに時刻が後になっている、確定済みのイベントの ID */
+  /** 地図で場所を決めている停車 */
+  let placingId = $state<string | null>(null);
+  /** 時刻の合わない、確定済みのイベントの ID */
   let conflicts = $state<string[]>([]);
   /** 動画を見て確定したイベントの ID。Backspace で新しい順に戻す */
   let confirmedOnVideo = $state.raw<string[]>([]);
@@ -684,6 +687,20 @@
 
   const removeEvent = (id: string) => editEvents((current) => current.filter((event) => event.id !== id));
 
+  /** 地図で場所を決めている停車。消えたか、時刻入力を離れたら、決めるのをやめる */
+  const placing = $derived(
+    mode === "confirm" ? (events.find((event) => event.id === placingId && event.kind === "stop") ?? null) : null,
+  );
+
+  /** 地図で押した経路の上の点を、停車の場所にする。 */
+  function placeStop(at: LonLat, routeM: number) {
+    const id = placing?.id;
+    placingId = null;
+    if (id === undefined) return;
+    void editEvents((current) => patch(current, id, (event) => pinStop(event, at, routeM)));
+    tell("停車の場所を決めました");
+  }
+
   /** まとめて選んだイベントを、字幕なし（`hidden` が真）か字幕ありにする。 */
   function hideEvents(ids: string[], hidden: boolean) {
     return editEvents((current) => current.map((event) => (ids.includes(event.id) ? setHidden(event, hidden) : event)));
@@ -819,6 +836,7 @@
       else if (key === "y" || (key === "z" && event.shiftKey)) void redo();
       else return;
     } else if (key === "escape") {
+      placingId = null;
       selectedWaypoint = null;
       focusedId = null;
       selectedId = null;
@@ -1215,10 +1233,12 @@
         canSnap={geoReady}
         selected={selectedWaypoint}
         timed={timedWaypoints}
+        placing={placing?.route_m ?? null}
         {pad}
         onsnap={(at, radiusM) => invoke<[number, number] | null>("snap_point", { point: at, radiusM })}
         onselect={(index) => (selectedWaypoint = index)}
         onwaypoint={chooseWaypoint}
+        onplace={placeStop}
         onedit={editPath}
       />
       <div class="overlay">
@@ -1283,6 +1303,12 @@
             </div>
           {:else}
             <label class="follow float"><input type="checkbox" bind:checked={follow} />現在位置を追う</label>
+            {#if placing !== null}
+              <div class="placing float" role="status">
+                停車した場所を、経路の上で押します
+                <button type="button" class="btn" onclick={() => (placingId = null)}>やめる Esc</button>
+              </div>
+            {/if}
           {/if}
         </div>
       </div>
@@ -1339,10 +1365,12 @@
         {conflicts}
         gaps={timeline?.gaps ?? []}
         rideDate={date ?? ""}
+        placingId={placing?.id ?? null}
         onselect={selectEvent}
         onchange={(id, change) => editEvents((current) => patch(current, id, change))}
         onhide={hideEvents}
         onremove={removeEvent}
+        onplace={(id) => (placingId = id)}
         onextract={geoReady && doc !== null ? extractAgain : null}
       />
     </div>
@@ -1520,6 +1548,20 @@
     height: 30px;
     padding: 0 10px;
     border-radius: var(--radius-tile);
+  }
+  /* 停車の場所を決めている間、地図の上に出す。 */
+  .placing {
+    top: 0;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 6px 0 12px;
+    border-radius: var(--radius-tile);
+    transform: translateX(-50%);
+    font-weight: 700;
+    white-space: nowrap;
   }
   .follow input {
     width: 14px;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  asideOf,
   confirmOnVideo,
   confirmTyped,
   customAt,
@@ -8,6 +9,7 @@ import {
   neighbor,
   nextConfirmable,
   patch,
+  pinStop,
   positionAt,
   closeStop,
   insertByPosition,
@@ -18,6 +20,7 @@ import {
   stopBetween,
   stopsOf,
   unconfirm,
+  unpinStop,
   waypointEvent,
   waypointEventAt,
 } from "./events";
@@ -83,6 +86,36 @@ describe("いまの位置", () => {
       { route_m: 0, time_ms: 0 },
       { route_m: 600, time_ms: 60_000 },
     ]);
+  });
+
+  // 0 秒に 0 m、1000 秒に 4000 m。その間の 200 秒から 800 秒まで停車していた。
+  const ends = [event("d", 0, "confirmed", 0), event("a", 4000, "confirmed", 1000)];
+  const stop = { ...stopBetween(200_000, 800_000, 0), id: "s", route_m: 2000 };
+
+  test("地図で場所を決めた停車は、その場所に着いた時刻と出た時刻の基準になる", () => {
+    const pinned = pinStop(stop, [0.009, 0], 1000);
+    expect(pinned.detail.by_time).toBeUndefined();
+    const events = [...ends, pinned];
+    const at = (seconds: number) => positionAt(knotsOf(events), stopsOf(events), seconds * 1000);
+    expect([at(100), at(200), at(800), at(900)]).toEqual([500, 1000, 1000, 2500]);
+    // 推定に戻すと、走っていた時間の比から置く。
+    const back = [...ends, unpinStop(pinned)];
+    expect(unpinStop(pinned).detail.at).toBeUndefined();
+    expect(positionAt(knotsOf(back), stopsOf(back), 800_000)).toBe(2000);
+  });
+
+  test("停車の間に確定した時刻は、最初のものが停車の場所を決め、離れた位置のものは基準にしない", () => {
+    const events = [
+      ...ends,
+      stop,
+      event("w", 1500, "confirmed", 300),
+      event("near", 1510, "confirmed", 500),
+      event("far", 1600, "confirmed", 800),
+    ];
+    const at = (ms: number) => positionAt(knotsOf(events), stopsOf(events), ms);
+    // 停車の終わりで、1600 m へ飛ばない。
+    expect([at(200_000), at(799_999), at(800_000), at(900_000)]).toEqual([1500, 1500, 1500, 2750]);
+    expect(asideOf(events)).toEqual(["far"]);
   });
 });
 

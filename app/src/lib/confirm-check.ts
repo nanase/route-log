@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { confirmTyped, unconfirm } from "./events";
+import { distanceM } from "./geo";
 import { clock, jstToMs } from "./time";
 import type { LonLat, RideEvent, Timeline } from "./types";
 import type { Mode } from "./ui";
@@ -16,6 +17,8 @@ interface MapHandle {
   click(at: LonLat): void;
   /** その位置にいちばん近い丸を押す */
   clickHandle(at: LonLat): void;
+  /** 地図のその位置を押す。丸の上でも、丸ではなく地図を押す */
+  clickMap(at: LonLat): void;
   idle(timeoutMs?: number): Promise<boolean>;
   snapshot(): Record<string, unknown>;
 }
@@ -385,6 +388,52 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   );
   const paused = await invoke<string>("capture_check", { name: "paused" }).catch((e) => `写せない: ${e}`);
 
+  // 停車の場所を地図で決める。止まる 1 分前にいたと推定される所を押す。
+  const pressIn = (selector: string, label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>(selector)].find((b) => b.textContent?.includes(label))?.click();
+  const stopId = find("stop")?.id;
+  const stopRow = document.querySelector<HTMLElement>(`.rows [data-id="${stopId}"]`);
+  if (stopRow?.getAttribute("aria-expanded") !== "true") stopRow?.click();
+  await sleep(300);
+  pressIn(".place .btn", "地図で決める");
+  await sleep(200);
+  const banner = text(".placing");
+  await player.seek(pauseAt - 60_000);
+  await sleep(1500);
+  const placing = await invoke<string>("capture_check", { name: "placing" }).catch((e) => `写せない: ${e}`);
+  const spot = map.snapshot().here as LonLat | null;
+  const estimatedAt = find("stop")?.route_m ?? null;
+  if (spot !== null) map.clickMap(spot);
+  await sleep(200);
+  await app.settled();
+  const hereAt = async (realMs: number) => {
+    await player.seek(realMs);
+    await sleep(800);
+    return map.snapshot().here as LonLat | null;
+  };
+  const [inside, end, after] = [
+    await hereAt(pauseAt + 300_000),
+    await hereAt(pauseAt + 600_000),
+    await hereAt(pauseAt + 600_000 + 2_000),
+  ];
+  const apart = (a: LonLat | null, b: LonLat | null) => (a === null || b === null ? null : Math.round(distanceM(a, b)));
+  note(
+    "停車の行で「地図で決める」を押し、止まる 1 分前の推定位置を地図で押す",
+    "地図に案内が出る。停車の位置が押した所に移り、停車の間の現在位置は押した所に止まる。停車の終わりで飛ばず、2 秒後も数十 m 以内",
+    {
+      banner,
+      bannerAfter: text(".placing"),
+      estimatedAt,
+      stop: find("stop"),
+      fromSpot: { inside: apart(spot, inside), end: apart(spot, end), twoSecondsAfter: apart(spot, after) },
+      message: app.message(),
+    },
+  );
+  pressIn(".place .btn", "推定に戻す");
+  await sleep(200);
+  await app.settled();
+  note("「推定に戻す」を押す", "停車の位置が、決める前の位置に戻る", { estimatedAt, stop: find("stop") });
+
   // 動画の無い走行。動画の無い日付の走行を作り、経路を引いて、時刻を一覧で手で入れる。
   const errors: string[] = [];
   const caught = (event: ErrorEvent | PromiseRejectionEvent) =>
@@ -456,5 +505,5 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   window.removeEventListener("error", caught);
   window.removeEventListener("unhandledrejection", caught);
 
-  return { steps, transport, captures: [next, captured, bulk, wide, stopMenu, stopped, paused, empty, filled], csv, message: exported };
+  return { steps, transport, captures: [next, captured, bulk, wide, stopMenu, stopped, paused, placing, empty, filled], csv, message: exported };
 }

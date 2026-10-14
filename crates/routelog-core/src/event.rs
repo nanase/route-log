@@ -84,6 +84,7 @@ pub struct EventDetail {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub by_time: bool,
     /// `waypoint`：その経由点の位置。経路を直しても、同じ経由点だと分かる。
+    /// `stop`：地図で決めた停車の場所。あれば `by_time` は偽で、着いた時刻と出た時刻の基準になる。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<LonLat>,
     /// `stop`：停車していた長さ（ミリ秒）。終わりの時刻は、通過時刻にこれを足したもの。

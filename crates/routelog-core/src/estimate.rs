@@ -17,28 +17,92 @@ pub struct Knot {
     pub time_ms: i64,
 }
 
+/// 停車の場所を地図で決めたあと、経路をこれより遠くへ変えたら、決めた場所を捨てる（m）。
+pub const STOP_KEEP_M: f64 = 50.0;
+
+/// 停車の間に確定した時刻のうち、停車の場所からこれ以内のものは、停車の場所にいたものとみなす（m）。
+pub const STOP_NEAR_M: f64 = 30.0;
+
+/// 位置と時刻の組として確定したイベントか。場所を地図で決めた停車も含む。
 fn is_knot(event: &Event) -> bool {
     event.status == EventStatus::Confirmed && event.time_ms.is_some() && !event.detail.by_time
 }
 
-/// 時刻を確定したイベントを、位置の順に並べる。
-pub fn knots(events: &[Event]) -> Vec<Knot> {
-    let mut knots: Vec<Knot> = events
+/// 時刻推定の基準と、それを決めたイベントの ID。
+struct Settled<'a> {
+    knots: Vec<(Knot, &'a str)>,
+    /// 停車の間に確定した時刻のうち、停車の場所と位置が合わないので、基準にしなかったもの
+    aside: Vec<&'a str>,
+}
+
+/// 確定したイベントから、時刻推定の基準を作る。
+///
+/// 停車は、場所が分かれば、着いた時刻と出た時刻の 2 つの基準になる。場所は、地図で決めてあれば
+/// そこ、無ければ停車の間に確定した最初のイベントの位置にする。停車の間に確定した他のイベントは、
+/// 基準にしない。停車の間は進んでいないので、違う位置の基準があると、停車の終わりで位置が飛ぶ。
+fn settle(events: &[Event]) -> Settled<'_> {
+    let spans = stops(events);
+    let stay = |event: &Event| event.detail.stay_ms.unwrap_or(0) > 0;
+    let mut plain: Vec<(Knot, &str)> = events
         .iter()
-        .filter(|event| is_knot(event))
+        .filter(|event| is_knot(event) && !(event.kind == EventKind::Stop && stay(event)))
         .filter_map(|event| {
-            Some(Knot {
+            let knot = Knot {
                 route_m: event.route_m,
                 time_ms: event.time_ms?,
-            })
+            };
+            Some((knot, event.id.as_str()))
         })
         .collect();
-    knots.sort_by(|a, b| {
+    plain.sort_by_key(|(knot, _)| knot.time_ms);
+    let mut knots = Vec::new();
+    let mut aside = Vec::new();
+    for span in &spans {
+        let within = |time_ms: i64| span.start_ms <= time_ms && time_ms <= span.end_ms;
+        let pinned = events
+            .iter()
+            .filter(|event| event.kind == EventKind::Stop && is_knot(event) && stay(event))
+            .filter(|event| event.time_ms.is_some_and(within))
+            .min_by_key(|event| event.time_ms)
+            .map(|event| (event.route_m, event.id.as_str()));
+        let (inside, outside): (Vec<_>, Vec<_>) = plain
+            .into_iter()
+            .partition(|(knot, _)| within(knot.time_ms));
+        plain = outside;
+        let first = inside.first().map(|(knot, id)| (knot.route_m, *id));
+        let Some((place_m, owner)) = pinned.or(first) else {
+            plain.extend(inside);
+            continue;
+        };
+        for (knot, id) in inside {
+            if (knot.route_m - place_m).abs() > STOP_NEAR_M {
+                aside.push(id);
+            }
+        }
+        for time_ms in [span.start_ms, span.end_ms] {
+            let knot = Knot {
+                route_m: place_m,
+                time_ms,
+            };
+            knots.push((knot, owner));
+        }
+    }
+    knots.extend(plain);
+    knots.sort_by(|(a, _), (b, _)| {
         a.route_m
             .total_cmp(&b.route_m)
             .then(a.time_ms.cmp(&b.time_ms))
     });
-    knots
+    Settled { knots, aside }
+}
+
+/// 時刻推定の基準を、位置の順に並べる。
+pub fn knots(events: &[Event]) -> Vec<Knot> {
+    settle(events)
+        .knots
+        .into_iter()
+        .map(|(knot, _)| knot)
+        .collect()
 }
 
 /// 停車していた時間。その間は、時刻が進んでも位置が変わらない。
@@ -234,21 +298,45 @@ fn place_waypoints(events: &mut Vec<Event>, waypoints: &[Waypoint], distances: &
     });
 }
 
+/// 場所を地図で決めた停車を、いまの経路の上に置き直す。経路が遠くへ変わっていたら、決めた場所を
+/// 捨てて、前後の確定した時刻から位置を求める形に戻す。
+fn place_stops(events: &mut [Event], line: &[geo::LonLat]) {
+    for event in events.iter_mut().filter(|e| e.kind == EventKind::Stop) {
+        let Some(at) = event.detail.at else {
+            event.detail.by_time = true;
+            continue;
+        };
+        match geo::nearest_m(line, at, event.route_m) {
+            Some((route_m, off)) if off <= STOP_KEEP_M => {
+                event.route_m = route_m;
+                event.detail.by_time = false;
+            }
+            _ => {
+                event.detail.at = None;
+                event.detail.by_time = true;
+            }
+        }
+    }
+}
+
 /// イベントの時刻と位置を、いまの経路・確定した時刻・時計の補正値に合わせて計算し直す。
 ///
-/// 1. 経路の両端に出発と到着を置く。経由点のイベントを、いまの経由点の位置に置く
+/// 1. 経路の両端に出発と到着を置く。経由点のイベントと、場所を決めた停車を、いまの経路の上に置く
 /// 2. 動画で確定した時刻を、カメラの時刻と時計の補正値から求め直す
-/// 3. 時刻だけが分かっているイベントの位置を、時刻から求める。停車のイベントも、ここで置く
+/// 3. 時刻だけが分かっているイベントの位置を、時刻から求める。場所を決めていない停車も、ここで置く
 /// 4. 確定していないイベントの時刻を推定する。停車していた間は、進んでいないものとする
 ///
-/// 位置が先なのに時刻が後になっている、確定済みのイベントの ID を返す。
+/// 時刻の合わない、確定済みのイベントの ID を返す。位置が先なのに時刻が後になっているものと、
+/// 停車の間に確定したのに、停車の場所と位置が合わないものである。
 pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
     let length_m = doc.length_m();
     let distances = doc.waypoint_distances();
+    let line = doc.line();
     let clock_offset_ms = doc.ride.clock_offset_ms;
     let events = &mut doc.events;
     ensure_endpoints(events, length_m);
     place_waypoints(events, &doc.waypoints, &distances);
+    place_stops(events, &line);
 
     for event in events.iter_mut() {
         if let (EventStatus::Confirmed, Some(camera_ms)) = (event.status, event.detail.camera_ms) {
@@ -256,7 +344,19 @@ pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
         }
     }
 
-    let knots = knots(events);
+    let settled = settle(events);
+    let knots: Vec<Knot> = settled.knots.iter().map(|(knot, _)| *knot).collect();
+    let mut conflicts: Vec<String> = Vec::new();
+    for pair in settled.knots.windows(2) {
+        if pair[0].0.time_ms > pair[1].0.time_ms {
+            for (_, id) in pair {
+                if !conflicts.iter().any(|c| c == id) {
+                    conflicts.push(id.to_string());
+                }
+            }
+        }
+    }
+    conflicts.extend(settled.aside.iter().map(|id| id.to_string()));
     let stops = stops(events);
     for event in events.iter_mut() {
         if event.detail.by_time {
@@ -278,18 +378,6 @@ pub fn refresh(doc: &mut RideDocument) -> Vec<String> {
             .total_cmp(&b.route_m)
             .then(rank(a.kind).cmp(&rank(b.kind)))
     });
-
-    let confirmed: Vec<&Event> = events.iter().filter(|e| is_knot(e)).collect();
-    let mut conflicts: Vec<String> = Vec::new();
-    for pair in confirmed.windows(2) {
-        if pair[0].time_ms > pair[1].time_ms {
-            for event in pair {
-                if !conflicts.contains(&event.id) {
-                    conflicts.push(event.id.clone());
-                }
-            }
-        }
-    }
     conflicts
 }
 
@@ -720,6 +808,110 @@ mod tests {
         }];
         assert_eq!(time_at(&knots, &stops, 500.0), Some(300_000));
         assert_eq!(position_at(&knots, &stops, 350_000), Some(0.0));
+    }
+
+    /// 赤道の上を東へ `m` 進んだ点。
+    fn east(m: f64) -> geo::LonLat {
+        [m / 111_195.08, 0.0]
+    }
+
+    fn found(doc: &RideDocument) -> Vec<(&str, f64, Option<i64>)> {
+        doc.events
+            .iter()
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.route_m.round(),
+                    e.time_ms.map(|t| t / 1000),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_stop_placed_on_the_map_holds_the_position_there() {
+        // 200 秒から 800 秒まで、1000 m の所に止まっていた。場所を決めなければ、走っていた時間の
+        // 比から 2000 m の所に置かれる。
+        let mut pinned = stop("s", 200, 600);
+        pinned.detail.by_time = false;
+        pinned.detail.at = Some(east(1000.0));
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(0)),
+                event("x", EventKind::Tunnel, 500.0, None),
+                event("y", EventKind::Bridge, 3000.0, None),
+                event("a", EventKind::Arrival, 4000.0, Some(1000)),
+                pinned,
+            ],
+        );
+        assert_eq!(refresh(&mut doc), Vec::<String>::new());
+        assert_eq!(
+            found(&doc),
+            [
+                ("d", 0.0, Some(0)),
+                ("x", 500.0, Some(100)),
+                ("s", 1000.0, Some(200)),
+                ("y", 3000.0, Some(933)),
+                ("a", 4000.0, Some(1000))
+            ]
+        );
+        let (knots, stops) = (knots(&doc.events), stops(&doc.events));
+        let at = |time_ms| position_at(&knots, &stops, time_ms).map(f64::round);
+        assert_eq!((at(800_000), at(900_000)), (Some(1000.0), Some(2500.0)));
+    }
+
+    #[test]
+    fn a_stop_placed_on_the_map_goes_back_to_an_estimate_when_the_route_moves_away() {
+        let mut pinned = stop("s", 200, 600);
+        pinned.detail.by_time = false;
+        pinned.detail.at = Some([east(1000.0)[0], 100.0 / 111_195.08]);
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(0)),
+                event("a", EventKind::Arrival, 4000.0, Some(1000)),
+                pinned,
+            ],
+        );
+        refresh(&mut doc);
+        let stop = doc.events.iter().find(|e| e.id == "s").unwrap();
+        assert_eq!(
+            (stop.detail.at, stop.detail.by_time, stop.route_m.round()),
+            (None, true, 2000.0)
+        );
+    }
+
+    #[test]
+    fn a_confirmed_time_inside_a_stop_fixes_where_the_stop_was() {
+        // 停車の間に、2000 m の所の時刻を確定した。そこが停車の場所になる。2010 m の所も停車の場所と
+        // みなす。2100 m の所は、停車の間は進んでいないので合わない。基準にせず、知らせる。
+        let mut doc = document(
+            4000.0,
+            0,
+            vec![
+                event("d", EventKind::Departure, 0.0, Some(0)),
+                event("w", EventKind::PrefBoundary, 1500.0, Some(300)),
+                event("near", EventKind::Custom, 1510.0, Some(500)),
+                event("far", EventKind::Tunnel, 1600.0, Some(800)),
+                event("y", EventKind::Bridge, 2500.0, None),
+                event("a", EventKind::Arrival, 4000.0, Some(1000)),
+                stop("s", 200, 600),
+            ],
+        );
+        assert_eq!(refresh(&mut doc), ["far"]);
+        let (knots, stops) = (knots(&doc.events), stops(&doc.events));
+        let at = |time_ms| position_at(&knots, &stops, time_ms).map(f64::round);
+        // 停車の終わりで飛ばない。1500 m から走り出す。
+        assert_eq!(
+            (at(799_999), at(800_000), at(900_000)),
+            (Some(1500.0), Some(1500.0), Some(2750.0))
+        );
+        let stop = doc.events.iter().find(|e| e.id == "s").unwrap();
+        assert_eq!(stop.route_m.round(), 1500.0);
+        assert_eq!(times(&doc)[5], ("y", Some(880)));
     }
 
     #[test]
