@@ -6,6 +6,7 @@
   import { runConfirmCheck } from "./lib/confirm-check";
   import EventList from "./lib/EventList.svelte";
   import {
+    aheadAt,
     confirmOnVideo,
     closeStop,
     customAt,
@@ -205,11 +206,14 @@
   const target = $derived(
     events.find((event) => event.id === chosenId) ?? (timeline === null ? null : defaultTarget(events, nowMs)),
   );
-  /** 動画のいまの時刻にいると推定される位置 */
+  /** 動画のいまの時刻にいると推定される位置。最後の確定より後は、直前の速さから置いた仮の位置 */
   const here = $derived.by(() => {
     if (timeline === null) return null;
-    const routeM = positionAt(knotsOf(events), stopsOf(events), nowMs);
-    return routeM === null ? null : pointAt(routeLine, routeM);
+    const [knots, stops] = [knotsOf(events), stopsOf(events)];
+    const routeM = positionAt(knots, stops, nowMs);
+    if (routeM !== null) return { at: pointAt(routeLine, routeM), guessed: false };
+    const aheadM = aheadAt(knots, stops, nowMs, openStop(events)?.time_ms ?? null);
+    return aheadM === null ? null : { at: pointAt(routeLine, aheadM), guessed: true };
   });
   // 経由点のイベントは、地図に経由点の丸があるので、点を重ねない。
   const marks = $derived(
@@ -1227,7 +1231,8 @@
         {basemap}
         {marks}
         {callout}
-        {here}
+        here={here?.at ?? null}
+        guessed={here?.guessed ?? false}
         follow={follow && mode === "confirm"}
         snap={snapNew && geoReady}
         canSnap={geoReady}

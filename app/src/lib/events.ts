@@ -124,6 +124,28 @@ export function positionAt(knots: Knot[], stops: Stop[], timeMs: number): number
 }
 
 /**
+ * 最後の基準より後にいる位置の見込み（m）。最後の基準の時刻より後でなければ null。
+ *
+ * 最後の基準より先は推定しないが、地図に現在位置の目安だけは出す。直前の速さで走り続けたものと
+ * して置く。速さは、時刻の順で最後の、前へ進んでいる基準の組の間の速さにする。停車の間と、
+ * `haltedMs` より後は進まない。`haltedMs` は、始まりだけを入れた停車の時刻を渡す。速さが
+ * 分からなければ null。画面に出すだけで、イベントの推定には使わない。
+ */
+export function aheadAt(knots: Knot[], stops: Stop[], timeMs: number, haltedMs: number | null = null): number | null {
+  const byTime = [...knots].sort((a, b) => a.time_ms - b.time_ms);
+  const last = byTime.at(-1);
+  if (last === undefined || timeMs <= last.time_ms) return null;
+  for (let i = byTime.length - 1; i > 0; i--) {
+    const [from, to] = [byTime[i - 1], byTime[i]];
+    const [runM, runMs] = [to.route_m - from.route_m, movingMs(stops, to.time_ms) - movingMs(stops, from.time_ms)];
+    if (runM <= 0 || runMs <= 0) continue;
+    const until = haltedMs !== null && haltedMs < timeMs ? Math.max(haltedMs, last.time_ms) : timeMs;
+    return last.route_m + (runM / runMs) * (movingMs(stops, until) - movingMs(stops, last.time_ms));
+  }
+  return null;
+}
+
+/**
  * 時刻だけが分かっているイベントを置く位置（m）。
  *
  * 基準の間なら、その時刻にいる位置。基準の外なら、時刻の近いほうの端の基準の位置。基準が無ければ 0。

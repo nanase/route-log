@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  aheadAt,
   asideOf,
   confirmOnVideo,
   confirmTyped,
@@ -58,6 +59,21 @@ describe("いまの位置", () => {
     expect(positionAt(knots, [], -1)).toBeNull();
     expect(positionAt(knots, [], 500_001)).toBeNull();
     expect(positionAt([], [], 0)).toBeNull();
+  });
+
+  test("最後の基準より後は、直前の速さで進んだ仮の位置を出す", () => {
+    // 最後の組の速さは 10 m/s。
+    expect(aheadAt(knots, [], 510_000)).toBe(2100);
+    expect(aheadAt(knots, [], 500_000)).toBeNull();
+    expect(aheadAt(knots, [], 250_000)).toBeNull();
+    // 最後の組が同じ位置なら、止まっていたものとして、その前の組の速さを使う。
+    expect(aheadAt(knots.slice(0, 3), [], 410_000)).toBe(1100);
+    // 停車の間と、始まりだけを入れた停車より後は進まない。
+    expect(aheadAt(knots, [{ start_ms: 505_000, end_ms: 600_000 }], 610_000)).toBe(2150);
+    expect(aheadAt(knots, [], 610_000, 505_000)).toBe(2050);
+    // 速さの分かる組が無ければ出さない。
+    expect(aheadAt([{ route_m: 0, time_ms: 0 }], [], 10_000)).toBeNull();
+    expect(aheadAt([], [], 0)).toBeNull();
   });
 
   test("停車の間は、時刻が進んでも位置が変わらない", () => {

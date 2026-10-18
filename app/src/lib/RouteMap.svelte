@@ -54,6 +54,7 @@
     marks = [],
     callout = null,
     here = null,
+    guessed = false,
     follow = false,
     snap = false,
     canSnap = false,
@@ -81,6 +82,8 @@
     callout?: { at: LonLat; kind: EventKind; label: string; note: string } | null;
     /** 動画のいまの時刻にいると推定される位置 */
     here?: LonLat | null;
+    /** `here` が、最後の確定より後を直前の速さから置いた、仮の位置か */
+    guessed?: boolean;
     /** 現在位置が画面の端へ寄ったら、地図を動かして追う */
     follow?: boolean;
     /** 新しく足す区間を、道に沿わせるか */
@@ -699,6 +702,7 @@
     } else {
       hereMarker.setLngLat(here);
     }
+    hereMarker.getElement().classList.toggle("guessed", guessed);
     if (!follow) return;
     // 現在位置が、浮かせた板を除いた画面の縁へ寄ったら、まん中へ戻す。
     const { x, y } = map.project(here);
@@ -880,6 +884,7 @@
       roads: { national: count("national"), prefectural: count("prefectural"), shown: shown("national") },
       selected,
       here: hereMarker?.getLngLat().toArray() ?? null,
+      guessed: hereMarker?.getElement().classList.contains("guessed") ?? false,
       errors: [...errors],
     };
   }
@@ -1044,6 +1049,14 @@
     background: var(--primary);
     box-shadow: 0 0 0 8px rgba(31, 79, 163, 0.18);
     pointer-events: none;
+  }
+  /* 仮の位置は、推定のイベントと同じく破線の輪にする。 */
+  .map :global(.here.guessed) {
+    width: 16px;
+    height: 16px;
+    border: 3px dashed var(--primary);
+    background: #fff;
+    box-shadow: 0 0 0 7px rgba(31, 79, 163, 0.12);
   }
 
   .callout {

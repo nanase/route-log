@@ -1,6 +1,6 @@
 <script lang="ts">
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-  import { onDestroy, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import Icon from "./Icon.svelte";
   import { forShortcut } from "./keys";
   import { clock, hms } from "./time";
@@ -30,6 +30,9 @@
   const REVERSE_STEP_MS = 300;
   /** 続けて押したときに上げる倍率の上限 */
   const MAX_RATE = 4;
+  /** 音量。次の起動でも使う */
+  const VOLUME_KEY = "routelog.volume";
+  const VOLUME_DEFAULT = 0.5;
 
   let video: HTMLVideoElement;
   /** いま読み込んでいるファイルの番号。まだ無ければ -1 */
@@ -65,6 +68,14 @@
 
   $effect(() => ontime?.(realMs));
   onDestroy(() => clearInterval(reverseTimer));
+
+  onMount(() => {
+    const stored = Number(localStorage.getItem(VOLUME_KEY) ?? Number.NaN);
+    video.volume = Number.isFinite(stored) && stored >= 0 && stored <= 1 ? stored : VOLUME_DEFAULT;
+  });
+
+  // 消音は覚えない。次の起動で音が出ないと、わけに気づきにくい。
+  const onvolumechange = () => localStorage.setItem(VOLUME_KEY, String(video.volume));
 
   function show(position: Position, play: boolean) {
     const target = timeline.files[position.file];
@@ -163,9 +174,9 @@
   });
 
   const toggle = () => setRate(video.paused && rate >= 0 ? 1 : 0);
-  // 続けて押すと 2 倍、4 倍になる。
-  const forward = () => setRate(rate > 0 ? Math.min(rate * 2, MAX_RATE) : 1);
-  const reverse = () => setRate(rate < 0 ? Math.max(rate * 2, -MAX_RATE) : -1);
+  // 続けて押すと 2 倍、3 倍、4 倍になる。
+  const forward = () => setRate(rate > 0 ? Math.min(rate + 1, MAX_RATE) : 1);
+  const reverse = () => setRate(rate < 0 ? Math.max(rate - 1, -MAX_RATE) : -1);
   const step = (ms: number) => void seek(now() + ms);
 
   function onkeydown(event: KeyboardEvent) {
@@ -198,6 +209,7 @@
       {ontimeupdate}
       {onplay}
       {onpause}
+      {onvolumechange}
       onended={() => next(rate > 0)}
     ></video>
     <div class="chip now">
@@ -241,7 +253,7 @@
       </button>
     </div>
     <span class="fill"></span>
-    <span class="fine hint">J・L 連打で<br />2 倍、4 倍</span>
+    <span class="fine hint">J・L 連打で<br />2・3・4 倍</span>
   </div>
 </section>
 
