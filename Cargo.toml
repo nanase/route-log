@@ -63,6 +63,19 @@ opt-level = 3
 [profile.dev.package.png]
 opt-level = 3
 
+# 判定用データの読み込み。最適化なしでは、道 9 万本を読むのに 1.5 秒かかる（最適化して 0.4 秒）。
+[profile.dev.package.flatgeobuf]
+opt-level = 3
+
+[profile.dev.package.geozero]
+opt-level = 3
+
+[profile.dev.package.flatbuffers]
+opt-level = 3
+
+[profile.dev.package.geo-types]
+opt-level = 3
+
 # Worker は大きさに上限があるので、小ささを優先する。strip は付けない。付けると
 # wasm-bindgen が要る情報まで消え、Worker のビルドが「externref table required」で止まる。
 [profile.release]

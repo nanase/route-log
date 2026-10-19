@@ -1,40 +1,25 @@
 //! 道への吸着と、経路からのイベント抽出。判定用データを読んだ結果は、次の抽出のために持っておく。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use routelog_core::{Event, RideDocument, SegmentMode, carry_over};
-use routelog_geo::{BBox, GeoData, Options, Prepared, SnapOptions};
-
-/// 経路を囲む矩形に足す余白（度）。経路から少し離れた道の駅や面を取りこぼさないため。
-const MARGIN_DEGREES: f64 = 0.02;
-/// 読み込むときに足す余白（度）。経路を少し伸ばしただけで読み直さないよう、広めに読む。
-const LOAD_MARGIN_DEGREES: f64 = 0.2;
+use routelog_geo::{Options, SnapOptions, Tiles};
 
 /// 読んである判定用データ。フォルダが変われば読み直す。
 #[derive(Default)]
 pub struct Extractor {
-    loaded: Mutex<Option<(PathBuf, Arc<Prepared>)>>,
+    loaded: Mutex<Option<Arc<Tiles>>>,
 }
 
 impl Extractor {
-    fn prepared(&self, dir: &Path, bbox: BBox) -> Result<Arc<Prepared>, routelog_geo::Error> {
-        let mut loaded = self.loaded.lock().unwrap();
-        if let Some((from, prepared)) = loaded.as_ref()
-            && from == dir
-            && prepared.bbox().contains(&bbox)
-        {
-            return Ok(prepared.clone());
+    /// そのフォルダの判定用データ。読んだ升目は、フォルダが同じ間は覚えておく。
+    fn tiles(&self, dir: &Path) -> Arc<Tiles> {
+        let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        match loaded.as_ref() {
+            Some(tiles) if tiles.dir() == dir => tiles.clone(),
+            _ => loaded.insert(Arc::new(Tiles::new(dir))).clone(),
         }
-        // 読んである範囲に足して読む。クリックした点のまわりと経路の全体を、交互に読み直さない。
-        let wide = match loaded.as_ref() {
-            Some((from, prepared)) if from == dir => prepared.bbox().union(bbox),
-            _ => bbox,
-        }
-        .expand(LOAD_MARGIN_DEGREES);
-        let prepared = Arc::new(Prepared::new(GeoData::load(dir, wide)?, wide));
-        *loaded = Some((dir.to_owned(), prepared.clone()));
-        Ok(prepared)
     }
 
     /// その点を、画面上で近い道の上へ寄せる。近くに道が無ければ `None`。
@@ -44,30 +29,19 @@ impl Extractor {
         point: [f64; 2],
         radius_m: f64,
     ) -> Result<Option<[f64; 2]>, routelog_geo::Error> {
-        let Some(bbox) = BBox::around(&[point]) else {
-            return Ok(None);
-        };
-        let prepared = self.prepared(dir, bbox.expand(MARGIN_DEGREES))?;
-        Ok(prepared.snap_point(point, radius_m))
+        self.tiles(dir).snap_point(point, radius_m)
     }
 
-    /// 吸着の区間を、道に沿った線に引き直す。
+    /// 吸着の区間を、道に沿った線に引き直す。両端の変わらない区間は、前に引いた線を使う。
     ///
     /// 近くに道が無いか、道のりが直線に比べて長すぎる区間は、頂点の無い線（直線）になる。
     /// 結び方は吸着のままなので、経由点を動かせばまた試す。
     pub fn snap(&self, dir: &Path, doc: &mut RideDocument) -> Result<(), routelog_geo::Error> {
+        let tiles = self.tiles(dir);
         let points: Vec<_> = doc.waypoints.iter().map(|w| [w.lon, w.lat]).collect();
-        let snapping = doc
-            .waypoints
-            .iter()
-            .any(|w| w.segment_mode == SegmentMode::Snap);
-        let Some(bbox) = BBox::around(&points).filter(|_| snapping) else {
-            return Ok(());
-        };
-        let prepared = self.prepared(dir, bbox.expand(MARGIN_DEGREES))?;
         for (i, segment) in doc.route.segments.iter_mut().enumerate() {
             if doc.waypoints[i].segment_mode == SegmentMode::Snap {
-                let line = prepared.snap(points[i], points[i + 1], &SnapOptions::default());
+                let line = tiles.snap(points[i], points[i + 1], &SnapOptions::default())?;
                 *segment = line.unwrap_or_default();
             }
         }
@@ -81,11 +55,10 @@ impl Extractor {
         doc: &RideDocument,
     ) -> Result<Vec<Event>, routelog_geo::Error> {
         let line = doc.line();
-        let extracted = match BBox::around(&line) {
-            Some(bbox) if line.len() >= 2 => self
-                .prepared(dir, bbox.expand(MARGIN_DEGREES))?
-                .extract(&line, &Options::default()),
-            _ => Vec::new(),
+        let extracted = if line.len() >= 2 {
+            self.tiles(dir).extract(&line, &Options::default())?
+        } else {
+            Vec::new()
         };
         Ok(carry_over(&doc.events, extracted))
     }

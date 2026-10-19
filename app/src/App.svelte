@@ -27,7 +27,7 @@
     waypointEvent,
     waypointEventAt,
   } from "./lib/events";
-  import { pointAt } from "./lib/geo";
+  import { distancesAlong, pointAt } from "./lib/geo";
   import Icon from "./lib/Icon.svelte";
   import Hints from "./lib/Hints.svelte";
   import { forShortcut, keepKeys } from "./lib/keys";
@@ -207,20 +207,22 @@
   const events = $derived(doc?.events ?? []);
   const target = $derived(
     events.find((event) => event.id === chosenId) ?? (timeline === null ? null : defaultTarget(events, nowMs)),
+  /** 経路の各点までの距離。イベントの数だけ線をたどり直さないよう、経路が変わったときに 1 度だけ測る */
+  const routeAlong = $derived(distancesAlong(routeLine));
   );
   /** 動画のいまの時刻にいると推定される位置。最後の確定より後は、直前の速さから置いた仮の位置 */
   const here = $derived.by(() => {
     if (timeline === null) return null;
     const [knots, stops] = [knotsOf(events), stopsOf(events)];
     const routeM = positionAt(knots, stops, nowMs);
-    if (routeM !== null) return { at: pointAt(routeLine, routeM), guessed: false };
+    if (routeM !== null) return { at: pointAt(routeLine, routeM, routeAlong), guessed: false };
     const aheadM = aheadAt(knots, stops, nowMs, openStop(events)?.time_ms ?? null);
-    return aheadM === null ? null : { at: pointAt(routeLine, aheadM), guessed: true };
+    return aheadM === null ? null : { at: pointAt(routeLine, aheadM, routeAlong), guessed: true };
   });
   // 経由点のイベントは、地図に経由点の丸があるので、点を重ねない。
   const marks = $derived(
     events.flatMap((event) => {
-      const at = event.kind === "waypoint" ? null : pointAt(routeLine, event.route_m);
+      const at = event.kind === "waypoint" ? null : pointAt(routeLine, event.route_m, routeAlong);
       return at === null ? [] : [{ at, kind: event.kind, hidden: event.hidden === true }];
     }),
   );
@@ -240,7 +242,7 @@
   /** 地図で名前を添えるイベント。時刻入力のときは次の候補、経路入力のときは一覧で選んだもの */
   const callout = $derived.by(() => {
     const event = mode === "confirm" ? target : (events.find((e) => e.id === focusedId) ?? null);
-    const at = event === null ? null : pointAt(routeLine, event.route_m);
+    const at = event === null ? null : pointAt(routeLine, event.route_m, routeAlong);
     if (event === null || at === null) return null;
     let note = `${(event.route_m / 1000).toFixed(1)} km`;
     if (mode === "confirm") {
@@ -623,7 +625,7 @@
   /** 一覧で選んだイベントを次の候補にして、地図と動画をそこへ動かす。 */
   function choose(event: RideEvent) {
     chosenId = event.id;
-    const at = pointAt(routeLine, event.route_m);
+    const at = pointAt(routeLine, event.route_m, routeAlong);
     if (at !== null) routeMap?.focus(at);
     if (event.time_ms !== null) void player?.seek(event.time_ms);
   }
@@ -748,7 +750,7 @@
       return;
     }
     focusedId = event.id;
-    const at = pointAt(routeLine, event.route_m);
+    const at = pointAt(routeLine, event.route_m, routeAlong);
     if (at !== null) routeMap?.focus(at);
   }
 

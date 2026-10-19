@@ -7,7 +7,7 @@ mod extract;
 mod snap;
 
 pub use data::{Area, BBox, GeoData, Road, Station, Structure};
-pub use extract::{Options, Prepared};
+pub use extract::{Options, Prepared, Tiles};
 pub use snap::SnapOptions;
 
 #[derive(Debug, thiserror::Error)]

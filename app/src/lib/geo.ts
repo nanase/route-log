@@ -13,20 +13,34 @@ export function distanceM(a: LonLat, b: LonLat): number {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
 }
 
-/** 折れ線の始点から `routeM`（m）進んだ点。線より先は終点、線が無ければ null。 */
-export function pointAt(line: LonLat[], routeM: number): LonLat | null {
+/** 折れ線の始点から各点までの距離（m）。`pointAt` に渡すと、長い線でも点を探すのが速い。 */
+export function distancesAlong(line: LonLat[]): number[] {
+  const along = line.length === 0 ? [] : [0];
+  for (let i = 1; i < line.length; i++) along.push(along[i - 1] + distanceM(line[i - 1], line[i]));
+  return along;
+}
+
+/**
+ * 折れ線の始点から `routeM`（m）進んだ点。線より先は終点、線が無ければ null。
+ *
+ * 同じ線で何度も探すときは、`distancesAlong` で測った距離を `along` に渡す。
+ */
+export function pointAt(line: LonLat[], routeM: number, along = distancesAlong(line)): LonLat | null {
   if (line.length === 0) return null;
-  let rest = Math.max(routeM, 0);
-  for (let i = 1; i < line.length; i++) {
-    const [from, to] = [line[i - 1], line[i]];
-    const length = distanceM(from, to);
-    if (rest <= length && length > 0) {
-      const t = rest / length;
-      return [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
-    }
-    rest -= length;
+  const rest = Math.max(routeM, 0);
+  // 始点からの距離が `rest` に届く、最初の点を探す。
+  let [low, high] = [1, line.length];
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (along[middle] < rest) low = middle + 1;
+    else high = middle;
   }
-  return line[line.length - 1];
+  // 長さの無い区切りは飛ばす。
+  while (low < line.length && along[low] === along[low - 1]) low++;
+  if (low >= line.length) return line[line.length - 1];
+  const [from, to] = [line[low - 1], line[low]];
+  const t = (rest - along[low - 1]) / (along[low] - along[low - 1]);
+  return [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
 }
 
 /** 同じ近さとみなす差（m）。行って戻る道では、近さの同じ所が 2 つある。 */

@@ -225,11 +225,6 @@ impl Graph {
         Some(OnRoad { edge, m })
     }
 
-    /// グラフの上の位置の、経度・緯度。
-    pub fn point(&self, on: OnRoad) -> LonLat {
-        self.edges[on.edge].point(on.m)
-    }
-
     /// `from` から `to` までの、いちばん走りそうな道のりの線。道のりが `limit_m` を超えるなら `None`。
     pub fn path(&self, from: OnRoad, to: OnRoad, limit_m: f64) -> Option<Vec<LonLat>> {
         let (first, last) = (&self.edges[from.edge], &self.edges[to.edge]);

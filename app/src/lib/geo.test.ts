@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { distanceM, nearestOn, pointAt } from "./geo";
+import { distanceM, distancesAlong, nearestOn, pointAt } from "./geo";
 import type { LonLat } from "./types";
 
 const A: LonLat = [138, 36];
@@ -25,6 +25,18 @@ test("線の外は端に寄せ、線が無ければ null", () => {
   expect(pointAt([A, B], 1e9)).toEqual(B);
   expect(pointAt([A], 100)).toEqual(A);
   expect(pointAt([], 100)).toBeNull();
+});
+
+test("長さの無い区切りは飛ばし、測った距離を渡しても同じ点になる", () => {
+  const line = [A, A, B, B, C];
+  const along = distancesAlong(line);
+  expect(along).toEqual([0, 0, distanceM(A, B), distanceM(A, B), distanceM(A, B) + distanceM(B, C)]);
+  expect(pointAt(line, 0)).toEqual(A);
+  for (const m of [0, 1000, distanceM(A, B), distanceM(A, B) + 5000, 1e9]) {
+    expect(pointAt(line, m, along)).toEqual(pointAt(line, m)!);
+  }
+  expect(pointAt(line, distanceM(A, B) + distanceM(B, C) / 2)![0]).toBeCloseTo(138.5, 6);
+  expect(distancesAlong([])).toEqual([]);
 });
 
 const east = (m: number): LonLat => [m / 111_195.08, 0];

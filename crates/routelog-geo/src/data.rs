@@ -55,6 +55,14 @@ impl BBox {
         }
     }
 
+    /// 2 つの矩形が重なるか。辺が接するだけでも重なるとみなす。
+    pub fn intersects(&self, other: &Self) -> bool {
+        self.min[0] <= other.max[0]
+            && other.min[0] <= self.max[0]
+            && self.min[1] <= other.max[1]
+            && other.min[1] <= self.max[1]
+    }
+
     pub fn contains(&self, other: &Self) -> bool {
         self.min[0] <= other.min[0]
             && self.min[1] <= other.min[1]
@@ -247,6 +255,9 @@ mod tests {
         assert_eq!((bbox.min, bbox.max), ([137.9, 36.0], [138.5, 36.2]));
         assert!(bbox.expand(0.1).contains(&bbox));
         assert!(!bbox.contains(&bbox.expand(0.1)));
+        let east = BBox::around(&[[138.5, 36.0], [139.0, 36.1]]).unwrap();
+        assert!(bbox.intersects(&east) && east.intersects(&bbox));
+        assert!(!bbox.intersects(&east.expand(-0.01)));
         assert_eq!(BBox::around(&[]), None);
     }
 

@@ -3,15 +3,17 @@
 //! 経路を一定の間隔で区切り、その点ごとに「どの路線の上か」「橋やトンネルの上か」
 //! 「どの市区町村の中か」を調べる。答えが変わった所がイベントになる。
 
-use std::collections::BTreeSet;
-use std::sync::OnceLock;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use routelog_core::geo::{self, LonLat};
 use routelog_core::{Event, EventDetail, EventKind, EventStatus, RouteRef, route_name};
 use rstar::primitives::{GeomWithData, Line, Rectangle};
 use rstar::{PointDistance, RTree};
 
-use crate::data::{Area, BBox, GeoData, Structure};
+use crate::Error;
+use crate::data::{Area, BBox, GeoData, Road, Station, Structure};
 use crate::snap::{Graph, OnRoad, SnapOptions, usable};
 
 /// 緯度 1 度の長さ（m）。
@@ -196,7 +198,6 @@ fn event(kind: EventKind, label: String, route_m: f64) -> Event {
 /// ある範囲の判定用データに、探すための索引を付けたもの。
 pub struct Prepared {
     data: GeoData,
-    bbox: BBox,
     plane: Plane,
     /// 道の線分（平面）と、その道の番号。
     segments: RTree<GeomWithData<Line<Xy>, (usize, usize)>>,
@@ -235,7 +236,6 @@ impl Prepared {
             .collect();
         Self {
             data,
-            bbox,
             plane,
             segments: RTree::bulk_load(segments),
             graph: OnceLock::new(),
@@ -243,13 +243,13 @@ impl Prepared {
         }
     }
 
-    /// 読んである範囲。経路がこの中に収まっていれば、読み直さずに使える。
-    pub fn bbox(&self) -> BBox {
-        self.bbox
+    pub(crate) fn data(&self) -> &GeoData {
+        &self.data
     }
 
-    /// 道の上の、その点にいちばん近い位置。吸着に使える道が `radius_m` 以内に無ければ `None`。
-    fn nearest(&self, graph: &Graph, point: LonLat, radius_m: f64) -> Option<OnRoad> {
+    /// 吸着に使える道のうち、その点にいちばん近い線分と、線分の始点からの割合、点からの距離（m）。
+    /// `radius_m` 以内に無ければ `None`。
+    fn nearest_segment(&self, point: LonLat, radius_m: f64) -> Option<((usize, usize), f64, f64)> {
         let xy = self.plane.xy(point);
         let segment = self
             .segments
@@ -264,11 +264,17 @@ impl Prepared {
         let (dx, dy) = (line.to[0] - line.from[0], line.to[1] - line.from[1]);
         let length2 = dx * dx + dy * dy;
         let t = if length2 > 0.0 {
-            ((xy[0] - line.from[0]) * dx + (xy[1] - line.from[1]) * dy) / length2
+            (((xy[0] - line.from[0]) * dx + (xy[1] - line.from[1]) * dy) / length2).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        graph.on_road(segment.data.0, segment.data.1, t)
+        Some((segment.data, t, line.distance_2(&xy).sqrt()))
+    }
+
+    /// 道の上の、その点にいちばん近い位置。吸着に使える道が `radius_m` 以内に無ければ `None`。
+    fn nearest(&self, graph: &Graph, point: LonLat, radius_m: f64) -> Option<OnRoad> {
+        let ((road, segment), t, _) = self.nearest_segment(point, radius_m)?;
+        graph.on_road(road, segment, t)
     }
 
     /// 吸着に使う道の辺の総数と、いちばん大きい繋がりに入る辺の数。
@@ -278,10 +284,19 @@ impl Prepared {
             .connectivity()
     }
 
+    /// その点にいちばん近い道の上の点と、そこまでの距離（m）。吸着に使える道が `radius_m`
+    /// 以内に無ければ `None`。道のグラフは作らない。
+    pub(crate) fn closest_on_road(&self, point: LonLat, radius_m: f64) -> Option<(LonLat, f64)> {
+        let ((road, segment), t, distance) = self.nearest_segment(point, radius_m)?;
+        let line = &self.data.roads[road].line;
+        let (p, q) = (line[segment], line[segment + 1]);
+        let at = [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+        Some((at, distance))
+    }
+
     /// その点にいちばん近い、道の上の点。吸着に使える道が `radius_m` 以内に無ければ `None`。
     pub fn snap_point(&self, point: LonLat, radius_m: f64) -> Option<LonLat> {
-        let graph = self.graph.get_or_init(|| Graph::new(&self.data.roads));
-        Some(graph.point(self.nearest(graph, point, radius_m)?))
+        self.closest_on_road(point, radius_m).map(|(at, _)| at)
     }
 
     /// 2 点の間を、道に沿って結ぶ線。両端は道の上の点になる。
@@ -299,27 +314,21 @@ impl Prepared {
     /// 経路の折れ線からイベントを抽出する。位置の順に並ぶ。ID は空で、時刻は無い。
     pub fn extract(&self, line: &[LonLat], options: &Options) -> Vec<Event> {
         let samples = resample(line, self.plane, options.step_m);
-        if samples.len() < 2 {
-            return Vec::new();
-        }
-        let matched: Vec<Vec<(usize, f64)>> =
-            samples.iter().map(|s| self.roads_at(s, options)).collect();
-        let mut events = self.area_events(&samples, options);
-        events.extend(self.road_events(&samples, &matched, options));
-        events.extend(self.structure_events(&samples, &matched, options));
-        events.extend(self.station_events(&samples, options));
-        events.sort_by(|a, b| a.route_m.total_cmp(&b.route_m));
-        events
+        let stations: Vec<&Station> = self.data.stations.iter().collect();
+        extract_samples(&samples, self.plane, |_| Some(self), &stations, options)
     }
 
     /// その点で走っている道と、そこまでの距離。近い順。
-    fn roads_at(&self, sample: &Sample, options: &Options) -> Vec<(usize, f64)> {
+    fn roads_at(&self, sample: &Sample, options: &Options) -> Vec<(&Road, f64)> {
         let min_cos = options.road_angle_degrees.to_radians().cos();
         let slack = options.step_m / 2.0;
-        let mut roads: Vec<(usize, f64)> = Vec::new();
+        // 経路を写した平面とこの範囲の平面は、中心の緯度が違うことがある。点はこの範囲の平面に
+        // 写し直す。向きの違いは 1 度に満たないので、そのまま使う。
+        let xy = self.plane.xy(sample.at);
+        let mut roads: Vec<(&Road, f64)> = Vec::new();
         for segment in self
             .segments
-            .locate_within_distance(sample.xy, options.road_m.powi(2))
+            .locate_within_distance(xy, options.road_m.powi(2))
         {
             let line = segment.geom();
             let Some(direction) = unit(line.from, line.to) else {
@@ -329,208 +338,448 @@ impl Prepared {
                 .abs()
                 >= min_cos;
             // 線分の横にいるときだけ数える。端の先にいる点まで拾うと、道の始まりが手前へずれる。
-            let offset = [sample.xy[0] - line.from[0], sample.xy[1] - line.from[1]];
+            let offset = [xy[0] - line.from[0], xy[1] - line.from[1]];
             let along = offset[0] * direction[0] + offset[1] * direction[1];
             let length = (line.to[0] - line.from[0]).hypot(line.to[1] - line.from[1]);
             let beside = (-slack..=length + slack).contains(&along);
             if !aligned || !beside {
                 continue;
             }
-            let distance = line.distance_2(&sample.xy).sqrt();
-            match roads.iter_mut().find(|(road, _)| *road == segment.data.0) {
+            let distance = line.distance_2(&xy).sqrt();
+            let road = &self.data.roads[segment.data.0];
+            match roads.iter_mut().find(|(found, _)| found.id == road.id) {
                 Some(found) => found.1 = found.1.min(distance),
-                None => roads.push((segment.data.0, distance)),
+                None => roads.push((road, distance)),
             }
         }
         roads.sort_by(|a, b| a.1.total_cmp(&b.1));
         roads
     }
 
-    fn road_events(
-        &self,
-        samples: &[Sample],
-        matched: &[Vec<(usize, f64)>],
-        options: &Options,
-    ) -> Vec<Event> {
-        let mut routes: Vec<Vec<RouteRef>> = matched
-            .iter()
-            .map(|roads| {
-                let set: BTreeSet<&RouteRef> = roads
-                    .iter()
-                    .map(|(road, _)| &self.data.roads[*road])
-                    .filter(|road| road.kind == "road")
-                    .flat_map(|road| &road.routes)
-                    .collect();
-                set.into_iter().cloned().collect()
-            })
-            .collect();
-        absorb_short(
-            &mut routes,
-            (options.road_noise_m / options.step_m).ceil() as usize,
-        );
-
-        let mut events = Vec::new();
-        let mut last: Option<&Vec<RouteRef>> = None;
-        for (start, end) in runs(&routes) {
-            let set = &routes[start];
-            if set.is_empty() {
-                if (end - start) as f64 * options.step_m >= options.road_again_m {
-                    last = None;
-                }
-                continue;
-            }
-            if last != Some(set) {
-                let names: Vec<String> = set.iter().map(route_name).collect();
-                let mut event = event(EventKind::Road, names.join("・"), samples[start].route_m);
-                event.detail.routes = set.clone();
-                events.push(event);
-            }
-            last = Some(set);
-        }
-        events
+    /// その点を中に持つ面。
+    fn area_at(&self, at: LonLat) -> Option<&Area> {
+        self.areas
+            .locate_all_at_point(at)
+            .map(|rectangle| &self.data.areas[rectangle.data])
+            .find(|area| contains(area, at))
     }
+}
 
-    fn structure_events(
-        &self,
-        samples: &[Sample],
-        matched: &[Vec<(usize, f64)>],
-        options: &Options,
-    ) -> Vec<Event> {
-        // 点ごとに、いちばん近い道の橋・トンネル。
-        let on: Vec<Option<(Structure, &str)>> = matched
-            .iter()
-            .map(|roads| {
-                let road = roads
-                    .iter()
-                    .map(|(road, _)| &self.data.roads[*road])
-                    .find(|road| road.structure != Structure::None)?;
-                Some((road.structure, road.structure_name.as_str()))
-            })
-            .collect();
-
-        // 同じ橋・トンネルが way の切れ目で分かれているものを、1 つにまとめる。
-        let join = (options.structure_join_m / options.step_m).ceil() as usize;
-        let mut spans: Vec<(Structure, &str, usize, usize)> = Vec::new();
-        for (start, end) in runs(&on) {
-            let Some((structure, name)) = on[start] else {
-                continue;
-            };
-            match spans.last_mut() {
-                Some(last) if last.0 == structure && last.1 == name && start - last.3 <= join => {
-                    last.3 = end
-                }
-                _ => spans.push((structure, name, start, end)),
-            }
-        }
-
-        spans
-            .into_iter()
-            .map(|(structure, name, start, end)| {
-                let kind = match structure {
-                    Structure::Bridge => EventKind::Bridge,
-                    _ => EventKind::Tunnel,
-                };
-                let end_m = samples[end - 1].route_m;
-                let mut event = event(kind, name.to_owned(), samples[start].route_m);
-                event.detail.end_m = Some(end_m);
-                let short = end_m - samples[start].route_m < options.structure_min_m;
-                event.hidden = short || structure == Structure::Shed;
-                event
-            })
-            .collect()
+/// 区切った点からイベントを抽出する。`tile` は、その点のまわりを読んだデータを返す。
+///
+/// 道と面は点ごとに `tile` から引く。道の駅は、経路の全体について `stations` から探す。
+fn extract_samples<'a>(
+    samples: &[Sample],
+    plane: Plane,
+    tile: impl Fn(LonLat) -> Option<&'a Prepared>,
+    stations: &[&Station],
+    options: &Options,
+) -> Vec<Event> {
+    if samples.len() < 2 {
+        return Vec::new();
     }
+    let tiles: Vec<Option<&Prepared>> = samples.iter().map(|s| tile(s.at)).collect();
+    let matched: Vec<Vec<(&Road, f64)>> = samples
+        .iter()
+        .zip(&tiles)
+        .map(|(sample, tile)| tile.map_or_else(Vec::new, |t| t.roads_at(sample, options)))
+        .collect();
+    let mut events = area_events(samples, &tiles, options);
+    events.extend(road_events(samples, &matched, options));
+    events.extend(structure_events(samples, &matched, options));
+    events.extend(station_events(samples, plane, stations, options));
+    events.sort_by(|a, b| a.route_m.total_cmp(&b.route_m));
+    events
+}
 
-    fn area_events(&self, samples: &[Sample], options: &Options) -> Vec<Event> {
-        // 点ごとに、その点がある面の番号。面と面の隙間では、直前の面にいることにする。
-        let mut current: Option<usize> = None;
-        let mut codes: Vec<Option<&str>> = Vec::with_capacity(samples.len());
-        let mut by_code: Vec<(&str, usize)> = Vec::new();
-        for sample in samples {
-            let stays = current.is_some_and(|area| contains(&self.data.areas[area], sample.at));
-            if !stays {
-                let found = self
-                    .areas
-                    .locate_all_at_point(sample.at)
-                    .map(|rectangle| rectangle.data)
-                    .find(|area| contains(&self.data.areas[*area], sample.at));
-                current = found.or(current);
+fn road_events(samples: &[Sample], matched: &[Vec<(&Road, f64)>], options: &Options) -> Vec<Event> {
+    let mut routes: Vec<Vec<RouteRef>> = matched
+        .iter()
+        .map(|roads| {
+            let set: BTreeSet<&RouteRef> = roads
+                .iter()
+                .map(|(road, _)| *road)
+                .filter(|road| road.kind == "road")
+                .flat_map(|road| &road.routes)
+                .collect();
+            set.into_iter().cloned().collect()
+        })
+        .collect();
+    absorb_short(
+        &mut routes,
+        (options.road_noise_m / options.step_m).ceil() as usize,
+    );
+
+    let mut events = Vec::new();
+    let mut last: Option<&Vec<RouteRef>> = None;
+    for (start, end) in runs(&routes) {
+        let set = &routes[start];
+        if set.is_empty() {
+            if (end - start) as f64 * options.step_m >= options.road_again_m {
+                last = None;
             }
-            let code = current.map(|area| self.data.areas[area].code.as_str());
-            if let (Some(code), Some(area)) = (code, current)
-                && !by_code.iter().any(|(known, _)| *known == code)
-            {
-                by_code.push((code, area));
-            }
-            codes.push(code);
+            continue;
         }
-        absorb_short(
-            &mut codes,
-            (options.area_noise_m / options.step_m).ceil() as usize,
-        );
+        if last != Some(set) {
+            let names: Vec<String> = set.iter().map(route_name).collect();
+            let mut event = event(EventKind::Road, names.join("・"), samples[start].route_m);
+            event.detail.routes = set.clone();
+            events.push(event);
+        }
+        last = Some(set);
+    }
+    events
+}
 
-        let area_of = |code: &str| {
-            let (_, area) = by_code.iter().find(|(known, _)| *known == code)?;
-            Some(&self.data.areas[*area])
+fn structure_events(
+    samples: &[Sample],
+    matched: &[Vec<(&Road, f64)>],
+    options: &Options,
+) -> Vec<Event> {
+    // 点ごとに、いちばん近い道の橋・トンネル。
+    let on: Vec<Option<(Structure, &str)>> = matched
+        .iter()
+        .map(|roads| {
+            let road = roads
+                .iter()
+                .map(|(road, _)| *road)
+                .find(|road| road.structure != Structure::None)?;
+            Some((road.structure, road.structure_name.as_str()))
+        })
+        .collect();
+
+    // 同じ橋・トンネルが way の切れ目で分かれているものを、1 つにまとめる。
+    let join = (options.structure_join_m / options.step_m).ceil() as usize;
+    let mut spans: Vec<(Structure, &str, usize, usize)> = Vec::new();
+    for (start, end) in runs(&on) {
+        let Some((structure, name)) = on[start] else {
+            continue;
         };
-        let found = runs(&codes);
-        let mut events = Vec::new();
-        for pair in found.windows(2) {
-            let (Some(from), Some(to)) = (codes[pair[0].0], codes[pair[1].0]) else {
-                continue;
-            };
-            let (Some(from), Some(to)) = (area_of(from), area_of(to)) else {
-                continue;
-            };
-            let route_m = samples[pair[1].0].route_m;
-            if from.pref != to.pref {
-                let label = format!("{} → {}", from.pref, to.pref);
-                events.push(event(EventKind::PrefBoundary, label, route_m));
+        match spans.last_mut() {
+            Some(last) if last.0 == structure && last.1 == name && start - last.3 <= join => {
+                last.3 = end
             }
-            let label = format!("{} → {}", from.muni, to.muni);
-            events.push(event(EventKind::MuniBoundary, label, route_m));
+            _ => spans.push((structure, name, start, end)),
         }
-        events
     }
 
-    fn station_events(&self, samples: &[Sample], options: &Options) -> Vec<Event> {
-        let apart = (options.station_apart_m / options.step_m).ceil() as usize;
-        let mut events = Vec::new();
-        for station in &self.data.stations {
-            let xy = self.plane.xy(station.at);
-            let distance = |sample: &Sample| (sample.xy[0] - xy[0]).hypot(sample.xy[1] - xy[1]);
-            // 近くを通っている間の、いちばん近い点。離れてから戻ってきたら、別の通過にする。
-            let mut pass: Option<(usize, f64, usize)> = None;
-            for (i, sample) in samples.iter().enumerate() {
-                let d = distance(sample);
-                if d > options.station_m {
-                    continue;
-                }
-                pass = match pass {
-                    Some((best, best_d, last)) if i - last <= apart => Some(if d < best_d {
-                        (i, d, i)
-                    } else {
-                        (best, best_d, i)
-                    }),
-                    Some((best, _, _)) => {
-                        events.push(event(
-                            EventKind::MichiNoEki,
-                            station.name.clone(),
-                            samples[best].route_m,
-                        ));
-                        Some((i, d, i))
-                    }
-                    None => Some((i, d, i)),
-                };
-            }
-            if let Some((best, _, _)) = pass {
-                events.push(event(
-                    EventKind::MichiNoEki,
-                    station.name.clone(),
-                    samples[best].route_m,
-                ));
-            }
+    spans
+        .into_iter()
+        .map(|(structure, name, start, end)| {
+            let kind = match structure {
+                Structure::Bridge => EventKind::Bridge,
+                _ => EventKind::Tunnel,
+            };
+            let end_m = samples[end - 1].route_m;
+            let mut event = event(kind, name.to_owned(), samples[start].route_m);
+            event.detail.end_m = Some(end_m);
+            let short = end_m - samples[start].route_m < options.structure_min_m;
+            event.hidden = short || structure == Structure::Shed;
+            event
+        })
+        .collect()
+}
+
+fn area_events(samples: &[Sample], tiles: &[Option<&Prepared>], options: &Options) -> Vec<Event> {
+    // 点ごとに、その点がある面の番号。面と面の隙間では、直前の面にいることにする。
+    let mut current: Option<&Area> = None;
+    let mut codes: Vec<Option<&str>> = Vec::with_capacity(samples.len());
+    let mut by_code: Vec<&Area> = Vec::new();
+    for (sample, tile) in samples.iter().zip(tiles) {
+        let stays = current.is_some_and(|area| contains(area, sample.at));
+        if !stays {
+            current = tile.and_then(|t| t.area_at(sample.at)).or(current);
         }
-        events
+        if let Some(area) = current
+            && !by_code.iter().any(|known| known.code == area.code)
+        {
+            by_code.push(area);
+        }
+        codes.push(current.map(|area| area.code.as_str()));
+    }
+    absorb_short(
+        &mut codes,
+        (options.area_noise_m / options.step_m).ceil() as usize,
+    );
+
+    let area_of = |code: &str| by_code.iter().find(|known| known.code == code).copied();
+    let found = runs(&codes);
+    let mut events = Vec::new();
+    for pair in found.windows(2) {
+        let (Some(from), Some(to)) = (codes[pair[0].0], codes[pair[1].0]) else {
+            continue;
+        };
+        let (Some(from), Some(to)) = (area_of(from), area_of(to)) else {
+            continue;
+        };
+        let route_m = samples[pair[1].0].route_m;
+        if from.pref != to.pref {
+            let label = format!("{} → {}", from.pref, to.pref);
+            events.push(event(EventKind::PrefBoundary, label, route_m));
+        }
+        let label = format!("{} → {}", from.muni, to.muni);
+        events.push(event(EventKind::MuniBoundary, label, route_m));
+    }
+    events
+}
+
+fn station_events(
+    samples: &[Sample],
+    plane: Plane,
+    stations: &[&Station],
+    options: &Options,
+) -> Vec<Event> {
+    let apart = (options.station_apart_m / options.step_m).ceil() as usize;
+    let mut events = Vec::new();
+    for station in stations {
+        let xy = plane.xy(station.at);
+        let distance = |sample: &Sample| (sample.xy[0] - xy[0]).hypot(sample.xy[1] - xy[1]);
+        // 近くを通っている間の、いちばん近い点。離れてから戻ってきたら、別の通過にする。
+        let mut pass: Option<(usize, f64, usize)> = None;
+        for (i, sample) in samples.iter().enumerate() {
+            let d = distance(sample);
+            if d > options.station_m {
+                continue;
+            }
+            pass = match pass {
+                Some((best, best_d, last)) if i - last <= apart => Some(if d < best_d {
+                    (i, d, i)
+                } else {
+                    (best, best_d, i)
+                }),
+                Some((best, _, _)) => {
+                    events.push(event(
+                        EventKind::MichiNoEki,
+                        station.name.clone(),
+                        samples[best].route_m,
+                    ));
+                    Some((i, d, i))
+                }
+                None => Some((i, d, i)),
+            };
+        }
+        if let Some((best, _, _)) = pass {
+            events.push(event(
+                EventKind::MichiNoEki,
+                station.name.clone(),
+                samples[best].route_m,
+            ));
+        }
+    }
+    events
+}
+
+/// 判定用データを升目ごとに読んで、読んだ升目を覚えておく。
+///
+/// 経路を囲む矩形をまとめて読むと、斜めに長い経路や遠くへ延ばした経路で、通らない所の道まで
+/// 何十万本も読み、索引とグラフを作り直すことになる。升目に分ければ、経路のそばだけを読み、
+/// 読んだ升目は読み直さない。
+pub struct Tiles {
+    dir: PathBuf,
+    cache: Mutex<Cache>,
+    /// 吸着で引いた線。両端と閾値が同じなら、読む範囲も同じなので、同じ線になる。
+    snaps: Mutex<HashMap<[u64; 6], Option<Vec<LonLat>>>>,
+}
+
+/// 升目の番号。経度・緯度を `TILE_DEGREES` で割って切り捨てたもの。
+type Key = (i32, i32);
+
+#[derive(Default)]
+struct Cache {
+    /// 読んだ升目と、最後に使った時。
+    tiles: HashMap<Key, (Arc<Prepared>, u64)>,
+    clock: u64,
+}
+
+/// 升目の大きさ（度）。中部の山あいで、1 つに道が 1,000 本ほど入る。
+const TILE_DEGREES: f64 = 0.1;
+/// 升目を読むときに足す余白（度）。升目の端の点からも、隣の升目にある道（15 m）や
+/// 道の駅（100 m）に届くよう、それより広くとる。
+const TILE_MARGIN_DEGREES: f64 = 0.003;
+/// 点を道へ寄せるときと、区間を吸着で結ぶときに、まわりを読む広さ（度）。
+const NEAR_DEGREES: f64 = 0.02;
+/// 区間を吸着で結ぶときに、2 点を囲む矩形の外へ広げて読む幅の上限（度）。長い区間で、
+/// 何十万本もの道を読まないようにする。
+const MAX_REACH_DEGREES: f64 = 0.2;
+/// 覚えておく升目の数。越えたら、長く使っていないものから捨てる。
+const MAX_TILES: usize = 256;
+/// 覚えておく吸着の線の数。越えたら、すべて捨てる。
+const MAX_SNAPS: usize = 4096;
+
+fn key_of(at: LonLat) -> Key {
+    (
+        (at[0] / TILE_DEGREES).floor() as i32,
+        (at[1] / TILE_DEGREES).floor() as i32,
+    )
+}
+
+/// 矩形に掛かる升目。
+fn keys_in(bbox: BBox) -> BTreeSet<Key> {
+    let (min, max) = (key_of(bbox.min), key_of(bbox.max));
+    (min.0..=max.0)
+        .flat_map(|x| (min.1..=max.1).map(move |y| (x, y)))
+        .collect()
+}
+
+fn tile_bbox(key: Key) -> BBox {
+    let min = [key.0 as f64 * TILE_DEGREES, key.1 as f64 * TILE_DEGREES];
+    BBox {
+        min,
+        max: [min[0] + TILE_DEGREES, min[1] + TILE_DEGREES],
+    }
+}
+
+impl Tiles {
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            dir: dir.into(),
+            cache: Mutex::default(),
+            snaps: Mutex::default(),
+        }
+    }
+
+    /// 読むフォルダ。
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// 升目を、読んでいなければ読んで返す。
+    fn load(&self, keys: &BTreeSet<Key>) -> Result<HashMap<Key, Arc<Prepared>>, Error> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.clock += 1;
+        let now = cache.clock;
+        let mut found = HashMap::new();
+        for &key in keys {
+            let prepared = match cache.tiles.get_mut(&key) {
+                Some((prepared, used)) => {
+                    *used = now;
+                    prepared.clone()
+                }
+                None => {
+                    let bbox = tile_bbox(key).expand(TILE_MARGIN_DEGREES);
+                    let prepared = Arc::new(Prepared::new(GeoData::load(&self.dir, bbox)?, bbox));
+                    cache.tiles.insert(key, (prepared.clone(), now));
+                    prepared
+                }
+            };
+            found.insert(key, prepared);
+        }
+        // いま使った升目は、数を越えていても残す。
+        while cache.tiles.len() > MAX_TILES {
+            let oldest = cache
+                .tiles
+                .iter()
+                .filter(|(_, (_, used))| *used < now)
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| *key);
+            let Some(oldest) = oldest else {
+                break;
+            };
+            cache.tiles.remove(&oldest);
+        }
+        Ok(found)
+    }
+
+    /// その点にいちばん近い、道の上の点。吸着に使える道が `radius_m` 以内に無ければ `None`。
+    ///
+    /// 探すのは、点のまわり `NEAR_DEGREES` の中だけである。
+    pub fn snap_point(&self, point: LonLat, radius_m: f64) -> Result<Option<LonLat>, Error> {
+        let Some(bbox) = BBox::around(&[point]) else {
+            return Ok(None);
+        };
+        let tiles = self.load(&keys_in(bbox.expand(NEAR_DEGREES)))?;
+        Ok(tiles
+            .values()
+            .filter_map(|tile| tile.closest_on_road(point, radius_m))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(at, _)| at))
+    }
+
+    /// 2 点の間を、道に沿って結ぶ線。両端は道の上の点になる。
+    ///
+    /// 道は、2 点を囲む矩形のまわりにあるものだけを使う。どちらかの近くに道が無いときと、道のりが直線距離に比べて長すぎるときは `None`。
+    pub fn snap(
+        &self,
+        from: LonLat,
+        to: LonLat,
+        options: &SnapOptions,
+    ) -> Result<Option<Vec<LonLat>>, Error> {
+        let key = [
+            from[0].to_bits(),
+            from[1].to_bits(),
+            to[0].to_bits(),
+            to[1].to_bits(),
+            options.road_m.to_bits(),
+            options.max_ratio.to_bits(),
+        ];
+        if let Some(line) = self
+            .snaps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
+            return Ok(line.clone());
+        }
+        // 道のりが直線の `max_ratio` 倍までなら、道は 2 点を囲む矩形から、直線距離に
+        // `(max_ratio - 1) / 2` を掛けただけ外へ出うる。つづら折りの峠道は、矩形の外を回る。
+        let reach_m = geo::distance_m(from, to) * (options.max_ratio - 1.0).max(0.0) / 2.0;
+        let m_per_degree = M_PER_DEGREE * from[1].to_radians().cos();
+        let margin = (reach_m / m_per_degree).clamp(NEAR_DEGREES, MAX_REACH_DEGREES);
+        let Some(bbox) = BBox::around(&[from, to]).map(|b| b.expand(margin)) else {
+            return Ok(None);
+        };
+        let tiles = self.load(&keys_in(bbox))?;
+        // 升目の境をまたぐ道は、どちらの升目にもある。同じ道を 2 本にすると、道の途中の点が
+        // すべて交点になってしまう。
+        let mut seen = HashSet::new();
+        let roads: Vec<Road> = tiles
+            .values()
+            .flat_map(|tile| &tile.data().roads)
+            .filter(|road| usable(road) && seen.insert(road.id))
+            .filter(|road| BBox::around(&road.line).is_some_and(|b| b.intersects(&bbox)))
+            .cloned()
+            .collect();
+        let region = Prepared::new(
+            GeoData {
+                roads,
+                ..GeoData::default()
+            },
+            bbox,
+        );
+        let line = region.snap(from, to, options);
+        let mut snaps = self.snaps.lock().unwrap_or_else(|e| e.into_inner());
+        if snaps.len() >= MAX_SNAPS {
+            snaps.clear();
+        }
+        snaps.insert(key, line.clone());
+        Ok(line)
+    }
+
+    /// 経路の折れ線からイベントを抽出する。位置の順に並ぶ。ID は空で、時刻は無い。
+    ///
+    /// 読むのは、経路の通る升目だけである。
+    pub fn extract(&self, line: &[LonLat], options: &Options) -> Result<Vec<Event>, Error> {
+        let Some(bbox) = BBox::around(line) else {
+            return Ok(Vec::new());
+        };
+        let plane = Plane::at((bbox.min[1] + bbox.max[1]) / 2.0);
+        let samples = resample(line, plane, options.step_m);
+        let tiles = self.load(&samples.iter().map(|s| key_of(s.at)).collect())?;
+        // 升目の端の道の駅は、隣の升目にも入っている。
+        let mut seen = HashSet::new();
+        let mut stations: Vec<&Station> = tiles
+            .values()
+            .flat_map(|tile| &tile.data().stations)
+            .filter(|s| seen.insert((s.name.as_str(), s.at[0].to_bits(), s.at[1].to_bits())))
+            .collect();
+        stations.sort_by(|a, b| a.name.cmp(&b.name).then(a.at[0].total_cmp(&b.at[0])));
+        Ok(extract_samples(
+            &samples,
+            plane,
+            |at| tiles.get(&key_of(at)).map(Arc::as_ref),
+            &stations,
+            options,
+        ))
     }
 }
 
@@ -902,6 +1151,65 @@ mod tests {
         assert!(contains(&area, at(500.0, 0.0)));
         assert!(!contains(&area, at(1500.0, 0.0)));
         assert!(!contains(&area, at(5000.0, 0.0)));
+    }
+
+    /// 東西 3000 m の経路を、x = 1000 m を境に西と東の升目に分けて抽出する。
+    fn across_edge(west: GeoData, east: GeoData) -> Vec<Event> {
+        let (west, east) = (prepared(west), prepared(east));
+        let line = [at(0.0, 0.0), at(3000.0, 0.0)];
+        let plane = Plane::at(ORIGIN[1]);
+        let samples = resample(&line, plane, Options::default().step_m);
+        let edge = at(1000.0, 0.0)[0];
+        let tile = |p: LonLat| Some(if p[0] < edge { &west } else { &east });
+        extract_samples(&samples, plane, tile, &[], &Options::default())
+    }
+
+    #[test]
+    fn a_road_in_both_tiles_is_still_one_road() {
+        // 升目の境をまたぐ道は、両方の升目に入っている。
+        let both = || {
+            roads(vec![road(
+                1,
+                vec![at(-100.0, 0.0), at(3100.0, 0.0)],
+                vec![national(19)],
+            )])
+        };
+        let events = across_edge(both(), both());
+        assert_eq!(
+            summary(&events, EventKind::Road),
+            [("国道19号".to_owned(), 0)]
+        );
+    }
+
+    #[test]
+    fn an_area_in_both_tiles_is_crossed_once() {
+        let both = || {
+            areas(vec![
+                square("15101", "新潟県", "新潟市北区", -1000.0, 1500.0),
+                square("15102", "新潟県", "新潟市東区", 1500.0, 4000.0),
+            ])
+        };
+        let events = across_edge(both(), both());
+        assert_eq!(
+            summary(&events, EventKind::MuniBoundary),
+            [("新潟市北区 → 新潟市東区".to_owned(), 1500)]
+        );
+    }
+
+    #[test]
+    fn a_box_covers_the_tiles_it_touches() {
+        assert_eq!(key_of([138.05, 36.15]), (1380, 361));
+        assert_eq!(key_of([-0.05, -0.05]), (-1, -1));
+        let bbox = BBox {
+            min: [138.05, 36.15],
+            max: [138.25, 36.15],
+        };
+        assert_eq!(
+            keys_in(bbox).into_iter().collect::<Vec<_>>(),
+            [(1380, 361), (1381, 361), (1382, 361)]
+        );
+        let tile = tile_bbox((1380, 361));
+        assert!((tile.min[0] - 138.0).abs() < 1e-9 && (tile.max[1] - 36.2).abs() < 1e-9);
     }
 
     fn stations(stations: Vec<(&str, LonLat)>) -> GeoData {
