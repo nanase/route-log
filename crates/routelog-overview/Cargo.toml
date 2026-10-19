@@ -1,0 +1,13 @@
+[package]
+name = "routelog-overview"
+version.workspace = true
+edition.workspace = true
+description = "経路の概略図の動画を、航空写真の上に描いて書き出す"
+
+[dependencies]
+routelog-video.workspace = true
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+rayon = "1"
+thiserror.workspace = true
+tiny-skia = "0.11"
+ureq = "2"

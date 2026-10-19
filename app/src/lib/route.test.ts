@@ -8,6 +8,7 @@ import {
   moveWaypoint,
   onSegment,
   onWaypoint,
+  part,
   type Path,
   pieces,
   removeVertex,
@@ -33,6 +34,14 @@ describe("経由点", () => {
     expect(build(A).route.segments).toEqual([]);
     expect(build(A, B, C).route.segments).toEqual([[], []]);
     expect(line(build(A, B, C))).toEqual([A, B, C]);
+  });
+
+  test("経由点で区切った一部は、間の頂点を含み、端の経由点で終わる", () => {
+    const path = insertVertex(insertVertex(build(A, B, C, D), 1, 0, P), 2, 0, Q);
+    expect(line(part(path, 1, 3))).toEqual([B, P, C, Q, D]);
+    expect(line(part(path, 0, 1))).toEqual([A, B]);
+    expect(line(part(path, 2, 2))).toEqual([]);
+    expect(line(part(path, 2, 4))).toEqual([]);
   });
 
   test("動かしても、ほかは変わらない", () => {

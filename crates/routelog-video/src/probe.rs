@@ -69,10 +69,7 @@ impl Ffprobe {
 
     /// 環境変数 `ROUTELOG_FFPROBE` があればそれを、無ければ PATH の `ffprobe` を使う。
     pub fn from_env() -> Self {
-        let program = std::env::var_os(PROGRAM_ENV)
-            .or_else(|| find_on_path("ffprobe").map(Into::into))
-            .unwrap_or_else(|| "ffprobe".into());
-        Self::new(program)
+        Self::new(program_from_env(PROGRAM_ENV, "ffprobe"))
     }
 
     pub fn run(&self, path: &Path) -> Result<Probe, Error> {
@@ -97,6 +94,13 @@ impl Ffprobe {
     }
 }
 
+/// 外の道具の場所。環境変数 `env` があればそれを、無ければ PATH の `name` を使う。
+pub fn program_from_env(env: &str, name: &str) -> OsString {
+    std::env::var_os(env)
+        .or_else(|| find_on_path(name).map(Into::into))
+        .unwrap_or_else(|| name.into())
+}
+
 /// PATH から実行ファイルを探す。
 ///
 /// Windows の `Command` は名前に `.exe` だけを補う。道具の管理ソフトは `.cmd` の
@@ -116,14 +120,14 @@ fn find_on_path(_name: &str) -> Option<std::path::PathBuf> {
 
 /// ウィンドウを持つアプリから呼ぶと、ファイルごとにコンソールが一瞬開く。それを出さない。
 #[cfg(windows)]
-fn hide_console(command: &mut Command) {
+pub fn hide_console(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
+pub fn hide_console(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

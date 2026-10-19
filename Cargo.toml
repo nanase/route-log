@@ -4,6 +4,7 @@ members = [
     "crates/routelog-access",
     "crates/routelog-core",
     "crates/routelog-geo",
+    "crates/routelog-overview",
     "crates/routelog-video",
     "app/src-tauri",
     "worker",
@@ -13,6 +14,7 @@ default-members = [
     "crates/routelog-access",
     "crates/routelog-core",
     "crates/routelog-geo",
+    "crates/routelog-overview",
     "crates/routelog-video",
     "app/src-tauri",
 ]
@@ -25,6 +27,7 @@ edition = "2024"
 routelog-access = { path = "crates/routelog-access" }
 routelog-core = { path = "crates/routelog-core" }
 routelog-geo = { path = "crates/routelog-geo" }
+routelog-overview = { path = "crates/routelog-overview" }
 routelog-video = { path = "crates/routelog-video" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -46,6 +49,19 @@ opt-level = 3
 
 [profile.dev.package.routelog-geo]
 opt-level = 2
+
+# 概略図の動画は、4K の絵を何百枚も描く。最適化なしでは 1 枚に秒単位かかる。
+[profile.dev.package.routelog-overview]
+opt-level = 3
+
+[profile.dev.package.tiny-skia]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
 
 # Worker は大きさに上限があるので、小ささを優先する。strip は付けない。付けると
 # wasm-bindgen が要る情報まで消え、Worker のビルドが「externref table required」で止まる。

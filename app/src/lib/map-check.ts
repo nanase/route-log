@@ -1,6 +1,7 @@
 /** 地図の表示と、経路の編集・保存を、画面を人が見なくても確かめる。 */
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { creditImages } from "./overview";
 import { line, type Path } from "./route";
 import type { LonLat, RideDocument, RideEvent, RideSummary } from "./types";
 import type { Basemap } from "./ui";
@@ -58,6 +59,8 @@ export interface AppHandle {
   showSettings(shown: boolean): Promise<void>;
   /** 走行の切り替えの板を出し入れする */
   showRides(shown: boolean): Promise<void>;
+  /** 概略図の動画のダイアログを出し入れする */
+  showOverview(shown: boolean): Promise<void>;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -188,6 +191,34 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
   });
 
   const captures = [notice, edited];
+
+  // 概略図の動画。見本は画面の写しで確かめる。動画は短くして、報告の隣に書く。
+  await app.showOverview(true);
+  await until(() => document.querySelector("dialog .preview img") !== null, 60_000);
+  await sleep(500);
+  captures.push(await capture("overview"));
+  await app.showOverview(false);
+  const phases: string[] = [];
+  const onProgress = new Channel<{ phase: string; done: number; total: number }>();
+  onProgress.onmessage = (p) => {
+    if (phases.at(-1) !== p.phase) phases.push(p.phase);
+  };
+  const started = performance.now();
+  const overview = await invoke("render_overview", {
+    line: line(app.path()),
+    motion: { zoomSeconds: 1, holdSeconds: 1, startScale: 0.7 },
+    credits: await creditImages(),
+    path: await invoke<string>("check_path", { name: "overview.mp4" }),
+    onProgress,
+  }).then(
+    () => "書き出した",
+    (e) => String(e),
+  );
+  note("概略図の動画を、寄る 1 秒、止める 1 秒で書き出す", "書き出した。進み具合が tiles、frames の順に届く", {
+    overview,
+    phases,
+    seconds: Math.round((performance.now() - started) / 1000),
+  });
   if (app.loadGeo !== null) {
     // 碓氷峠。軽井沢町から安中市へ、県境をまたぐ線を引く。
     await app.loadGeo();

@@ -7,7 +7,7 @@ mod probe;
 mod scan;
 
 pub use name::{NamePattern, ParsedName};
-pub use probe::{Ffprobe, Probe, parse_probe};
+pub use probe::{Ffprobe, Probe, hide_console, parse_probe, program_from_env};
 pub use scan::{Scan, Skipped, scan};
 
 #[derive(Debug, thiserror::Error)]

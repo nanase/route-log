@@ -35,6 +35,7 @@
   import { runMapCheck } from "./lib/map-check";
   import NextGuide from "./lib/NextGuide.svelte";
   import Notices from "./lib/Notices.svelte";
+  import OverviewDialog from "./lib/OverviewDialog.svelte";
   import PlaybackCheck from "./lib/PlaybackCheck.svelte";
   import Player from "./lib/Player.svelte";
   import RidePanel from "./lib/RidePanel.svelte";
@@ -111,6 +112,7 @@
   /** いまの作業。経路入力か、動画を見ながらの時刻入力か */
   let mode = $state<Mode>("route");
   let settingsOpen = $state(false);
+  let overviewOpen = $state(false);
   let ridesOpen = $state(false);
   /** 操作の手がかりを出しているか */
   let hintsShown = $state(remembered(HINTS_KEY, ["on", "off"], "on") === "on");
@@ -1206,6 +1208,10 @@
           else ridesOpen = false;
           await sleep(300);
         },
+        showOverview: async (shown) => {
+          overviewOpen = shown;
+          await sleep(300);
+        },
       });
     } catch (e) {
       report = { error: String(e), message: lastMessage };
@@ -1256,9 +1262,11 @@
           failure={syncView.failure}
           compact={mode === "confirm"}
           canExport={doc !== null}
+          canOverview={(doc?.waypoints.length ?? 0) >= 2}
           onrides={openRides}
           onmode={setMode}
           onexport={exportCsv}
+          onoverview={() => (overviewOpen = true)}
           onsettings={() => (settingsOpen = true)}
           onretry={retrySave}
         />
@@ -1437,6 +1445,9 @@
       }}
       onclose={() => (settingsOpen = false)}
     />
+  {/if}
+  {#if overviewOpen && doc !== null}
+    <OverviewDialog {doc} onclose={() => (overviewOpen = false)} />
   {/if}
 {/if}
 

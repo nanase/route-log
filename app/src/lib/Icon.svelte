@@ -4,6 +4,7 @@
     down: '<path d="M6 9l6 6 6-6"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
     export: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
+    movie: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9v6l5-3z"/>',
     cloud: '<path d="M7 18a4 4 0 0 1-.5-8A6 6 0 0 1 18 9.5 4.5 4.5 0 0 1 17.5 18Z"/>',
     settings: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
     undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',

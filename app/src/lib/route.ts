@@ -91,6 +91,12 @@ export function line(path: Path): LonLat[] {
   return path.waypoints.flatMap((waypoint, i) => [point(waypoint), ...(path.route.segments[i] ?? [])]);
 }
 
+/** 経由点 `from` から `to` までの、経路の一部。番号が逆か範囲の外なら、空の経路。 */
+export function part(path: Path, from: number, to: number): Path {
+  if (from < 0 || to >= path.waypoints.length || from >= to) return { waypoints: [], route: { segments: [] } };
+  return { waypoints: path.waypoints.slice(from, to + 1), route: { segments: path.route.segments.slice(from, to) } };
+}
+
 /** 線を、隣り合う 2 点ごとに区切る。 */
 export function pieces(path: Path): Piece[] {
   return path.route.segments.flatMap((vertices, segment) => {

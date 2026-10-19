@@ -2,6 +2,7 @@ mod check;
 mod config;
 mod events;
 mod excluded;
+mod overview;
 mod rides;
 mod store;
 mod sync;
@@ -42,6 +43,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(videos::State::default())
         .manage(events::Extractor::default())
+        .manage(overview::State::default())
         .setup(|app| {
             let dir = config::data_dir(app.handle())?;
             app.manage(store::Store::new(dir.join("rides")));
@@ -65,6 +67,9 @@ pub fn run() {
             config::open_geo_data,
             excluded::get_excluded_videos,
             excluded::set_video_excluded,
+            overview::overview_preview,
+            overview::render_overview,
+            overview::cancel_overview,
             rides::list_rides,
             rides::load_ride,
             rides::create_ride,

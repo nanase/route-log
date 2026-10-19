@@ -15,9 +15,11 @@
     failure,
     compact,
     canExport,
+    canOverview,
     onrides,
     onmode,
     onexport,
+    onoverview,
     onsettings,
     onretry,
   }: {
@@ -34,9 +36,12 @@
     /** 幅が狭いとき。ボタンの字を省き、動画の要約を出さない */
     compact: boolean;
     canExport: boolean;
+    /** 概略図の動画を作れるか。経由点が 2 つ以上あれば作れる */
+    canOverview: boolean;
     onrides: () => void;
     onmode: (mode: Mode) => void;
     onexport: () => void;
+    onoverview: () => void;
     onsettings: () => void;
     /** 保存をやり直す */
     onretry: () => void;
@@ -103,6 +108,18 @@
     {/if}
   </div>
 
+  <button
+    type="button"
+    class="btn"
+    class:icon-only={compact}
+    onclick={onoverview}
+    disabled={!canOverview}
+    aria-haspopup="dialog"
+    aria-label="概略図の動画"
+    title="動画の冒頭に入れる、経路の概略図の動画を書き出す"
+  >
+    <Icon name="movie" />{#if !compact}概略図の動画{/if}
+  </button>
   <button
     type="button"
     class="btn"
