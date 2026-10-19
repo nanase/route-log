@@ -16,6 +16,9 @@ pub struct Ride {
     /// カメラの時計の補正値。実時刻 = ファイル名の時刻 + 補正値。
     pub clock_offset_ms: i64,
     pub is_public: bool,
+    /// 走行に付けた目印（「投稿済」など）。付けた順。この項目が無い頃の記録では空。
+    #[serde(default)]
+    pub labels: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -181,6 +184,7 @@ mod tests {
                 ride_date: "2026-10-03".into(),
                 clock_offset_ms: 0,
                 is_public: false,
+                labels: Vec::new(),
                 created_at: "2026-10-03T05:00:00+09:00".into(),
                 updated_at: "2026-10-03T05:00:00+09:00".into(),
             },
@@ -264,6 +268,7 @@ mod tests {
             "clock_offset_ms": 0, "is_public": false, "created_at": "a", "updated_at": "b" } }"#;
         let doc: RideDocument = serde_json::from_str(json).unwrap();
         assert!(doc.waypoints.is_empty() && doc.route.segments.is_empty());
+        assert!(doc.ride.labels.is_empty());
     }
 
     #[test]

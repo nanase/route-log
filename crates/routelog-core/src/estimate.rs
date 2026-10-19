@@ -481,6 +481,7 @@ mod tests {
                 ride_date: "2026-10-03".into(),
                 clock_offset_ms,
                 is_public: false,
+                labels: Vec::new(),
                 created_at: "a".into(),
                 updated_at: "b".into(),
             },

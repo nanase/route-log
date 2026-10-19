@@ -151,6 +151,20 @@ mise exec -- bun wrangler delete          # Worker を消す
 
 D1 と R2 は、ダッシュボードか `wrangler d1 delete` / `wrangler r2 bucket delete` で消します。Access のアプリケーションとサービストークンは、ダッシュボードで消します。
 
+## Worker を入れ替える
+
+新しいマイグレーションがあれば、Worker より先に当てます。新しい Worker は、足した列を読むためです。
+
+```sh
+mise exec -- bun wrangler d1 migrations list routelog --remote   # 当てていないものを見る
+mise exec -- bun wrangler d1 time-travel info routelog           # 戻す先の bookmark を控える
+mise exec -- bun wrangler d1 migrations apply routelog --remote
+mise exec -- bun wrangler deploy
+curl -s -o /dev/null -w "%{http_code}\n" https://routelog.example.com/api/rides   # 403 なら Access が前に立っている
+```
+
+マイグレーションを戻すときは、`wrangler d1 time-travel restore routelog --bookmark=<控えた bookmark>` で、当てる前の状態にします。`migrations/rollback/` に戻し用の SQL もあります。
+
 ## 確かめたことと、まだのこと
 
 2026-10-13 に、この手順で `routelog.nanase.cc` を作りました。

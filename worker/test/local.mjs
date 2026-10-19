@@ -43,8 +43,8 @@ async function call(method, path, { jwt = token(), body, ifMatch } = {}) {
   return { status: response.status, body: text === "" ? null : JSON.parse(text) };
 }
 
-const document = (updated_at, title = "碓氷峠") => ({
-  ride: { id: ID, title, ride_date: "2026-10-03", clock_offset_ms: -30000, is_public: false, created_at: "t0", updated_at },
+const document = (updated_at, title = "碓氷峠", labels = []) => ({
+  ride: { id: ID, title, ride_date: "2026-10-03", clock_offset_ms: -30000, is_public: false, labels, created_at: "t0", updated_at },
   waypoints: [
     { lon: 138.62, lat: 36.345, segment_mode: "manual" },
     { lon: 138.7, lat: 36.36, segment_mode: "straight" },
@@ -110,9 +110,15 @@ try {
   check("古い更新時刻では上書きできず、いまの更新時刻が返る", [stale.status, stale.body.updated_at], [412, "t1"]);
   check("知っている更新時刻なら上書きできる", (await call("PUT", `/api/rides/${ID}`, { body: document("t2", "碓氷峠（修正）"), ifMatch: "t1" })).status, 200);
   check("上書きしたものが返る", (await call("GET", `/api/rides/${ID}`)).body, document("t2", "碓氷峠（修正）"));
+  const labeled = document("t2a", "碓氷峠（修正）", ["投稿済", "峠"]);
+  check("ラベルを付けられる", (await call("PUT", `/api/rides/${ID}`, { body: labeled, ifMatch: "t2" })).status, 200);
+  check("付けたラベルが、付けた順で返る", (await call("GET", `/api/rides/${ID}`)).body.ride.labels, ["投稿済", "峠"]);
+  const { labels: _, ...unlabeled } = document("t2b").ride;
+  check("ラベルを持たないアプリの走行も置ける", (await call("PUT", `/api/rides/${ID}`, { body: { ...document("t2b"), ride: unlabeled }, ifMatch: "t2a" })).status, 200);
+  check("そのときラベルは空になる", (await call("GET", `/api/rides/${ID}`)).body.ride.labels, []);
 
   const shorter = { ...document("t3"), waypoints: [], route: { segments: [] }, events: [] };
-  check("経由点とイベントを空にできる", (await call("PUT", `/api/rides/${ID}`, { body: shorter, ifMatch: "t2" })).status, 200);
+  check("経由点とイベントを空にできる", (await call("PUT", `/api/rides/${ID}`, { body: shorter, ifMatch: "t2b" })).status, 200);
   check("空にしたものが返る", (await call("GET", `/api/rides/${ID}`)).body, shorter);
 
   // イベントは、中身を見ずに往復させる。Worker の知らない種類や項目があっても、そのまま返る。

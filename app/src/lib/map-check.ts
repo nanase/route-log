@@ -387,7 +387,41 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
 
   // 走行の切り替えの板と、設定のダイアログ。見た目は画面の写しで確かめる。
   await app.showRides(true);
+  // 開いている走行に、欄に打ってラベルを付ける。2 つ目は、候補に無い名前を新しく付ける。
+  const labelInput = () => document.querySelector<HTMLInputElement>('input[aria-label="ラベルを付ける"]');
+  for (const text of ["投稿済", " 峠 ", "投稿済"]) {
+    const input = labelInput();
+    if (input === null) break;
+    input.focus();
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await sleep(300);
+  }
+  labelInput()?.blur();
+  const labeled = await app.saved();
+  const listed = (await app.list()).find((ride) => ride.id === labeled?.ride.id);
+  note("開いている走行に、ラベルを打って付ける", "付けた順に 投稿済・峠 の 2 つ。同じ名前は 2 度付かず、前後の空白は除かれる。一覧の要約にも出る", {
+    labels: labeled?.ride.labels,
+    listed: listed?.labels,
+  });
   captures.push(await capture("rides"));
+  // 絞り込みの札を 2 回押して、「投稿済」が付いていない走行だけにする。
+  const rowCount = () => document.querySelectorAll("dialog .ride").length;
+  const before = rowCount();
+  const chip = () => [...document.querySelectorAll<HTMLButtonElement>("dialog .choice")].find((b) => b.textContent?.includes("投稿済"));
+  chip()?.click();
+  await sleep(200);
+  const onlyLabeled = rowCount();
+  chip()?.click();
+  await sleep(200);
+  note("絞り込みの札を 1 回押し、もう 1 回押す", "1 回目は付いている走行だけ（1 行）、2 回目は付いていない走行だけ（残りの行）になり、札が赤くなる", {
+    rows: { before, onlyLabeled, without: rowCount() },
+    chip: chip()?.className,
+  });
+  captures.push(await capture("rides-filtered"));
+  chip()?.click();
+  await sleep(200);
   await app.showRides(false);
   await app.showSettings(true);
   captures.push(await capture("settings"));

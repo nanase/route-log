@@ -37,6 +37,7 @@ pub struct RideSummary {
     pub updated_at: String,
     pub waypoints: usize,
     pub length_m: f64,
+    pub labels: Vec<String>,
 }
 
 pub struct Store {
@@ -82,6 +83,7 @@ impl Store {
                 title: doc.ride.title,
                 ride_date: doc.ride.ride_date,
                 updated_at: doc.ride.updated_at,
+                labels: doc.ride.labels,
             })
             .collect();
         rides.sort_by(|a, b| (&b.ride_date, &b.id).cmp(&(&a.ride_date, &a.id)));
@@ -172,6 +174,7 @@ mod tests {
                 ride_date: ride_date.into(),
                 clock_offset_ms: -30_000,
                 is_public: false,
+                labels: Vec::new(),
                 created_at: "2026-10-03T05:00:00+09:00".into(),
                 updated_at: "2026-10-03T05:00:00+09:00".into(),
             },

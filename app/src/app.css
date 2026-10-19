@@ -61,6 +61,24 @@
   --kind-stop: #4b5563;
   --kind-custom: #be185d;
 
+  /* 走行のラベルの札。名前から 1 つに決まる。状態の色（緑・黄・赤）とまぎれない色相にする */
+  --label-1-soft: #e6ebfa;
+  --label-1-ink: #2b3f8a;
+  --label-2-soft: #dff2f1;
+  --label-2-ink: #0f5b58;
+  --label-3-soft: #f1e6f6;
+  --label-3-ink: #5f2a76;
+  --label-4-soft: #efeedd;
+  --label-4-ink: #545214;
+  --label-5-soft: #f8e6ee;
+  --label-5-ink: #7d1f48;
+  --label-6-soft: #e4eef7;
+  --label-6-ink: #1c4e75;
+  --label-7-soft: #f3ebe2;
+  --label-7-ink: #6a3f1c;
+  --label-8-soft: #e9ecef;
+  --label-8-ink: #39434d;
+
   /* 地図に重ねる道路の線 */
   --road-national: #1f4fa3;
   --road-prefectural: #178a45;

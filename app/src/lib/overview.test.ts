@@ -3,7 +3,7 @@ import { waypointEvent } from "./events";
 import { clampMotion, endpointsOf, fileName } from "./overview";
 import type { RideDocument, RideEvent } from "./types";
 
-const ride = { id: "r", title: "2026-10-18", ride_date: "2026-10-18", clock_offset_ms: 0, is_public: false };
+const ride = { id: "r", title: "2026-10-18", ride_date: "2026-10-18", clock_offset_ms: 0, is_public: false, labels: [] };
 const doc = (events: RideEvent[]): RideDocument => ({
   ride: { ...ride, created_at: "", updated_at: "" },
   // 経度 0.01 度ずつ東へ。赤道の上なので、1 区間がおよそ 1.11 km。

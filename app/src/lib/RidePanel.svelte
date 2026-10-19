@@ -1,5 +1,8 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import LabelEditor from "./LabelEditor.svelte";
+  import LabelTag from "./LabelTag.svelte";
+  import { type LabelFilter, matchesFilter, toggleFilter, usedLabels } from "./labels";
   import { barState, type RideSync, type SyncView } from "./sync";
   import { hms } from "./time";
   import type { RideSummary, RideVideos } from "./types";
@@ -13,12 +16,15 @@
   let {
     date,
     title,
+    labels,
+    filter = $bindable(),
     videos,
     stored,
     sync,
     onselect,
     oncreate,
     ontitle,
+    onlabels,
     onremove,
     onresolve,
     onsettings,
@@ -28,6 +34,10 @@
     date: string | null;
     /** 開いている走行の題 */
     title: string;
+    /** 開いている走行のラベル */
+    labels: string[];
+    /** ラベルでの絞り込み。一覧を閉じても覚えておくよう、開く側が持つ */
+    filter: LabelFilter;
     videos: RideVideos[];
     stored: RideSummary[];
     /** クラウドとの同期の状態 */
@@ -35,6 +45,7 @@
     onselect: (date: string) => void | Promise<void>;
     oncreate: (date: string) => void | Promise<void>;
     ontitle: (title: string) => void;
+    onlabels: (labels: string[]) => void;
     /** 走行の記録を消す。同期を設定していれば、クラウドからも消える */
     onremove: (id: string) => Promise<void>;
     /** 両方で変わった走行を、選んだほうで揃える */
@@ -50,6 +61,8 @@
     /** 走行の ID。まだ記録の無い日付では null */
     id: string | null;
     title: string;
+    /** 付いているラベル。記録の無い日付と、まだ受け取っていない走行では空 */
+    labels: string[];
     videos: RideVideos | undefined;
     summary: RideSummary | undefined;
     /** クラウドにだけあって、まだ受け取れていない走行か */
@@ -81,6 +94,8 @@
       date: summary.ride_date,
       id: summary.id,
       title: summary.title,
+      // 開いている走行は、保存を待たずに、いまのラベルを出す。
+      labels: summary.ride_date === date ? labels : summary.labels,
       videos: videosOf(summary.ride_date),
       summary,
       remote: false,
@@ -93,6 +108,7 @@
         date: row.ride_date,
         id: row.id,
         title: row.title,
+        labels: [],
         videos: videosOf(row.ride_date),
         summary: undefined,
         remote: true,
@@ -102,11 +118,22 @@
     }
     for (const ride of videos) {
       if (list.some((known) => known.date === ride.date)) continue;
-      const none = { id: null, summary: undefined, remote: false, state: undefined };
+      const none = { id: null, labels: [], summary: undefined, remote: false, state: undefined };
       list.push({ key: ride.date, date: ride.date, title: ride.date, videos: ride, ...none });
     }
     return list.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? 1 : -1));
   });
+  /** どれかの走行に付いているラベル。多い順 */
+  const known = $derived(usedLabels(rows.map((row) => row.labels)));
+  /** 絞り込みのうち、まだどれかの走行に付いているラベルのもの。外したラベルで一覧が空のままにならない */
+  const narrowing: LabelFilter = $derived(
+    Object.fromEntries(Object.entries(filter).filter(([name]) => known.some((label) => label.name === name))),
+  );
+  const shown = $derived(rows.filter((row) => matchesFilter(row.labels, narrowing)));
+  const narrowed = $derived(Object.keys(narrowing).length > 0);
+  const FILTER_TIPS = { has: "付いている走行だけを出しています", not: "付いていない走行だけを出しています" };
+  const FILTER_NAMES = { has: "（付いている走行だけ）", not: "（付いていない走行だけ）" };
+
   /** 同期の全体の状態。上の帯と同じ決め方で、保存のことは見ない */
   const overall = $derived(barState("saved", sync));
   const conflicts = $derived(Object.values(sync.rides).filter((state) => state === "conflict").length);
@@ -203,17 +230,45 @@
       {:else if overall === "unsynced"}
         <span class="text" title={sync.failure}>クラウドと同期できていません。少し置いて、もう一度試します</span>
       {:else}
-        <span class="text">どの走行も、クラウドと同期済みです</span>
+        <span class="text">すべての走行ログが同期済み</span>
       {/if}
     </div>
+
+    {#if known.length > 0}
+      <!-- 押すたびに、付いている走行だけ、付いていない走行だけ、外す、と変わる。 -->
+      <div class="filter" role="group" aria-label="ラベルで絞り込む">
+        <span class="name">ラベル</span>
+        {#each known as label (label.name)}
+          {@const state = narrowing[label.name]}
+          <button
+            type="button"
+            class="choice"
+            class:has={state === "has"}
+            class:not={state === "not"}
+            aria-label={label.name + (state === undefined ? "" : FILTER_NAMES[state])}
+            title={state === undefined ? "押すと、付いている走行だけを出します" : FILTER_TIPS[state]}
+            onclick={() => (filter = toggleFilter(narrowing, label.name))}
+          >
+            {#if state !== undefined}<span class="mark" aria-hidden="true">{state === "has" ? "✓" : "−"}</span>{/if}
+            <span class="text">{label.name}</span>
+          </button>
+        {/each}
+        <span class="count mono">{rows.length} 件中 {shown.length} 件</span>
+        {#if narrowed}
+          <button type="button" class="clear" onclick={() => (filter = {})}>外す</button>
+        {/if}
+      </div>
+    {/if}
 
     <div class="rows">
       {#if rows.length === 0}
         <p class="empty">
           走行がまだありません。上の欄に日付を入れて作るか、設定で動画フォルダを選んでください。
         </p>
+      {:else if shown.length === 0}
+        <p class="empty">当てはまる走行がありません。絞り込みを外すと、すべての走行が出ます。</p>
       {/if}
-      {#each rows as row (row.key)}
+      {#each shown as row (row.key)}
         {@const open = row.date === date && !row.remote}
         {#if asking === row.key && row.id !== null}
           {@const id = row.id}
@@ -250,6 +305,9 @@
                   />
                   <span class="pill here">開いている</span>
                 </span>
+                {#if row.id !== null}
+                  <LabelEditor labels={row.labels} {known} onchange={onlabels} />
+                {/if}
                 <span class="mono detail">{summaryOf(row)}</span>
               </div>
             {:else if row.remote}
@@ -265,6 +323,7 @@
                 <span class="head">
                   <span class="mono date">{row.date}</span>
                   {#if row.title !== row.date}<b>{row.title}</b>{:else}<span class="untitled">（題なし）</span>{/if}
+                  {#each row.labels as name (name)}<LabelTag {name} />{/each}
                 </span>
                 <span class="mono detail">{summaryOf(row)}</span>
               </button>
@@ -365,6 +424,69 @@
   .sized {
     height: 26px;
   }
+  .filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px 8px 16px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .filter .name {
+    margin-right: 2px;
+    color: var(--ink-3);
+    font-size: 12px;
+  }
+  .filter .count {
+    margin-left: auto;
+    color: var(--ink-3);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .clear {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary);
+    font-size: 12px;
+    text-decoration: underline;
+  }
+  .choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    background: var(--surface);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .choice:hover:not(.has):not(.not) {
+    background: var(--surface-2);
+  }
+  .choice .mark {
+    width: 12px;
+    font-weight: 700;
+    text-align: center;
+  }
+  /* 付いている走行だけは青、付いていない走行だけは赤に塗る。赤には、名前に線も引く。 */
+  .choice.has {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fff;
+    font-weight: 700;
+  }
+  .choice.not {
+    border-color: var(--danger);
+    background: var(--danger);
+    color: #fff;
+    font-weight: 700;
+  }
+  .choice.not .text {
+    text-decoration: line-through;
+  }
   .rows {
     min-height: 0;
     overflow-y: auto;
@@ -403,8 +525,9 @@
   }
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 6px 10px;
     min-width: 0;
   }
   .head b {

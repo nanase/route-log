@@ -53,6 +53,8 @@ export interface Ride {
   ride_date: string;
   clock_offset_ms: number;
   is_public: boolean;
+  /** 走行に付けた目印（「投稿済」など）。付けた順 */
+  labels: string[];
   created_at: string;
   updated_at: string;
 }
@@ -133,6 +135,7 @@ export interface RideSummary {
   updated_at: string;
   waypoints: number;
   length_m: number;
+  labels: string[];
 }
 
 export interface Config {

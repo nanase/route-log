@@ -43,6 +43,7 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
             ride_date,
             clock_offset_ms: 0,
             is_public: false,
+            labels: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
         },

@@ -59,6 +59,8 @@ struct RideRow {
     ride_date: String,
     clock_offset_ms: i64,
     is_public: i64,
+    /// ラベルの並びを JSON にしたもの。
+    labels: String,
     created_at: String,
     updated_at: String,
 }
@@ -91,7 +93,7 @@ pub async fn get(env: &Env, id: &str) -> Reply {
     let db = database(env)?;
     let ride = db
         .prepare(
-            "SELECT id, title, ride_date, clock_offset_ms, is_public, created_at, updated_at \
+            "SELECT id, title, ride_date, clock_offset_ms, is_public, labels, created_at, updated_at \
              FROM rides WHERE id = ?1",
         )
         .bind(&[id.into()])?
@@ -128,6 +130,7 @@ pub async fn get(env: &Env, id: &str) -> Reply {
             ride_date: ride.ride_date,
             clock_offset_ms: ride.clock_offset_ms,
             is_public: ride.is_public != 0,
+            labels: serde_json::from_str(&ride.labels).unwrap_or_default(),
             created_at: ride.created_at,
             updated_at: ride.updated_at,
         },
@@ -199,11 +202,11 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
     let ride = &doc.ride;
     let statements = vec![
         db.prepare(
-            "INSERT INTO rides (id, title, ride_date, clock_offset_ms, is_public, route_key, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+            "INSERT INTO rides (id, title, ride_date, clock_offset_ms, is_public, route_key, created_at, updated_at, labels) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
              ON CONFLICT(id) DO UPDATE SET title = excluded.title, ride_date = excluded.ride_date, \
              clock_offset_ms = excluded.clock_offset_ms, is_public = excluded.is_public, \
-             route_key = excluded.route_key, updated_at = excluded.updated_at",
+             route_key = excluded.route_key, updated_at = excluded.updated_at, labels = excluded.labels",
         )
         .bind(&[
             id.into(),
@@ -214,6 +217,7 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
             route_key(id).into(),
             ride.created_at.as_str().into(),
             ride.updated_at.as_str().into(),
+            json(&ride.labels)?,
         ])?,
         db.prepare("DELETE FROM waypoints WHERE ride_id = ?1 AND seq >= json_array_length(?2)")
             .bind(&[id.into(), json(&doc.waypoints)?])?,

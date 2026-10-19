@@ -32,6 +32,7 @@
   import Hints from "./lib/Hints.svelte";
   import { forShortcut, keepKeys } from "./lib/keys";
   import { KINDS } from "./lib/kinds";
+  import type { LabelFilter } from "./lib/labels";
   import { runMapCheck } from "./lib/map-check";
   import NextGuide from "./lib/NextGuide.svelte";
   import Notices from "./lib/Notices.svelte";
@@ -114,6 +115,8 @@
   let settingsOpen = $state(false);
   let overviewOpen = $state(false);
   let ridesOpen = $state(false);
+  /** 走行の一覧の、ラベルでの絞り込み。一覧を閉じても覚えておく */
+  let labelFilter = $state<LabelFilter>({});
   /** 操作の手がかりを出しているか */
   let hintsShown = $state(remembered(HINTS_KEY, ["on", "off"], "on") === "on");
   let basemap = $state<Basemap>(remembered(BASEMAP_KEY, ["pale", "std", "photo"], "pale"));
@@ -204,11 +207,11 @@
       }),
   );
   const routeLine = $derived(doc === null ? [] : line(doc));
+  /** 経路の各点までの距離。イベントの数だけ線をたどり直さないよう、経路が変わったときに 1 度だけ測る */
+  const routeAlong = $derived(distancesAlong(routeLine));
   const events = $derived(doc?.events ?? []);
   const target = $derived(
     events.find((event) => event.id === chosenId) ?? (timeline === null ? null : defaultTarget(events, nowMs)),
-  /** 経路の各点までの距離。イベントの数だけ線をたどり直さないよう、経路が変わったときに 1 度だけ測る */
-  const routeAlong = $derived(distancesAlong(routeLine));
   );
   /** 動画のいまの時刻にいると推定される位置。最後の確定より後は、直前の速さから置いた仮の位置 */
   const here = $derived.by(() => {
@@ -534,6 +537,7 @@
               updated_at: saved.updated_at,
               length_m: saved.length_m,
               waypoints: saving.waypoints.length,
+              labels: saving.ride.labels,
             }
           : s,
       );
@@ -620,6 +624,10 @@
 
   function setTitle(title: string) {
     return edit((current) => ({ ...current, ride: { ...current.ride, title } }));
+  }
+
+  function setLabels(labels: string[]) {
+    return edit((current) => ({ ...current, ride: { ...current.ride, labels } }));
   }
 
   /** 一覧で選んだイベントを次の候補にして、地図と動画をそこへ動かす。 */
@@ -1416,12 +1424,15 @@
       bind:this={ridePanel}
       {date}
       title={doc?.ride.title ?? date ?? ""}
+      labels={doc?.ride.labels ?? []}
+      bind:filter={labelFilter}
       {videos}
       {stored}
       sync={syncView}
       onselect={select}
       oncreate={createRide}
       ontitle={setTitle}
+      onlabels={setLabels}
       onremove={removeRide}
       onresolve={(id, keep) => sync.resolve(id, keep)}
       onsettings={() => {
