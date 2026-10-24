@@ -69,10 +69,43 @@ impl View {
     }
 }
 
+/// フレームレート。59.94 fps（60000/1001）のような半端な値も正しく持てるよう、分数で持つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fps {
+    pub num: u32,
+    pub den: u32,
+}
+
+impl Fps {
+    pub const FPS_59_94: Fps = Fps {
+        num: 60000,
+        den: 1001,
+    };
+
+    /// 分母が 0 か、1 秒に 1〜120 フレームの外なら `None`。
+    pub fn new(num: u32, den: u32) -> Option<Fps> {
+        (den > 0 && (den..=den.saturating_mul(120)).contains(&num)).then_some(Fps { num, den })
+    }
+
+    /// `seconds` 秒の間のフレームの数。いちばん近いフレームに丸める。
+    fn frames(self, seconds: f64) -> u32 {
+        (seconds * f64::from(self.num) / f64::from(self.den))
+            .round()
+            .max(0.0) as u32
+    }
+}
+
+/// ffmpeg に渡す書き方。`60000/1001` のようにする。
+impl std::fmt::Display for Fps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.num, self.den)
+    }
+}
+
 /// ズームの動き。少し引いた所から寄っていき、経路の全体が見える所で止まって、そのまま見せる。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Motion {
-    pub fps: u32,
+    pub fps: Fps,
     pub zoom_seconds: f64,
     pub hold_seconds: f64,
     /// 最初の見え方の大きさ。止まった所に対する比で、1 より小さい
@@ -82,12 +115,15 @@ pub struct Motion {
 impl Motion {
     /// 寄っていく間のフレームの数。最後のフレームが、止まった所になる。
     pub fn zoom_frames(&self) -> u32 {
-        ((self.zoom_seconds * f64::from(self.fps)).round() as u32).max(1)
+        self.fps.frames(self.zoom_seconds).max(1)
     }
 
-    /// 止まった所を見せ続けるフレームの数。寄っていく間の最後のフレームは数えない。
+    /// 止まった所を見せ続けるフレームの数。寄っていく間の最後のフレームは数えない。全体の長さを
+    /// 丸めてから寄る間を引き、丸めの差が 2 つぶん積もらないようにする。
     pub fn hold_frames(&self) -> u32 {
-        (self.hold_seconds * f64::from(self.fps)).round().max(0.0) as u32
+        self.fps
+            .frames(self.zoom_seconds + self.hold_seconds)
+            .saturating_sub(self.zoom_frames())
     }
 
     /// 最初のフレームの、止まった所からのズームの差。負になる。
@@ -207,7 +243,7 @@ mod tests {
     #[test]
     fn the_zoom_eases_in_and_out_and_ends_where_it_stops() {
         let motion = Motion {
-            fps: 60,
+            fps: Fps::new(60, 1).unwrap(),
             zoom_seconds: 3.0,
             hold_seconds: 10.0,
             start_scale: 0.5,
@@ -223,12 +259,43 @@ mod tests {
     #[test]
     fn a_motion_without_zoom_is_a_still() {
         let motion = Motion {
-            fps: 60,
+            fps: Fps::new(60, 1).unwrap(),
             zoom_seconds: 0.0,
             hold_seconds: 1.0,
             start_scale: 0.7,
         };
         assert_eq!((motion.zoom_frames(), motion.offset(0)), (1, 0.0));
+        // 寄る間の 1 枚も、止める時間に含める。
+        assert_eq!(motion.hold_frames(), 59);
+    }
+
+    #[test]
+    fn the_frames_follow_the_seconds_at_59_94_fps() {
+        let motion = Motion {
+            fps: Fps::FPS_59_94,
+            zoom_seconds: 5.0,
+            hold_seconds: 5.0,
+            start_scale: 0.25,
+        };
+        // 5 秒は 299.7 枚、10 秒は 599.4 枚。
+        assert_eq!((motion.zoom_frames(), motion.hold_frames()), (300, 299));
+        assert_eq!(Fps::FPS_59_94.to_string(), "60000/1001");
+    }
+
+    #[test]
+    fn a_frame_rate_needs_a_denominator_and_a_sane_speed() {
+        assert_eq!(
+            Fps::new(24000, 1001),
+            Some(Fps {
+                num: 24000,
+                den: 1001
+            })
+        );
+        assert_eq!(Fps::new(120, 1).map(|f| f.num), Some(120));
+        assert_eq!(
+            [Fps::new(60, 0), Fps::new(0, 1), Fps::new(121, 1)],
+            [None; 3]
+        );
     }
 
     #[test]

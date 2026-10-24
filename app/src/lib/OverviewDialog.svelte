@@ -9,6 +9,9 @@
     type CreditImages,
     endpointsOf,
     fileName,
+    FRAME_RATES,
+    type FrameRate,
+    motionInput,
     rememberedMotion,
     rememberMotion,
   } from "./overview";
@@ -18,7 +21,7 @@
   /**
    * 経路の概略図の動画を書き出す。範囲を経由点で選び、止まった所の見本を見てから書き出す。
    *
-   * 動画は 4K・60 fps の MP4。背景は国土地理院の写真で、右下に出典を入れる。
+   * 動画は 4K の MP4。フレームレートは選べ、既定は 59.94 fps。背景は国土地理院の写真で、右下に出典を入れる。
    */
   let { doc, onclose }: { doc: RideDocument; onclose: () => void } = $props();
 
@@ -89,9 +92,17 @@
     }
   }
 
-  function setMotion(key: keyof typeof motion, value: number) {
+  function setMotion(key: Exclude<keyof typeof motion, "fps">, value: number) {
     if (!Number.isFinite(value)) return;
-    motion = clampMotion({ ...motion, [key]: value });
+    remember({ ...motion, [key]: value });
+  }
+
+  function setFps(fps: string) {
+    remember({ ...motion, fps: fps as FrameRate });
+  }
+
+  function remember(next: typeof motion) {
+    motion = clampMotion(next);
     rememberMotion(motion);
   }
 
@@ -109,7 +120,7 @@
     try {
       await invoke("render_overview", {
         line: routeLine,
-        motion: $state.snapshot(motion),
+        motion: motionInput($state.snapshot(motion)),
         credits: await loadCredits(),
         path,
         onProgress,
@@ -179,6 +190,21 @@
 
     <div class="motion">
       <label>
+        <span class="sub">フレームレート</span>
+        <span class="unit">
+          <select
+            class="field mono"
+            value={motion.fps}
+            disabled={rendering}
+            onchange={(e) => setFps(e.currentTarget.value)}
+          >
+            {#each Object.keys(FRAME_RATES) as fps (fps)}
+              <option value={fps}>{fps}</option>
+            {/each}
+          </select>fps
+        </span>
+      </label>
+      <label>
         <span class="sub">寄る時間</span>
         <span class="unit">
           <input
@@ -226,7 +252,7 @@
       <span class="sub total">全体で <span class="mono">{seconds}</span> 秒</span>
     </div>
     <p class="fine">
-      4K・60 fps の MP4 に書き出します。音は入りません。背景は国土地理院の写真で、右下に出典を入れます。
+      4K の MP4 に書き出します。音は入りません。背景は国土地理院の写真で、右下に出典を入れます。
     </p>
   </div>
 

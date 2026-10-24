@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use routelog_overview::{Credits, Ffmpeg, Motion, Sources, TileStore, preview, render};
+use routelog_overview::{Credits, Ffmpeg, Fps, Motion, Sources, TileStore, preview, render};
 use tiny_skia::{Color, Pixmap};
 
 fn main() {
@@ -58,7 +58,7 @@ fn main() {
         std::fs::write(png, bytes).unwrap();
     }
     let motion = Motion {
-        fps: 60,
+        fps: Fps::FPS_59_94,
         zoom_seconds: 5.0,
         hold_seconds: 5.0,
         start_scale: 0.25,

@@ -4,14 +4,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use routelog_overview::{Credits, Ffmpeg, LonLat, Motion, Progress, Sources, TileStore};
+use routelog_overview::{Credits, Ffmpeg, Fps, LonLat, Motion, Progress, Sources, TileStore};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri::ipc::{Channel, Response};
 
 /// 見本の大きさ。書き出す動画の 4 分の 1。
 const PREVIEW_SIZE: [u32; 2] = [960, 540];
-const FPS: u32 = 60;
 
 /// 取りかかっている仕事を止める旗と、ffmpeg。新しい見本を頼まれたら、前の見本はやめる。
 pub struct State {
@@ -54,6 +53,8 @@ impl CreditImages {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MotionInput {
+    /// フレームレートの分子と分母。59.94 fps なら [60000, 1001]
+    fps: [u32; 2],
     zoom_seconds: f64,
     hold_seconds: f64,
     start_scale: f64,
@@ -123,8 +124,10 @@ pub async fn render_overview(
     let store = tiles(&app)?;
     let credits = credits.decode()?;
     let ffmpeg = Arc::clone(&state.ffmpeg);
+    let [num, den] = motion.fps;
     let motion = Motion {
-        fps: FPS,
+        fps: Fps::new(num, den)
+            .ok_or_else(|| format!("フレームレート {num}/{den} では書き出せません"))?,
         zoom_seconds: motion.zoom_seconds.clamp(0.0, 30.0),
         hold_seconds: motion.hold_seconds.clamp(0.0, 120.0),
         start_scale: motion.start_scale.clamp(0.1, 1.0),

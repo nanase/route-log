@@ -13,7 +13,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::Error;
+use crate::{Error, Fps};
 
 /// ffmpeg の場所を上書きする環境変数。
 const PROGRAM_ENV: &str = "ROUTELOG_FFMPEG";
@@ -111,7 +111,7 @@ impl Ffmpeg {
         &self,
         out: &Path,
         size: [u32; 2],
-        fps: u32,
+        fps: Fps,
         repeat: u32,
     ) -> Result<Encoder, Error> {
         let mut command = Command::new(&self.program);

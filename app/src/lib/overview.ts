@@ -9,8 +9,24 @@ import { waypointEventAt } from "./events";
 import { segmentLengths } from "./route";
 import type { RideDocument } from "./types";
 
+/**
+ * 選べるフレームレート。半端な値も正しく持てるよう、分数で持つ。既定の 59.94 は、Resolve の
+ * タイムラインと、ドラレコの動画に合わせた値。
+ */
+export const FRAME_RATES = {
+  "23.976": [24000, 1001],
+  "24": [24, 1],
+  "29.97": [30000, 1001],
+  "30": [30, 1],
+  "59.94": [60000, 1001],
+  "60": [60, 1],
+} as const satisfies Record<string, readonly [number, number]>;
+export type FrameRate = keyof typeof FRAME_RATES;
+
 /** 動きの設定。次に開いたときも使う。 */
 export interface Motion {
+  /** フレームレート。FRAME_RATES の名前 */
+  fps: FrameRate;
   /** 寄っていく時間（秒） */
   zoomSeconds: number;
   /** 止まってから見せる時間（秒） */
@@ -19,7 +35,7 @@ export interface Motion {
   startScale: number;
 }
 
-export const MOTION_DEFAULT: Motion = { zoomSeconds: 5, holdSeconds: 5, startScale: 0.25 };
+export const MOTION_DEFAULT: Motion = { fps: "59.94", zoomSeconds: 5, holdSeconds: 5, startScale: 0.25 };
 // 既定の値を変えたときに、前の既定の値が覚えたものとして残らないよう、名前を変えた。
 const MOTION_KEY = "routelog.overview-motion-2";
 
@@ -27,7 +43,8 @@ const MOTION_KEY = "routelog.overview-motion-2";
 export function rememberedMotion(): Motion {
   try {
     const saved = JSON.parse(localStorage.getItem(MOTION_KEY) ?? "");
-    const ok = (key: keyof Motion) => typeof saved[key] === "number" && Number.isFinite(saved[key]);
+    // フレームレートは後から足した。覚えていなければ、既定の値にする。
+    const ok = (key: Exclude<keyof Motion, "fps">) => typeof saved[key] === "number" && Number.isFinite(saved[key]);
     if (ok("zoomSeconds") && ok("holdSeconds") && ok("startScale")) return clampMotion(saved);
   } catch {
     // 覚えていないか、壊れている。
@@ -43,10 +60,16 @@ export function rememberMotion(motion: Motion) {
 export function clampMotion(motion: Motion): Motion {
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
   return {
+    fps: Object.hasOwn(FRAME_RATES, motion.fps) ? motion.fps : MOTION_DEFAULT.fps,
     zoomSeconds: clamp(motion.zoomSeconds, 0, 30),
     holdSeconds: clamp(motion.holdSeconds, 0, 120),
     startScale: clamp(motion.startScale, 0.1, 1),
   };
+}
+
+/** Rust 側に渡す形。フレームレートは分子と分母にする。 */
+export function motionInput(motion: Motion) {
+  return { ...motion, fps: FRAME_RATES[motion.fps] };
 }
 
 /** 範囲の端に選べる経由点。名前と、始点からの距離（km）。 */

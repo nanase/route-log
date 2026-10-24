@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { waypointEvent } from "./events";
-import { clampMotion, endpointsOf, fileName } from "./overview";
+import { clampMotion, endpointsOf, fileName, type FrameRate, motionInput } from "./overview";
 import type { RideDocument, RideEvent } from "./types";
 
 const ride = { id: "r", title: "2026-10-18", ride_date: "2026-10-18", clock_offset_ms: 0, is_public: false, labels: [] };
@@ -28,9 +28,17 @@ describe("範囲の端", () => {
 });
 
 test("動きの設定は、受け付ける範囲に収める", () => {
-  expect(clampMotion({ zoomSeconds: -1, holdSeconds: 500, startScale: 0.05 })).toEqual({
+  expect(clampMotion({ fps: "24", zoomSeconds: -1, holdSeconds: 500, startScale: 0.05 })).toEqual({
+    fps: "24",
     zoomSeconds: 0,
     holdSeconds: 120,
     startScale: 0.1,
   });
+});
+
+test("知らないフレームレートは既定の 59.94 にし、Rust 側には分数で渡す", () => {
+  const motion = clampMotion({ fps: "50" as FrameRate, zoomSeconds: 5, holdSeconds: 5, startScale: 0.25 });
+  expect(motion.fps).toBe("59.94");
+  expect(motionInput(motion).fps).toEqual([60000, 1001]);
+  expect(clampMotion({ ...motion, fps: "toString" as FrameRate }).fps).toBe("59.94");
 });

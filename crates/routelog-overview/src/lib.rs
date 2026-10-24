@@ -17,7 +17,7 @@ use tiny_skia::Pixmap;
 pub use encode::{Codec, Ffmpeg};
 use mosaic::Pyramid;
 pub use tiles::TileStore;
-pub use view::Motion;
+pub use view::{Fps, Motion};
 use view::{View, project};
 
 /// 経度と緯度。
