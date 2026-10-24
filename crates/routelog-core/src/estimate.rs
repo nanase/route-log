@@ -17,6 +17,9 @@ pub struct Knot {
     pub time_ms: i64,
 }
 
+/// 時刻を推定するとき、基準とこれ以内の位置は、基準と同じ所とみなす（m）。
+pub const SAME_PLACE_M: f64 = 0.001;
+
 /// 停車の場所を地図で決めたあと、経路をこれより遠くへ変えたら、決めた場所を捨てる（m）。
 pub const STOP_KEEP_M: f64 = 50.0;
 
@@ -164,7 +167,11 @@ fn clock_ms(stops: &[Stop], moving: i64) -> i64 {
 ///
 /// 基準の間は、走っていた時間に比例して進んだものとする。`stops` は `stops` が返した並びを渡す。
 pub fn time_at(knots: &[Knot], stops: &[Stop], route_m: f64) -> Option<i64> {
-    if let Some(exact) = knots.iter().find(|k| k.route_m == route_m) {
+    // 距離は求め方で末尾の桁がずれる。経路の終わりの到着も、そのずれで最後の基準より先に出てしまう。
+    if let Some(exact) = knots
+        .iter()
+        .find(|k| (k.route_m - route_m).abs() <= SAME_PLACE_M)
+    {
         return Some(exact.time_ms);
     }
     let pair = knots
@@ -424,6 +431,13 @@ mod tests {
     }
 
     #[test]
+    fn a_position_off_only_in_the_last_digits_is_the_knot() {
+        let knots = [knot(0.0, 0), knot(3000.0, 500)];
+        assert_eq!(time_at(&knots, &[], 3000.0004), Some(500_000));
+        assert_eq!(time_at(&knots, &[], 3000.01), None);
+    }
+
+    #[test]
     fn position_is_the_inverse_of_time() {
         let knots = [knot(0.0, 0), knot(1000.0, 100), knot(3000.0, 500)];
         assert_eq!(position_at(&knots, &[], 50_000), Some(500.0));
@@ -465,6 +479,7 @@ mod tests {
     /// 赤道の上を東へ `length_m` 進む経路。
     fn document(length_m: f64, clock_offset_ms: i64, events: Vec<Event>) -> RideDocument {
         let waypoint = |lon| Waypoint {
+            id: String::new(),
             lon,
             lat: 0.0,
             segment_mode: SegmentMode::Straight,
@@ -490,6 +505,7 @@ mod tests {
             },
             waypoints,
             events,
+            episodes: Vec::new(),
         }
     }
 
@@ -939,6 +955,7 @@ mod tests {
         let mut doc = document(0.0, 0, events);
         doc.waypoints = (0..count)
             .map(|i| Waypoint {
+                id: String::new(),
                 lon: i as f64 * 1000.0 / 111_195.08,
                 lat: 0.0,
                 segment_mode: SegmentMode::Straight,

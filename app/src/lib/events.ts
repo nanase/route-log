@@ -22,6 +22,9 @@ export interface Stop {
 /** 停車の間に確定した時刻のうち、停車の場所からこれ以内のものは、停車の場所にいたものとみなす（m） */
 const STOP_NEAR_M = 30;
 
+/** 時刻を推定するとき、基準とこれ以内の位置は、基準と同じ所とみなす（m）。Rust 側と同じ値 */
+const SAME_PLACE_M = 0.001;
+
 /** 位置と時刻の組として確定したイベントか。場所を地図で決めた停車も含む。 */
 const isKnot = (event: RideEvent) => event.status === "confirmed" && event.time_ms !== null && !event.detail.by_time;
 const stays = (event: RideEvent) => (event.detail.stay_ms ?? 0) > 0;
@@ -75,7 +78,7 @@ export function stopsOf(events: RideEvent[]): Stop[] {
 }
 
 /** 停車を始まりの順に並べ、重なるものを 1 つにまとめる。 */
-function mergedStops(stops: Stop[]): Stop[] {
+export function mergedStops(stops: Stop[]): Stop[] {
   const merged: Stop[] = [];
   for (const stop of [...stops].sort((a, b) => a.start_ms - b.start_ms)) {
     const last = merged[merged.length - 1];
@@ -100,6 +103,39 @@ function movingMs(stops: Stop[], timeMs: number): number {
     covered = Math.max(covered, stop.end_ms);
   }
   return timeMs - stopped;
+}
+
+/** 走っていた時間が `moving` になる時刻。停車の始まりにちょうど当たるなら、始まりの時刻にする。 */
+function clockMs(stops: Stop[], moving: number): number {
+  let stopped = 0;
+  for (const stop of mergedStops(stops)) {
+    if (moving <= stop.start_ms - stopped) break;
+    stopped += stop.end_ms - stop.start_ms;
+  }
+  return moving + stopped;
+}
+
+/**
+ * その位置を通る時刻。最初の基準より前と、最後の基準より後は推定しない。`knots` は位置の順に渡す。
+ *
+ * 基準の間は、走っていた時間に比例して進んだものとする。Rust 側（routelog-core の estimate）の
+ * `time_at` と同じ決まりである。
+ */
+export function timeAt(knots: Knot[], stops: Stop[], routeM: number): number | null {
+  // 距離は Rust 側と画面で計算の順が違い、同じ所でも末尾の桁がずれる。経路の終わりの到着も、その
+  // ずれで最後の基準より先に出てしまう。
+  const exact = knots.find((knot) => Math.abs(knot.route_m - routeM) <= SAME_PLACE_M);
+  if (exact !== undefined) return exact.time_ms;
+  for (let i = 0; i + 1 < knots.length; i++) {
+    const [from, to] = [knots[i], knots[i + 1]];
+    if (!(from.route_m < routeM && routeM < to.route_m)) continue;
+    const t = (routeM - from.route_m) / (to.route_m - from.route_m);
+    const [start, end] = [movingMs(stops, from.time_ms), movingMs(stops, to.time_ms)];
+    // 2 つの基準が同じ停車の中にあると、走っていた時間が無い。手前の基準の時刻にしておく。
+    if (start === end) return from.time_ms;
+    return clockMs(stops, start + Math.round((end - start) * t));
+  }
+  return null;
 }
 
 /**

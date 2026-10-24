@@ -7,9 +7,10 @@ const ride = { id: "r", title: "2026-10-18", ride_date: "2026-10-18", clock_offs
 const doc = (events: RideEvent[]): RideDocument => ({
   ride: { ...ride, created_at: "", updated_at: "" },
   // 経度 0.01 度ずつ東へ。赤道の上なので、1 区間がおよそ 1.11 km。
-  waypoints: [0, 0.01, 0.02, 0.03].map((lon) => ({ lon, lat: 0, segment_mode: "straight" as const })),
+  waypoints: [0, 0.01, 0.02, 0.03].map((lon, i) => ({ id: `w${i}`, lon, lat: 0, segment_mode: "straight" as const })),
   route: { segments: [[], [], []] },
   events,
+  episodes: [],
 });
 
 describe("範囲の端", () => {

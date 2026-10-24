@@ -6,12 +6,18 @@
  */
 
 import { distanceM } from "./geo";
-import type { LonLat, Route, Waypoint } from "./types";
+import { newId } from "./ids";
+import type { Episode, LonLat, Route, Waypoint } from "./types";
 
 /** 経路の形。走行のデータのうち、線を決める部分。 */
 export interface Path {
   waypoints: Waypoint[];
   route: Route;
+  /**
+   * 回。回は経由点で決めるので、経路の編集と一緒に取り消せるよう、ここにも持てるようにする。
+   * 経路だけを変える編集は、回を持たない経路を返してよい。
+   */
+  episodes?: Episode[];
 }
 
 /**
@@ -115,7 +121,7 @@ export function segmentLengths(path: Path): number[] {
 
 /** 終わりに経由点を足す。手前の経由点からは `mode` で結ぶ。 */
 export function appendWaypoint(path: Path, at: LonLat, mode: "straight" | "snap" = "straight"): Path {
-  const waypoint: Waypoint = { lon: at[0], lat: at[1], segment_mode: "straight" };
+  const waypoint: Waypoint = { id: newId(), lon: at[0], lat: at[1], segment_mode: "straight" };
   const last = path.waypoints.length - 1;
   return {
     waypoints: [...path.waypoints.map((w, i) => (i === last ? { ...w, segment_mode: mode } : w)), waypoint],
@@ -140,7 +146,7 @@ export function insertWaypoint(path: Path, segment: number, index: number, at: L
     waypoints: [
       ...path.waypoints.slice(0, segment),
       { ...before, segment_mode: mode(head) },
-      { lon: at[0], lat: at[1], segment_mode: mode(tail) },
+      { id: newId(), lon: at[0], lat: at[1], segment_mode: mode(tail) },
       ...path.waypoints.slice(segment + 1),
     ],
     route: {

@@ -22,6 +22,18 @@ fn now() -> String {
     jst::iso_millis(unix_ms)
 }
 
+fn new_id() -> String {
+    uuid::Uuid::now_v7().hyphenated().to_string()
+}
+
+/// ID の無い経由点に ID を振る。回は経由点を ID で指す。ID の無い頃に保存した走行と、
+/// クラウドの古い行から受け取った走行が、ID の無い経由点を持つ。
+fn fill_waypoint_ids(doc: &mut RideDocument) {
+    for waypoint in doc.waypoints.iter_mut().filter(|w| w.id.is_empty()) {
+        waypoint.id = new_id();
+    }
+}
+
 #[tauri::command]
 pub fn list_rides(store: tauri::State<Store>) -> Result<Vec<RideSummary>, String> {
     store.list().map_err(|e| e.to_string())
@@ -29,7 +41,9 @@ pub fn list_rides(store: tauri::State<Store>) -> Result<Vec<RideSummary>, String
 
 #[tauri::command]
 pub fn load_ride(store: tauri::State<Store>, id: String) -> Result<RideDocument, String> {
-    store.load(&id).map_err(|e| e.to_string())
+    let mut doc = store.load(&id).map_err(|e| e.to_string())?;
+    fill_waypoint_ids(&mut doc);
+    Ok(doc)
 }
 
 /// その日付の走行を新しく作り、保存する。題は日付にしておく。
@@ -38,7 +52,7 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
     let now = now();
     let doc = RideDocument {
         ride: Ride {
-            id: uuid::Uuid::now_v7().hyphenated().to_string(),
+            id: new_id(),
             title: ride_date.clone(),
             ride_date,
             clock_offset_ms: 0,
@@ -50,6 +64,7 @@ pub fn create_ride(store: tauri::State<Store>, ride_date: String) -> Result<Ride
         waypoints: Vec::new(),
         route: Route::default(),
         events: Vec::new(),
+        episodes: Vec::new(),
     };
     store.save(&doc).map_err(|e| e.to_string())?;
     Ok(doc)
@@ -129,7 +144,7 @@ pub async fn save_ride(
     let conflicts = routelog_core::refresh(&mut doc);
     for event in &mut doc.events {
         if event.id.is_empty() {
-            event.id = uuid::Uuid::now_v7().hyphenated().to_string();
+            event.id = new_id();
         }
     }
     doc.ride.updated_at = now();

@@ -1,4 +1,4 @@
-//! 走行の保存と読み出し。走行・経由点・イベントは D1 に、経路の線は R2 に置く。
+//! 走行の保存と読み出し。走行・経由点・イベント・回は D1 に、経路の線は R2 に置く。
 
 use routelog_core::{Ride, RideDocument, Route, Waypoint};
 use serde::{Deserialize, Serialize};
@@ -18,10 +18,11 @@ fn route_key(id: &str) -> String {
     format!("rides/{id}/route.json")
 }
 
-/// 送り受けする走行。イベントは中身を見ずに、送られてきた形のまま持つ。
+/// 送り受けする走行。イベントと回は中身を見ずに、送られてきた形のまま持つ。
 ///
 /// イベントの種類と項目は、アプリの側で増える。ここで形を決めると、Worker を入れ替えるまで、
 /// 新しいアプリの走行を読めずに 400 で拒むことになる。列に出す値は、SQL が JSON から取り出す。
+/// 回も、項目が増えても Worker を入れ替えずに済むよう、同じ扱いにする。
 #[derive(Serialize, Deserialize)]
 struct Document {
     ride: Ride,
@@ -31,6 +32,8 @@ struct Document {
     route: Route,
     #[serde(default)]
     events: Vec<Value>,
+    #[serde(default)]
+    episodes: Vec<Value>,
 }
 
 /// イベントが、列に出す値を持っているか。無いと、D1 に入れるときに失敗する。
@@ -61,6 +64,8 @@ struct RideRow {
     is_public: i64,
     /// ラベルの並びを JSON にしたもの。
     labels: String,
+    /// 回の並びを JSON にしたもの。
+    episodes: String,
     created_at: String,
     updated_at: String,
 }
@@ -93,7 +98,7 @@ pub async fn get(env: &Env, id: &str) -> Reply {
     let db = database(env)?;
     let ride = db
         .prepare(
-            "SELECT id, title, ride_date, clock_offset_ms, is_public, labels, created_at, updated_at \
+            "SELECT id, title, ride_date, clock_offset_ms, is_public, labels, episodes, created_at, updated_at \
              FROM rides WHERE id = ?1",
         )
         .bind(&[id.into()])?
@@ -101,7 +106,11 @@ pub async fn get(env: &Env, id: &str) -> Reply {
         .await?
         .ok_or_else(|| Failure::new(404, "その走行はありません"))?;
     let waypoints = db
-        .prepare("SELECT lon, lat, segment_mode FROM waypoints WHERE ride_id = ?1 ORDER BY seq")
+        // ID の無い頃の行は空の ID で返し、アプリが読むときに振る。
+        .prepare(
+            "SELECT COALESCE(id, '') AS id, lon, lat, segment_mode FROM waypoints \
+             WHERE ride_id = ?1 ORDER BY seq",
+        )
         .bind(&[id.into()])?
         .all()
         .await?
@@ -137,6 +146,7 @@ pub async fn get(env: &Env, id: &str) -> Reply {
         waypoints,
         route,
         events,
+        episodes: serde_json::from_str(&ride.episodes).unwrap_or_default(),
     })?)
 }
 
@@ -163,13 +173,14 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
             "イベントに、ID・種類・名前・位置・状態のどれかがありません",
         ));
     }
-    let events = body.events;
-    // 経路の形は、イベントを除いて確かめる。
+    let (events, episodes) = (body.events, body.episodes);
+    // 経路の形は、イベントと回を除いて確かめる。
     let doc = RideDocument {
         ride: body.ride,
         waypoints: body.waypoints,
         route: body.route,
         events: Vec::new(),
+        episodes: Vec::new(),
     };
     doc.validate()
         .map_err(|reason| Failure::new(400, reason.to_string()))?;
@@ -202,11 +213,12 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
     let ride = &doc.ride;
     let statements = vec![
         db.prepare(
-            "INSERT INTO rides (id, title, ride_date, clock_offset_ms, is_public, route_key, created_at, updated_at, labels) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+            "INSERT INTO rides (id, title, ride_date, clock_offset_ms, is_public, route_key, created_at, updated_at, labels, episodes) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
              ON CONFLICT(id) DO UPDATE SET title = excluded.title, ride_date = excluded.ride_date, \
              clock_offset_ms = excluded.clock_offset_ms, is_public = excluded.is_public, \
-             route_key = excluded.route_key, updated_at = excluded.updated_at, labels = excluded.labels",
+             route_key = excluded.route_key, updated_at = excluded.updated_at, labels = excluded.labels, \
+             episodes = excluded.episodes",
         )
         .bind(&[
             id.into(),
@@ -218,17 +230,19 @@ pub async fn put(req: &mut Request, env: &Env, id: &str) -> Reply {
             ride.created_at.as_str().into(),
             ride.updated_at.as_str().into(),
             json(&ride.labels)?,
+            json(&episodes)?,
         ])?,
         db.prepare("DELETE FROM waypoints WHERE ride_id = ?1 AND seq >= json_array_length(?2)")
             .bind(&[id.into(), json(&doc.waypoints)?])?,
         db.prepare(
-            "INSERT INTO waypoints (ride_id, seq, lon, lat, segment_mode) \
-             SELECT ?1, key, json_extract(value, '$.lon'), json_extract(value, '$.lat'), \
-             json_extract(value, '$.segment_mode') FROM json_each(?2) WHERE true \
-             ON CONFLICT(ride_id, seq) DO UPDATE SET lon = excluded.lon, lat = excluded.lat, \
-             segment_mode = excluded.segment_mode \
-             WHERE waypoints.lon IS NOT excluded.lon OR waypoints.lat IS NOT excluded.lat \
-             OR waypoints.segment_mode IS NOT excluded.segment_mode",
+            "INSERT INTO waypoints (ride_id, seq, id, lon, lat, segment_mode) \
+             SELECT ?1, key, json_extract(value, '$.id'), json_extract(value, '$.lon'), \
+             json_extract(value, '$.lat'), json_extract(value, '$.segment_mode') \
+             FROM json_each(?2) WHERE true \
+             ON CONFLICT(ride_id, seq) DO UPDATE SET id = excluded.id, lon = excluded.lon, \
+             lat = excluded.lat, segment_mode = excluded.segment_mode \
+             WHERE waypoints.id IS NOT excluded.id OR waypoints.lon IS NOT excluded.lon \
+             OR waypoints.lat IS NOT excluded.lat OR waypoints.segment_mode IS NOT excluded.segment_mode",
         )
         .bind(&[id.into(), json(&doc.waypoints)?])?,
         db.prepare(

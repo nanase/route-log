@@ -83,7 +83,7 @@ export interface Endpoint {
  * 経由点の一覧。最初と最後は出発と到着の名前、途中は経由点のイベントに付けた名前を使う。
  * イベントが無ければ「経由点 N」。番号は地図の丸の番号と同じ。
  */
-export function endpointsOf(doc: RideDocument): Endpoint[] {
+export function endpointsOf(doc: Pick<RideDocument, "waypoints" | "route" | "events">): Endpoint[] {
   const lengths = segmentLengths(doc);
   let walked = 0;
   return doc.waypoints.map((waypoint, index) => {

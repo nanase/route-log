@@ -60,6 +60,8 @@ export interface Ride {
 }
 
 export interface Waypoint {
+  /** UUIDv7。回の端を指すのに使う。ID の無い頃の記録には、Rust 側が読むときに振る */
+  id: string;
   lon: number;
   lat: number;
   /** 次の経由点までの結び方。最後の経由点では使わない */
@@ -121,11 +123,23 @@ export interface RideEvent {
   };
 }
 
+/** 回。YouTube に上げる 1 本ぶんの範囲で、経路の一部を始まりと終わりの経由点で決める。 */
+export interface Episode {
+  id: string;
+  /** 回の名前。空なら、並びの番号で呼ぶ */
+  title: string;
+  /** 始まりの経由点の ID */
+  from: string;
+  /** 終わりの経由点の ID */
+  to: string;
+}
+
 export interface RideDocument {
   ride: Ride;
   waypoints: Waypoint[];
   route: Route;
   events: RideEvent[];
+  episodes: Episode[];
 }
 
 export interface RideSummary {

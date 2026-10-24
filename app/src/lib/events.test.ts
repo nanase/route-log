@@ -20,6 +20,7 @@ import {
   setHidden,
   stopBetween,
   stopsOf,
+  timeAt,
   unconfirm,
   unpinStop,
   waypointEvent,
@@ -37,6 +38,40 @@ function silent(id: string, route_m: number, status: EventStatus = "estimated", 
 }
 
 const ids = (events: (RideEvent | null)[]) => events.map((e) => e?.id ?? null);
+
+describe("その位置を通る時刻", () => {
+  const knot = (route_m: number, time_s: number) => ({ route_m, time_ms: time_s * 1000 });
+
+  test("基準の間は距離で補間する", () => {
+    const knots = [knot(0, 0), knot(1000, 100), knot(3000, 500)];
+    expect(timeAt(knots, [], 500)).toBe(50_000);
+    expect(timeAt(knots, [], 2000)).toBe(300_000);
+    expect(timeAt(knots, [], 1000)).toBe(100_000);
+  });
+
+  test("基準の外は推定しない", () => {
+    const knots = [knot(1000, 100), knot(3000, 500)];
+    expect(timeAt(knots, [], 999)).toBeNull();
+    expect(timeAt(knots, [], 3001)).toBeNull();
+    expect(timeAt([knot(1000, 100)], [], 1000)).toBe(100_000);
+    expect(timeAt([], [], 0)).toBeNull();
+  });
+
+  test("基準と末尾の桁だけ違う位置は、基準と同じ所とみなす", () => {
+    const knots = [knot(0, 0), knot(3000, 500)];
+    expect(timeAt(knots, [], 3000.0004)).toBe(500_000);
+    expect(timeAt(knots, [], 3000.01)).toBeNull();
+  });
+
+  test("停車の間は進まず、停車した場所は着いた時刻にする", () => {
+    // 0 秒に 0 m、1000 秒に 4000 m。その間の 200 秒から 800 秒まで停車していた。
+    const knots = [knot(0, 0), knot(4000, 1000)];
+    const stops = [{ start_ms: 200_000, end_ms: 800_000 }];
+    expect(timeAt(knots, stops, 1000)).toBe(100_000);
+    expect(timeAt(knots, stops, 2000)).toBe(200_000);
+    expect(timeAt(knots, stops, 3000)).toBe(900_000);
+  });
+});
 
 describe("いまの位置", () => {
   const knots = [

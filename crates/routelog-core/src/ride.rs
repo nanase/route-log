@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::episode::Episode;
 use crate::event::Event;
 use crate::geo::{self, LonLat};
 
@@ -38,6 +39,9 @@ pub enum SegmentMode {
 /// 経由点。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Waypoint {
+    /// UUIDv7。回の端を指すのに使う。この項目が無い頃の記録では空で、アプリが読むときに振る。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub lon: f64,
     pub lat: f64,
     /// 次の経由点までの結び方。最後の経由点では使わない。
@@ -61,6 +65,9 @@ pub struct RideDocument {
     pub route: Route,
     #[serde(default)]
     pub events: Vec<Event>,
+    /// 回。この項目が無い頃の記録では空。
+    #[serde(default)]
+    pub episodes: Vec<Episode>,
 }
 
 /// 走行のデータが形として正しくない理由。
@@ -170,6 +177,7 @@ mod tests {
 
     fn waypoint(lon: f64, lat: f64, segment_mode: SegmentMode) -> Waypoint {
         Waypoint {
+            id: String::new(),
             lon,
             lat,
             segment_mode,
@@ -191,6 +199,7 @@ mod tests {
             waypoints,
             route: Route { segments },
             events: Vec::new(),
+            episodes: Vec::new(),
         }
     }
 
@@ -269,6 +278,15 @@ mod tests {
         let doc: RideDocument = serde_json::from_str(json).unwrap();
         assert!(doc.waypoints.is_empty() && doc.route.segments.is_empty());
         assert!(doc.ride.labels.is_empty());
+        assert!(doc.episodes.is_empty());
+    }
+
+    #[test]
+    fn a_waypoint_without_an_id_is_written_as_before() {
+        let json = r#"{"lon":138.0,"lat":36.0,"segment_mode":"straight"}"#;
+        let waypoint: Waypoint = serde_json::from_str(json).unwrap();
+        assert!(waypoint.id.is_empty());
+        assert_eq!(serde_json::to_string(&waypoint).unwrap(), json);
     }
 
     #[test]

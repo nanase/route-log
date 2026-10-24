@@ -124,7 +124,7 @@ describe("途中に経由点を足す", () => {
 
   test("吸着の区間は、どちらも吸着のまま引き直しを待つ", () => {
     const snapped: Path = {
-      waypoints: [A, C].map(([lon, lat], i) => ({ lon, lat, segment_mode: i === 0 ? "snap" : "straight" })),
+      waypoints: [A, C].map(([lon, lat], i) => ({ id: `w${i}`, lon, lat, segment_mode: i === 0 ? "snap" : "straight" })),
       route: { segments: [[P, Q]] },
     };
     const path = insertWaypoint(snapped, 0, 1, B);
@@ -141,7 +141,7 @@ describe("途中に経由点を足す", () => {
 describe("吸着", () => {
   /** A・B・C を吸着で結び、Rust 側が線を引いた後の経路。 */
   const snapped = (): Path => ({
-    waypoints: [A, B, C].map(([lon, lat], i) => ({ lon, lat, segment_mode: i < 2 ? "snap" : "straight" })),
+    waypoints: [A, B, C].map(([lon, lat], i) => ({ id: `w${i}`, lon, lat, segment_mode: i < 2 ? "snap" : "straight" })),
     route: { segments: [[P], [Q]] },
   });
 
@@ -207,7 +207,7 @@ describe("待つ間に経路が変わったあとで当てる編集", () => {
 
   test("吸着の区間は、線が引き直されていても同じ区間とみなす", () => {
     const shown: Path = {
-      waypoints: [A, C].map(([lon, lat], i) => ({ lon, lat, segment_mode: i === 0 ? "snap" : "straight" })),
+      waypoints: [A, C].map(([lon, lat], i) => ({ id: `w${i}`, lon, lat, segment_mode: i === 0 ? "snap" : "straight" })),
       route: { segments: [[]] },
     };
     const split = onSegment(shown, 0, (path) => insertWaypoint(path, 0, 0, B));
@@ -240,4 +240,24 @@ test("区間の長さは、頂点を通った道のりで測る", () => {
   expect(bent[0]).toBeGreaterThan(straight[0]);
   expect(bent[1]).toBe(straight[1]);
   expect(segmentLengths(build(A))).toEqual([]);
+});
+
+describe("経由点の ID", () => {
+  const ids = (path: Path) => path.waypoints.map((w) => w.id);
+
+  test("足した経由点は、それぞれ別の ID を持つ", () => {
+    const path = insertWaypoint(build(A, B), 0, 0, P);
+    expect(new Set(ids(path)).size).toBe(3);
+    expect(ids(path).every((id) => id !== "")).toBe(true);
+  });
+
+  test("足す・消す・動かすをしても、ほかの経由点の ID は変わらない", () => {
+    const path = build(A, B, C);
+    const [a, b, c] = ids(path);
+    expect(ids(insertWaypoint(path, 0, 0, P))).toEqual([a, expect.any(String), b, c]);
+    expect(ids(removeWaypoint(path, 1))).toEqual([a, c]);
+    expect(ids(moveWaypoint(path, 1, D))).toEqual([a, b, c]);
+    expect(ids(toggleSnap(path, 0))).toEqual([a, b, c]);
+    expect(ids(insertVertex(path, 0, 0, P))).toEqual([a, b, c]);
+  });
 });

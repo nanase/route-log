@@ -4,6 +4,8 @@
   import { open, save } from "@tauri-apps/plugin-dialog";
   import { onMount, untrack } from "svelte";
   import { runConfirmCheck } from "./lib/confirm-check";
+  import { runEpisodeCheck } from "./lib/episode-check";
+  import { addEpisode, repoint } from "./lib/episodes";
   import EventList from "./lib/EventList.svelte";
   import {
     aheadAt,
@@ -53,6 +55,7 @@
   import TopBar from "./lib/TopBar.svelte";
   import type {
     Config,
+    Episode,
     LonLat,
     RideDocument,
     RideEvent,
@@ -284,6 +287,7 @@
     check = await invoke("check_target");
     stored = await invoke("list_rides");
     if (check?.file) return;
+    if (check?.dir && check.step === "episodes") return checkEpisodes(check.dir);
     if (check?.dir && check.geo) return checkConfirm(check.dir, check.geo);
     if (check?.dir) return checkTimeline(check.dir);
     if (check?.sync) return checkSync(check.sync);
@@ -568,8 +572,11 @@
     });
   }
 
+  /** 取り消せる単位の経路。回は経由点で決めるので、一緒に取り消す。 */
   const pathOf = (current: RideDocument | null): Path =>
-    current === null ? EMPTY : { waypoints: current.waypoints, route: current.route };
+    current === null
+      ? EMPTY
+      : { waypoints: current.waypoints, route: current.route, episodes: current.episodes };
 
   /**
    * 地図での操作を、経路に入れる。取り消せるよう、書き換える前の経路を覚えておく。
@@ -585,9 +592,20 @@
       const before = pathOf(current);
       const after = change(before);
       if (after === before) return;
+      // 消した経由点を端にしていた回は、内側の経由点へ付け替える。
+      const episodes = repoint(after.episodes ?? current.episodes, before.waypoints, after.waypoints);
       undoStack = [...undoStack.slice(1 - HISTORY_LIMIT), before];
       redoStack = [];
-      put({ ...current, ...after });
+      put({ ...current, ...after, episodes });
+    });
+  }
+
+  /** 回を書き換える。経路の編集と同じく、取り消せる。 */
+  function editEpisodes(change: (episodes: Episode[], path: Path) => Episode[]) {
+    return editPath(() => (path) => {
+      const episodes = path.episodes ?? [];
+      const next = change(episodes, path);
+      return next === episodes ? path : { ...path, episodes: next };
     });
   }
 
@@ -1132,6 +1150,36 @@
     await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
   }
 
+  /** 回の作り方と録画の長さを確かめて、報告を書いて終了する。録画のいちばん長い日付の動画を使う。 */
+  async function checkEpisodes(videoDir: string) {
+    let report: unknown;
+    try {
+      await loadVideos(videoDir);
+      const total = (ride: RideVideos) => ride.files.reduce((sum, file) => sum + file.duration_ms, 0);
+      const longest = videos.reduce((best, ride) => (total(ride) > total(best) ? ride : best));
+      await select(longest.date);
+      while (timeline === null || routeMap === undefined) await sleep(100);
+      report = {
+        date: longest.date,
+        ...(await runEpisodeCheck(routeMap, {
+          setMode,
+          path: () => doc ?? EMPTY,
+          events: () => events,
+          timeline: () => timeline,
+          changeEvent: (id, change) => editEvents((current) => patch(current, id, change)),
+          undo,
+          saved: async () => {
+            await flush();
+            return doc === null ? null : await invoke<RideDocument>("load_ride", { id: doc.ride.id });
+          },
+        })),
+      };
+    } catch (e) {
+      report = { error: String(e), message: lastMessage };
+    }
+    await invoke("finish_check", { report: JSON.stringify(report, null, 2) });
+  }
+
   /** クラウドとの自動の同期を確かめて、報告を書いて終了する。 */
   async function checkSync(apiUrl: string) {
     let report: unknown;
@@ -1315,6 +1363,8 @@
               <RouteSide
                 path={doc ?? EMPTY}
                 {events}
+                episodes={doc?.episodes ?? []}
+                spans={timeline?.spans ?? null}
                 selected={selectedWaypoint}
                 {focusedId}
                 canExtract={geoReady}
@@ -1322,6 +1372,10 @@
                 onevent={focusEvent}
                 onextract={extractAgain}
                 onsettings={() => (settingsOpen = true)}
+                onaddepisode={() => editEpisodes((episodes, path) => addEpisode(episodes, path.waypoints))}
+                onchangeepisode={(id, change) =>
+                  editEpisodes((episodes) => episodes.map((e) => (e.id === id ? { ...e, ...change } : e)))}
+                onremoveepisode={(id) => editEpisodes((episodes) => episodes.filter((e) => e.id !== id))}
               />
             </div>
           {:else}

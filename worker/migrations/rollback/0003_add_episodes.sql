@@ -1,0 +1,2 @@
+ALTER TABLE waypoints DROP COLUMN id;
+ALTER TABLE rides DROP COLUMN episodes;

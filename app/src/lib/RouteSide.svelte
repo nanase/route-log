@@ -1,16 +1,19 @@
 <script lang="ts">
+  import EpisodeList from "./EpisodeList.svelte";
   import EventName from "./EventName.svelte";
   import KindTag from "./KindTag.svelte";
   import { type Path, segmentLengths } from "./route";
   import StatusMark from "./StatusMark.svelte";
-  import type { RideEvent, SegmentMode } from "./types";
+  import type { Episode, RideEvent, SegmentMode, Span } from "./types";
 
   /**
-   * 経路入力のときに、地図の右に浮かせる一覧。上に経由点、下に経路から出たイベントを並べる。
+   * 経路入力のときに、地図の右に浮かせる一覧。上から経由点、回、経路から出たイベントを並べる。
    */
   let {
     path,
     events,
+    episodes,
+    spans,
     selected,
     focusedId,
     canExtract,
@@ -18,9 +21,15 @@
     onevent,
     onextract,
     onsettings,
+    onaddepisode,
+    onchangeepisode,
+    onremoveepisode,
   }: {
     path: Path;
     events: RideEvent[];
+    episodes: Episode[];
+    /** タイムラインの範囲。動画が無ければ null */
+    spans: Span[] | null;
     /** 選んでいる経由点の番号 */
     selected: number | null;
     /** 地図で目立たせているイベント */
@@ -31,6 +40,9 @@
     onevent: (event: RideEvent) => void;
     onextract: () => void;
     onsettings: () => void;
+    onaddepisode: () => void;
+    onchangeepisode: (id: string, change: Partial<Omit<Episode, "id">>) => void;
+    onremoveepisode: (id: string) => void;
   } = $props();
 
   const MODES: Record<SegmentMode, string> = { snap: "道に沿う", straight: "直線", manual: "直線（手修正）" };
@@ -69,6 +81,16 @@
       <p class="empty">地図をクリックして、経由点を足してください。</p>
     {/each}
   </div>
+
+  <EpisodeList
+    {path}
+    {events}
+    {episodes}
+    {spans}
+    onadd={onaddepisode}
+    onchange={onchangeepisode}
+    onremove={onremoveepisode}
+  />
 
   <header class="events-head">
     <b>イベント {events.length} 件</b>

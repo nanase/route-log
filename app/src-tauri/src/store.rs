@@ -163,6 +163,7 @@ mod tests {
 
     fn document(id: &str, ride_date: &str) -> RideDocument {
         let waypoint = |lon| Waypoint {
+            id: String::new(),
             lon,
             lat: 36.0,
             segment_mode: SegmentMode::Straight,
@@ -183,6 +184,7 @@ mod tests {
                 segments: vec![vec![]],
             },
             events: Vec::new(),
+            episodes: Vec::new(),
         }
     }
 

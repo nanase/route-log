@@ -1,0 +1,229 @@
+<script lang="ts">
+  import { extentOf, nameOf, RECORDED_LIMIT_MS, recordedOf } from "./episodes";
+  import Icon from "./Icon.svelte";
+  import { endpointsOf } from "./overview";
+  import type { Path } from "./route";
+  import type { Episode, RideEvent, Span } from "./types";
+
+  /**
+   * 回の一覧。経路入力のときに、経由点とイベントの一覧の間に置く。回ごとに名前と、始まりと
+   * 終わりの経由点を選び、録画の長さを出す。
+   */
+  let {
+    path,
+    events,
+    episodes,
+    spans,
+    onadd,
+    onchange,
+    onremove,
+  }: {
+    path: Path;
+    events: RideEvent[];
+    episodes: Episode[];
+    /** タイムラインの範囲。動画が無ければ null */
+    spans: Span[] | null;
+    onadd: () => void;
+    onchange: (id: string, change: Partial<Omit<Episode, "id">>) => void;
+    onremove: (id: string) => void;
+  } = $props();
+
+  const ends = $derived(endpointsOf({ ...path, events }));
+  const canAdd = $derived(path.waypoints.length >= 2);
+  const known = $derived(new Set(path.waypoints.map((waypoint) => waypoint.id)));
+  const limitHours = RECORDED_LIMIT_MS / 3_600_000;
+
+  /** 時:分。 */
+  function clock(ms: number): string {
+    const minutes = Math.floor(ms / 60_000);
+    return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
+  }
+</script>
+
+{#snippet pick(episode: Episode, key: "from" | "to", label: string, bad: boolean)}
+  <select
+    class="field"
+    class:bad
+    value={episode[key]}
+    aria-label={label}
+    onchange={(e) => onchange(episode.id, { [key]: e.currentTarget.value })}
+  >
+    {#if !known.has(episode[key])}
+      <option value={episode[key]} disabled>消えた経由点</option>
+    {/if}
+    {#each ends as point (point.index)}
+      <option value={path.waypoints[point.index].id}>{point.index + 1}　{point.name}</option>
+    {/each}
+  </select>
+{/snippet}
+
+<header>
+  <b>回 {episodes.length}</b>
+  <span class="fine about">YouTube に上げる 1 本ぶん</span>
+  <span class="space"></span>
+  <button type="button" class="btn small" disabled={!canAdd} onclick={onadd}><Icon name="plus" size={14} />足す</button>
+</header>
+<div class="episodes">
+  {#each episodes as episode, index (episode.id)}
+    {@const extent = extentOf(path.waypoints, episode)}
+    {@const recorded = spans === null ? null : recordedOf({ ...path, events }, spans, episode)}
+    <div class="episode">
+      <div class="top">
+        <input
+          class="field name"
+          value={episode.title}
+          placeholder={nameOf({ ...episode, title: "" }, index)}
+          aria-label="回の名前"
+          onchange={(e) => onchange(episode.id, { title: e.currentTarget.value.trim() })}
+        />
+        {#if extent === null}
+          <span class="length"></span>
+        {:else if spans === null}
+          <span class="length muted" title="この走行に使う動画がありません">動画なし</span>
+        {:else if recorded === null}
+          <span class="length muted" title="始まりと終わりの経由点を通った時刻が推定できると、録画の長さが出ます"
+            >録画 不明</span
+          >
+        {:else if recorded > RECORDED_LIMIT_MS}
+          <span class="length over" title="録画が {limitHours} 時間を超えています。Resolve のソースのタイムラインは {limitHours} 時間までにします">
+            <Icon name="warning" size={14} />録画 <b class="mono">{clock(recorded)}</b>
+          </span>
+        {:else}
+          <span class="length" title="録画の長さ。録画を止めていた間と停車を除きます">
+            録画 <b class="mono">{clock(recorded)}</b>
+          </span>
+        {/if}
+        <button
+          type="button"
+          class="btn small icon-only ghost trash"
+          aria-label="{nameOf(episode, index)}を消す"
+          title="回を消す"
+          onclick={() => onremove(episode.id)}
+        >
+          <Icon name="trash" size={14} />
+        </button>
+      </div>
+      <div class="range">
+        {@render pick(episode, "from", "始まりの経由点", extent === null)}
+        <span class="arrow" aria-hidden="true">→</span>
+        {@render pick(episode, "to", "終わりの経由点", extent === null)}
+      </div>
+      {#if extent === null}
+        <p class="problem"><Icon name="warning" size={14} />終わりは、始まりより後の経由点にします</p>
+      {/if}
+    </div>
+  {:else}
+    <p class="empty">
+      {canAdd
+        ? "「足す」で、YouTube に上げる 1 本ぶんの範囲を、始まりと終わりの経由点で決めます。"
+        : "経由点を 2 つ足すと、回を作れます。"}
+    </p>
+  {/each}
+</div>
+
+<style>
+  header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 8px 0 12px;
+    border-top: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .about {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .space {
+    flex: 1;
+  }
+  .episodes {
+    display: flex;
+    flex: 0 1 auto;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 30%;
+    min-height: 0;
+    padding: 0 8px 8px;
+    overflow-y: auto;
+  }
+  .episode {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-control);
+    background: var(--surface-3);
+  }
+  .top,
+  .range {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .name {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+  }
+  .length {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    color: var(--ink-3);
+    font-size: 12px;
+  }
+  .length b {
+    color: var(--ink);
+    font-size: 13px;
+  }
+  .length.muted {
+    color: var(--ink-4);
+  }
+  .length.over,
+  .length.over b {
+    color: var(--warn-ink);
+  }
+  .trash {
+    flex: none;
+    color: var(--ink-3);
+  }
+  .trash:hover {
+    color: var(--danger);
+  }
+  .range select {
+    flex: 1;
+    width: 0;
+    min-width: 0;
+    height: 26px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+  .range select.bad {
+    border-color: var(--danger);
+  }
+  .arrow {
+    flex: none;
+    color: var(--ink-3);
+  }
+  .problem {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    color: var(--danger);
+    font-size: 12px;
+  }
+  .empty {
+    margin: 0;
+    padding: 0 4px;
+    color: var(--ink-3);
+    white-space: normal;
+  }
+</style>

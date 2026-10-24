@@ -46,14 +46,23 @@ async function call(method, path, { jwt = token(), body, ifMatch } = {}) {
 const document = (updated_at, title = "碓氷峠", labels = []) => ({
   ride: { id: ID, title, ride_date: "2026-10-03", clock_offset_ms: -30000, is_public: false, labels, created_at: "t0", updated_at },
   waypoints: [
-    { lon: 138.62, lat: 36.345, segment_mode: "manual" },
-    { lon: 138.7, lat: 36.36, segment_mode: "straight" },
+    { id: "0199c0de-0000-7000-8000-0000000000a1", lon: 138.62, lat: 36.345, segment_mode: "manual" },
+    { id: "0199c0de-0000-7000-8000-0000000000a2", lon: 138.7, lat: 36.36, segment_mode: "straight" },
   ],
   route: { segments: [[[138.66, 36.35]]] },
   events: [
     { id: "0199c0de-0000-7000-8000-0000000000e1", kind: "departure", label: "出発", route_m: 0, time_ms: 1790000000000, status: "confirmed", detail: { camera_ms: 1790000030000 } },
     { id: "0199c0de-0000-7000-8000-0000000000e2", kind: "road", label: "国道18号", route_m: 120.5, time_ms: null, status: "estimated", detail: { routes: [{ class: "national", number: 18 }], extracted_label: "国道18号" } },
   ],
+  episodes: [],
+});
+/** 経由点 2 つをまたぐ回。 */
+const episode = (title, extra = {}) => ({
+  id: "0199c0de-0000-7000-8000-0000000000b1",
+  title,
+  from: "0199c0de-0000-7000-8000-0000000000a1",
+  to: "0199c0de-0000-7000-8000-0000000000a2",
+  ...extra,
 });
 
 if (process.argv.includes("--token")) {
@@ -117,8 +126,21 @@ try {
   check("ラベルを持たないアプリの走行も置ける", (await call("PUT", `/api/rides/${ID}`, { body: { ...document("t2b"), ride: unlabeled }, ifMatch: "t2a" })).status, 200);
   check("そのときラベルは空になる", (await call("GET", `/api/rides/${ID}`)).body.ride.labels, []);
 
+  // 回は、イベントと同じく中身を見ずに往復させる。
+  const withEpisodes = { ...document("t2c"), episodes: [episode("前編"), { ...episode("後編", { まだ無い項目: 1 }), id: "0199c0de-0000-7000-8000-0000000000b2" }] };
+  check("回を置ける", (await call("PUT", `/api/rides/${ID}`, { body: withEpisodes, ifMatch: "t2b" })).status, 200);
+  check("回が、置いた順と形のまま返る", (await call("GET", `/api/rides/${ID}`)).body, withEpisodes);
+  const renamed = { ...withEpisodes, ride: { ...withEpisodes.ride, updated_at: "t2d" }, episodes: [episode("前編（直し）")] };
+  check("回を直し、消せる", (await call("PUT", `/api/rides/${ID}`, { body: renamed, ifMatch: "t2c" })).status, 200);
+  check("直した回だけが返る", (await call("GET", `/api/rides/${ID}`)).body.episodes, renamed.episodes);
+  // 経由点の ID と回を持たない、古いアプリの走行。
+  const { episodes: __, ...older } = document("t2e");
+  older.waypoints = older.waypoints.map(({ id, ...rest }) => rest);
+  check("経由点の ID と回を持たない走行も置ける", (await call("PUT", `/api/rides/${ID}`, { body: older, ifMatch: "t2d" })).status, 200);
+  check("そのとき経由点は ID 無しで、回は空で返る", (await call("GET", `/api/rides/${ID}`)).body, { ...older, episodes: [] });
+
   const shorter = { ...document("t3"), waypoints: [], route: { segments: [] }, events: [] };
-  check("経由点とイベントを空にできる", (await call("PUT", `/api/rides/${ID}`, { body: shorter, ifMatch: "t2b" })).status, 200);
+  check("経由点とイベントを空にできる", (await call("PUT", `/api/rides/${ID}`, { body: shorter, ifMatch: "t2e" })).status, 200);
   check("空にしたものが返る", (await call("GET", `/api/rides/${ID}`)).body, shorter);
 
   // イベントは、中身を見ずに往復させる。Worker の知らない種類や項目があっても、そのまま返る。
@@ -151,6 +173,7 @@ try {
         detail: { end_m: i * 100 + 50, extracted_label: `トンネル ${i}` },
       })),
     ),
+    episodes: [],
   });
   const written = async (body, ifMatch) => {
     const response = await call("PUT", `/api/rides/${ID}`, { body, ifMatch });
