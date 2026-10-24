@@ -1,12 +1,12 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
 
 use crate::Error;
 
-/// ffprobe の場所を上書きする環境変数。無ければ PATH の `ffprobe` を使う。
+/// ffprobe の場所を上書きする環境変数。
 const PROGRAM_ENV: &str = "ROUTELOG_FFPROBE";
 
 /// 動画ファイル 1 本について ffprobe が答えたこと。
@@ -67,9 +67,9 @@ impl Ffprobe {
         }
     }
 
-    /// 環境変数 `ROUTELOG_FFPROBE` があればそれを、無ければ PATH の `ffprobe` を使う。
-    pub fn from_env() -> Self {
-        Self::new(program_from_env(PROGRAM_ENV, "ffprobe"))
+    /// 環境変数 `ROUTELOG_FFPROBE`、フォルダ `dir` の中、PATH の順に探す。
+    pub fn find(dir: Option<&Path>) -> Self {
+        Self::new(find_program(PROGRAM_ENV, "ffprobe", dir))
     }
 
     pub fn run(&self, path: &Path) -> Result<Probe, Error> {
@@ -94,28 +94,35 @@ impl Ffprobe {
     }
 }
 
-/// 外の道具の場所。環境変数 `env` があればそれを、無ければ PATH の `name` を使う。
-pub fn program_from_env(env: &str, name: &str) -> OsString {
+/// 外の道具の場所。環境変数 `env`、フォルダ `dir` の中、PATH の順に探す。どこにも無ければ名前だけを返す。
+pub fn find_program(env: &str, name: &str, dir: Option<&Path>) -> OsString {
     std::env::var_os(env)
-        .or_else(|| find_on_path(name).map(Into::into))
+        .or_else(|| dir.and_then(|dir| find_in(dir, name)).map(Into::into))
+        .or_else(|| find_in(&dir_on_path(name)?, name).map(Into::into))
         .unwrap_or_else(|| name.into())
 }
 
-/// PATH から実行ファイルを探す。
+/// PATH の中で、実行ファイル `name` が最初に見つかるフォルダ。
+pub fn dir_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find(|dir| find_in(dir, name).is_some())
+}
+
+/// フォルダの中の実行ファイル。
 ///
 /// Windows の `Command` は名前に `.exe` だけを補う。道具の管理ソフトは `.cmd` の
 /// 形で置くことがあるので、それも探す。
 #[cfg(windows)]
-fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .flat_map(|dir| ["exe", "cmd", "bat"].map(|ext| dir.join(name).with_extension(ext)))
+pub fn find_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    ["exe", "cmd", "bat"]
+        .map(|ext| dir.join(name).with_extension(ext))
+        .into_iter()
         .find(|candidate| candidate.is_file())
 }
 
 #[cfg(not(windows))]
-fn find_on_path(_name: &str) -> Option<std::path::PathBuf> {
-    None
+pub fn find_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    Some(dir.join(name)).filter(|candidate| candidate.is_file())
 }
 
 /// ウィンドウを持つアプリから呼ぶと、ファイルごとにコンソールが一瞬開く。それを出さない。
@@ -167,5 +174,22 @@ mod tests {
             .run(Path::new("x.MP4"))
             .unwrap_err();
         assert!(error.to_string().contains("routelog-no-such-ffprobe"));
+    }
+
+    #[test]
+    fn a_program_in_the_folder_is_used() {
+        let dir = std::env::temp_dir().join(format!("routelog-find-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir
+            .join("routelog-tool")
+            .with_extension(std::env::consts::EXE_EXTENSION);
+        std::fs::write(&program, "").unwrap();
+
+        let found = find_program("ROUTELOG_NO_SUCH_ENV", "routelog-tool", Some(&dir));
+        let missing = find_program("ROUTELOG_NO_SUCH_ENV", "routelog-no-such-tool", Some(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(found, program.into_os_string());
+        assert_eq!(missing, "routelog-no-such-tool");
     }
 }

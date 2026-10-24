@@ -1,6 +1,6 @@
 //! 経路の概略図の動画。見本の 1 枚と、動画の書き出し。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -21,12 +21,12 @@ pub struct State {
     ffmpeg: Arc<Ffmpeg>,
 }
 
-impl Default for State {
-    fn default() -> Self {
+impl State {
+    pub fn new(ffmpeg_dir: Option<&Path>) -> Self {
         State {
             preview: Mutex::default(),
             render: Mutex::default(),
-            ffmpeg: Arc::new(Ffmpeg::from_env()),
+            ffmpeg: Arc::new(Ffmpeg::find(ffmpeg_dir)),
         }
     }
 }

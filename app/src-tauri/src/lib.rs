@@ -43,11 +43,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(videos::State::default())
         .manage(events::Extractor::default())
-        .manage(overview::State::default())
         .setup(|app| {
             let dir = config::data_dir(app.handle())?;
             app.manage(store::Store::new(dir.join("rides")));
-            app.manage(config::ConfigFile::open(dir.join("config.json")));
+            let config = config::ConfigFile::open(dir.join("config.json"));
+            config::remember_ffmpeg_dir(&config);
+            app.manage(overview::State::new(config.get().ffmpeg_dir()));
+            app.manage(config);
             app.manage(excluded::ExcludedVideos::open(
                 dir.join("excluded-videos.json"),
             ));

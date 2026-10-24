@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn a_folder_that_does_not_exist_is_an_error() {
         let dir = std::env::temp_dir().join("routelog-scan-no-such-folder");
-        let result = scan(&dir, &NamePattern::dji_action4(), &Ffprobe::from_env());
+        let result = scan(&dir, &NamePattern::dji_action4(), &Ffprobe::find(None));
         assert!(matches!(result, Err(Error::Io { .. })));
     }
 }

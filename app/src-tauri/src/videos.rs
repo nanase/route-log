@@ -31,11 +31,12 @@ pub async fn scan_videos(
     dir: String,
 ) -> Result<Scan, String> {
     config.update(|c| c.video_dir = Some(dir.clone()))?;
+    let ffprobe = Ffprobe::find(config.get().ffmpeg_dir());
     let dir = PathBuf::from(dir);
     let scanned = {
         let dir = dir.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            routelog_video::scan(&dir, &NamePattern::dji_action4(), &Ffprobe::from_env())
+            routelog_video::scan(&dir, &NamePattern::dji_action4(), &ffprobe)
         })
         .await
         .map_err(|e| e.to_string())?

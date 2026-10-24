@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0)
         * 1000;
 
-    let scan = scan(&dir, &NamePattern::dji_action4(), &Ffprobe::from_env())?;
+    let scan = scan(&dir, &NamePattern::dji_action4(), &Ffprobe::find(None))?;
     for skipped in &scan.skipped {
         println!("読めない: {}（{}）", skipped.path, skipped.reason);
     }

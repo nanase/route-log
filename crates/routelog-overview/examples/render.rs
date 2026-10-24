@@ -63,7 +63,7 @@ fn main() {
         hold_seconds: 5.0,
         start_scale: 0.25,
     };
-    let ffmpeg = Ffmpeg::from_env();
+    let ffmpeg = Ffmpeg::find(None);
     eprintln!("書き方: {:?}", ffmpeg.codec());
     let started = Instant::now();
     let mut last = None;

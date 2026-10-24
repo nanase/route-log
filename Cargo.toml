@@ -82,3 +82,35 @@ opt-level = 3
 opt-level = "s"
 lto = true
 codegen-units = 1
+
+# アプリのリリースビルドでは、開発中に最適化しているものを、大きさより速さで最適化する。
+# Worker はどれも使わないので、Worker の大きさは変わらない。
+[profile.release.package.rstar]
+opt-level = 3
+
+[profile.release.package.routelog-geo]
+opt-level = 3
+
+[profile.release.package.routelog-overview]
+opt-level = 3
+
+[profile.release.package.tiny-skia]
+opt-level = 3
+
+[profile.release.package.zune-jpeg]
+opt-level = 3
+
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.flatgeobuf]
+opt-level = 3
+
+[profile.release.package.geozero]
+opt-level = 3
+
+[profile.release.package.flatbuffers]
+opt-level = 3
+
+[profile.release.package.geo-types]
+opt-level = 3

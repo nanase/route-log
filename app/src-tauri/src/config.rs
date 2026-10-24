@@ -36,6 +36,15 @@ pub struct Config {
     /// 走行ログの API の URL。
     #[serde(default)]
     pub api_url: Option<String>,
+    /// ffprobe と ffmpeg があるフォルダ。開発中の起動で覚え、リリースビルドを直に起動したときに使う。
+    #[serde(default)]
+    pub ffmpeg_dir: Option<String>,
+}
+
+impl Config {
+    pub fn ffmpeg_dir(&self) -> Option<&Path> {
+        self.ffmpeg_dir.as_deref().map(Path::new)
+    }
 }
 
 pub struct ConfigFile {
@@ -69,6 +78,32 @@ impl ConfigFile {
         }
         std::fs::write(&self.path, json).map_err(|e| format!("{}: {e}", self.path.display()))
     }
+}
+
+/// 開発中に使っている ffprobe と ffmpeg のフォルダを PATH から探し、覚える。
+///
+/// 開発中は mise exec 経由で起動するので、PATH の先頭近くに、mise が ffmpeg の環境を整えてから
+/// 呼ぶ `.cmd` がある。リリースビルドをエクスプローラーから起動すると無いので、覚えておいた
+/// 場所を使う。
+///
+/// 書けなくても起動は止めない。この起動では PATH から探せている。
+pub fn remember_ffmpeg_dir(config: &ConfigFile) {
+    let Some(dir) = routelog_video::dir_on_path("ffprobe") else {
+        return;
+    };
+    if is_mise_shims(&dir) || routelog_video::find_in(&dir, "ffmpeg").is_none() {
+        return;
+    }
+    let dir = dir.to_string_lossy().into_owned();
+    if config.get().ffmpeg_dir.as_ref() != Some(&dir) {
+        let _ = config.update(|c| c.ffmpeg_dir = Some(dir));
+    }
+}
+
+/// mise の shim のフォルダか。shim は起動した場所の mise.toml で版を決めるので、リポジトリの外では
+/// 動かない。mise exec を通さずに起動すると、PATH で最初に見つかるのはこれである。
+fn is_mise_shims(dir: &Path) -> bool {
+    dir.ends_with("mise/shims")
 }
 
 #[tauri::command]
