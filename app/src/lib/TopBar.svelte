@@ -4,7 +4,8 @@
   import type { Mode } from "./ui";
 
   /**
-   * 上の帯。開いている走行、いまの作業（経路／時刻）、保存と同期の状態と、書き出し・設定の入口を並べる。
+   * 上の帯。開いている走行、いまの作業（経路／時刻）、保存と同期の状態と、停車を探す・書き出し・設定の入口を
+   * 並べる。
    */
   let {
     date,
@@ -16,10 +17,14 @@
     compact,
     canExport,
     canOverview,
+    canFindStops,
+    stopProgress,
     onrides,
     onmode,
     onexport,
     onoverview,
+    onfindstops,
+    oncancelstops,
     onsettings,
     onretry,
   }: {
@@ -38,10 +43,16 @@
     canExport: boolean;
     /** 概略図の動画を作れるか。経由点が 2 つ以上あれば作れる */
     canOverview: boolean;
+    /** 停車を探せるか。走行に使う動画があれば探せる */
+    canFindStops: boolean;
+    /** 停車を探している間の進み具合（0〜1）。探していなければ null */
+    stopProgress: number | null;
     onrides: () => void;
     onmode: (mode: Mode) => void;
     onexport: () => void;
     onoverview: () => void;
+    onfindstops: () => void;
+    oncancelstops: () => void;
     onsettings: () => void;
     /** 保存をやり直す */
     onretry: () => void;
@@ -108,6 +119,30 @@
     {/if}
   </div>
 
+  {#if stopProgress === null}
+    <button
+      type="button"
+      class="btn"
+      class:icon-only={compact}
+      onclick={onfindstops}
+      disabled={!canFindStops}
+      aria-label="停車を探す"
+      title="信号待ちを含む停車の候補を、動画の音と映像の動きから探す。探してある動画は飛ばす"
+    >
+      <Icon name="search" />{#if !compact}停車を探す{/if}
+    </button>
+  {:else}
+    <!-- 探している間は、やめるボタンにして、進み具合を添える。 -->
+    <button
+      type="button"
+      class="btn"
+      onclick={oncancelstops}
+      aria-label="停車を探すのをやめる"
+      title="停車を探すのをやめる。探し終えた動画の候補は残る"
+    >
+      <Icon name="close" />{compact ? "" : "やめる "}<span class="mono">{Math.floor(stopProgress * 100)}%</span>
+    </button>
+  {/if}
   <button
     type="button"
     class="btn"

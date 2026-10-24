@@ -30,7 +30,8 @@ impl State {
     }
 }
 
-fn renew(slot: &Mutex<Arc<AtomicBool>>) -> Arc<AtomicBool> {
+/// 旗を立てて前の仕事をやめさせ、次の仕事のための新しい旗を返す。
+pub(crate) fn renew(slot: &Mutex<Arc<AtomicBool>>) -> Arc<AtomicBool> {
     let mut slot = slot.lock().expect("旗を持ったまま落ちていない");
     slot.store(true, Ordering::Relaxed);
     *slot = Arc::new(AtomicBool::new(false));

@@ -1,8 +1,11 @@
-/** ファイルをまたぐ再生と時刻の変換、動画を走行から外す操作を、画面を人が見なくても確かめる。 */
+/**
+ * ファイルをまたぐ再生と時刻の変換、動画を走行から外す操作、停車の候補を探して外す操作を、画面を人が
+ * 見なくても確かめる。
+ */
 
 import { invoke } from "@tauri-apps/api/core";
 import { clock } from "./time";
-import type { Timeline } from "./types";
+import type { FileStops, Timeline } from "./types";
 
 /** 確認のために `Player` が見せる口。 */
 export interface PlayerHandle {
@@ -16,6 +19,8 @@ export interface PlayerHandle {
 export interface BarHandle {
   /** その名前の動画の帯を右クリックする。帯が出ていなければ false */
   rightClick(name: string): boolean;
+  /** `index` 番目の停車の候補を右クリックする。出ていなければ false */
+  rightClickCandidate(index: number): boolean;
   /** 開いている板のボタンを押す */
   pressMenu(): void;
   snapshot(): Record<string, unknown>;
@@ -30,6 +35,12 @@ export interface AppHandle {
   bar(): BarHandle | undefined;
   /** 外した動画として、手元に覚えているファイル名 */
   remembered(): Promise<string[]>;
+  /** 「停車を探す」を押す。探し終えるまで待つ */
+  findStops(): Promise<void>;
+  /** 停車を探している間の進み具合。探していなければ null */
+  stopProgress(): number | null;
+  /** 最後に出した知らせ */
+  message(): string;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -161,6 +172,49 @@ export async function runTimelineCheck(
     expected: `動画が ${files.length} 本に戻り、最初の動画 ${files[0].name} の 0 秒が読み込まれる（readyState が 4）`,
     ...(await state()),
   });
+
+  // ここからは、停車の候補を探し、右クリックで外して、また採る。
+  const progress: number[] = [];
+  const watching = setInterval(() => {
+    const done = app.stopProgress();
+    const percent = done === null ? null : Math.round(done * 100);
+    if (percent !== null && progress[progress.length - 1] !== percent) progress.push(percent);
+  }, 500);
+  const started = performance.now();
+  await app.findStops();
+  clearInterval(watching);
+  await sleep(500);
+  const candidates = () => (app.bar()?.snapshot().candidates as string[] | undefined) ?? [];
+  /** 手元に覚えている候補。動画ごとに、採るか外すかを並べる */
+  const stored = async () => {
+    const found = await invoke<FileStops[]>("get_stops", { files: app.timeline()?.files ?? [] });
+    return found.map((entry) => `${entry.name} ${entry.candidates.map((c) => (c.taken ? "採る" : "外す")).join(" ")}`);
+  };
+  steps.push({
+    step: "停車を探す",
+    expected: "進み具合が 0% から 100% へ進み、終わると知らせが出る。タイムラインに候補が橙の帯で出る",
+    seconds: Math.round((performance.now() - started) / 1000),
+    progress,
+    message: app.message(),
+    candidates: candidates(),
+    stored: await stored(),
+  });
+  await capture("stops");
+
+  /** 最初の候補を右クリックし、出た板を写してから、ボタンを押す。 */
+  const flip = async (expected: string, shot: string) => {
+    const found = app.bar()?.rightClickCandidate(0) ?? false;
+    await sleep(300);
+    const menu = app.bar()?.snapshot().candidateMenu;
+    await capture(shot);
+    const before = candidates()[0];
+    app.bar()?.pressMenu();
+    await until(() => candidates()[0] !== before, 3000);
+    const step = "最初の候補を右クリックして、板のボタンを押す";
+    steps.push({ step, expected, found, menu, candidates: candidates(), stored: await stored() });
+  };
+  await flip("板に「外す」と出る。押すと、最初の候補が「外した」になり、手元の覚えでも外れる", "stop-menu");
+  await flip("板に「採る」と出る。押すと、最初の候補が採るに戻る", "stop-out-menu");
 
   return {
     files: files.map((f) => f.name),

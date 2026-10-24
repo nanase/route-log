@@ -15,8 +15,6 @@ use std::time::Duration;
 
 use crate::{Error, Fps};
 
-/// ffmpeg の場所を上書きする環境変数。
-const PROGRAM_ENV: &str = "ROUTELOG_FFMPEG";
 /// 書き方を決めてしまう環境変数。`nvenc` か `x264`。無ければ、NVENC が使えるかを試して決める。
 const CODEC_ENV: &str = "ROUTELOG_VIDEO_CODEC";
 
@@ -75,7 +73,7 @@ impl Ffmpeg {
 
     /// 環境変数 `ROUTELOG_FFMPEG`、フォルダ `dir` の中、PATH の順に探す。
     pub fn find(dir: Option<&Path>) -> Self {
-        Self::new(routelog_video::find_program(PROGRAM_ENV, "ffmpeg", dir))
+        Self::new(routelog_video::find_ffmpeg(dir))
     }
 
     /// 使う書き方。最初に呼んだときに決め、後は覚えておく。

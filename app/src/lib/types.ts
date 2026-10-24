@@ -32,6 +32,20 @@ export interface Timeline {
   gaps: Gap[];
 }
 
+/** 停車の候補 1 つと、採るか。位置は動画の中のミリ秒。Rust 側の `Choice` と同じ。 */
+export interface StopChoice {
+  start_ms: number;
+  end_ms: number;
+  taken: boolean;
+}
+
+/** 動画 1 本の停車の候補。Rust 側の `FileStops` と同じ。 */
+export interface FileStops {
+  /** 動画のファイル名 */
+  name: string;
+  candidates: StopChoice[];
+}
+
 export interface RideVideos {
   date: string;
   files: VideoFile[];

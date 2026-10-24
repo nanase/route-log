@@ -4,6 +4,7 @@ mod events;
 mod excluded;
 mod overview;
 mod rides;
+mod stops;
 mod store;
 mod sync;
 mod videos;
@@ -49,6 +50,10 @@ pub fn run() {
             let config = config::ConfigFile::open(dir.join("config.json"));
             config::remember_ffmpeg_dir(&config);
             app.manage(overview::State::new(config.get().ffmpeg_dir()));
+            app.manage(stops::Stops::new(
+                dir.join("stops"),
+                config.get().ffmpeg_dir(),
+            ));
             app.manage(config);
             app.manage(excluded::ExcludedVideos::open(
                 dir.join("excluded-videos.json"),
@@ -78,6 +83,10 @@ pub fn run() {
             rides::save_ride,
             rides::delete_ride,
             rides::snap_point,
+            stops::get_stops,
+            stops::find_stops,
+            stops::cancel_find_stops,
+            stops::set_stop_taken,
             sync::get_sync_settings,
             sync::set_sync_settings,
             sync::sync_list,

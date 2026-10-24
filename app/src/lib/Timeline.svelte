@@ -2,7 +2,8 @@
   import Icon from "./Icon.svelte";
   import { KINDS } from "./kinds";
   import KindTag from "./KindTag.svelte";
-  import { clock, short } from "./time";
+  import type { StopBand } from "./stops";
+  import { clock, hms, short } from "./time";
   import type { Gap, RideEvent, Timeline } from "./types";
   import type { ExcludedClip } from "./ui";
 
@@ -15,10 +16,14 @@
    *
    * 録画の止まっていた間を右クリックすると、その間を停車にできる。停車にした間は、進んでいない
    * ものとして時刻が推定される。
+   *
+   * 音と映像の動きで見つけた停車の候補は、動画の帯に重ねて出す。押すと、ふつうにその位置へ動く。
+   * 右クリックすると、書き出しで抜くか（採る・外す）を選べる。
    */
   let {
     timeline,
     excluded,
+    candidates,
     events,
     conflicts,
     nowMs,
@@ -28,11 +33,14 @@
     onexclude,
     onstop,
     onunstop,
+    ontake,
   }: {
     /** 開いている走行に使う動画。無ければ null */
     timeline: Timeline | null;
     /** 走行から外している動画 */
     excluded: ExcludedClip[];
+    /** 停車の候補 */
+    candidates: StopBand[];
     events: RideEvent[];
     /** 位置が先なのに時刻が後になっている、確定済みのイベントの ID */
     conflicts: string[];
@@ -48,6 +56,8 @@
     onstop: (startMs: number, endMs: number) => void;
     /** 停車をやめる。停車のイベントを消す */
     onunstop: (id: string) => void;
+    /** 停車の候補を採るか外すかを決める */
+    ontake: (band: StopBand, taken: boolean) => void;
   } = $props();
 
   const JST_MS = 9 * 3_600_000;
@@ -60,6 +70,7 @@
   /** 名前を書ける、動画の帯と録画停止の幅（px） */
   const CLIP_LABEL_PX = 48;
   const GAP_LABEL_PX = 62;
+  const CANDIDATE_LABEL_PX = 44;
   /** 動画 1 本の操作を出す板の幅（px） */
   const MENU_PX = 300;
 
@@ -74,6 +85,9 @@
   /** 右クリックで開いた、録画停止 1 つの操作の板。`stay` は、その間に重なる停車のイベント */
   let gapMenu = $state<{ gap: Gap; stay: RideEvent | null; left: number; bottom: number } | null>(null);
   let gapMenuElement = $state<HTMLDivElement>();
+  /** 右クリックで開いた、停車の候補 1 つの操作の板 */
+  let candidateMenu = $state<{ band: StopBand; left: number; bottom: number } | null>(null);
+  let candidateMenuElement = $state<HTMLDivElement>();
 
   const spans = $derived(timeline?.spans ?? []);
   const gaps = $derived(timeline?.gaps ?? []);
@@ -163,12 +177,17 @@
     show(nowMs - length * 0.1, length);
   });
 
-  // 走行を切り替えたり、動画を外したり戻したりして帯が変わったら、開いている板は閉じる。
+  // 走行を切り替えたり、動画を外したり戻したり、停車の候補が変わったりしたら、開いている板は閉じる。
   $effect(() => {
-    void [timeline, excluded];
+    void [timeline, excluded, candidates];
+    closeMenus();
+  });
+
+  function closeMenus() {
     menu = null;
     gapMenu = null;
-  });
+    candidateMenu = null;
+  }
 
   /** `start` から `length` の範囲を広げて出す。全体からはみ出さないようにする。 */
   function show(start: number, length: number) {
@@ -229,7 +248,7 @@
   function openGapMenu(event: MouseEvent, gap: Gap) {
     event.preventDefault();
     const band = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    menu = null;
+    closeMenus();
     gapMenu = {
       gap,
       stay: stayOver(gap),
@@ -245,23 +264,41 @@
     gapMenu = null;
   }
 
+  /** 停車の候補 1 つの操作の板を、その帯のすぐ上に出す。下の動画 1 本の板は出さない。 */
+  function openCandidateMenu(event: MouseEvent, band: StopBand) {
+    event.preventDefault();
+    event.stopPropagation();
+    const at = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    closeMenus();
+    candidateMenu = {
+      band,
+      left: Math.max(Math.min(event.clientX - 24, window.innerWidth - MENU_PX - 12), 12),
+      bottom: window.innerHeight - at.top + 6,
+    };
+  }
+
+  function chooseCandidateMenu() {
+    if (candidateMenu === null) return;
+    ontake(candidateMenu.band, !candidateMenu.band.choice.taken);
+    candidateMenu = null;
+  }
+
   /** 板の外を押すか、Esc を押したら、板を閉じる。 */
   function onpointerdown(event: PointerEvent) {
     const inside = (element: HTMLElement | undefined) => event.target instanceof Node && element?.contains(event.target);
     if (menu !== null && !inside(menuElement)) menu = null;
     if (gapMenu !== null && !inside(gapMenuElement)) gapMenu = null;
+    if (candidateMenu !== null && !inside(candidateMenuElement)) candidateMenu = null;
   }
 
   function onkeydown(event: KeyboardEvent) {
     if (event.key !== "Escape") return;
-    menu = null;
-    gapMenu = null;
+    closeMenus();
   }
 
   function onwheel(event: WheelEvent) {
     if (!shown) return;
-    menu = null;
-    gapMenu = null;
+    closeMenus();
     event.preventDefault();
     const at = from + ((event.clientX - box.getBoundingClientRect().left) / Math.max(width, 1)) * span;
     zoom(event.deltaY < 0 ? 0.5 : 2, at);
@@ -275,6 +312,10 @@
     stops: stops.map((gap) => `${clock(gap.start_ms)}-${clock(gap.end_ms)}${stayOver(gap) === null ? "" : " 停車"}`),
     menu: menu === null ? null : `${menu.label} ${menu.out ? "走行に戻す" : "走行から外す"}`,
     gapMenu: gapMenu === null ? null : gapMenu.stay === null ? "停車にする" : "停車をやめる",
+    candidates: candidates.map(
+      (band) => `${clock(band.start_ms)}-${clock(band.end_ms)}${band.choice.taken ? "" : " 外した"}`,
+    ),
+    candidateMenu: candidateMenu === null ? null : candidateMenu.band.choice.taken ? "外す" : "採る",
     marks: marks.map((mark) => `${clock(mark.time)} ${mark.event.kind}${mark.warned ? " 警告" : ""}`),
     head: clock(nowMs),
   });
@@ -302,9 +343,19 @@
     return true;
   }
 
+  /** 自動の確認が使う口。`index` 番目の停車の候補を右クリックしたことにする。出ていなければ false。 */
+  export function rightClickCandidate(index: number): boolean {
+    const band = box.querySelectorAll<HTMLElement>(".candidate")[index];
+    if (band === undefined) return false;
+    const at = band.getBoundingClientRect();
+    const [clientX, clientY] = [at.left + at.width / 2, at.top + at.height / 2];
+    band.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY, button: 2 }));
+    return true;
+  }
+
   /** 開いている板のボタンを押したことにする。 */
   export function pressMenu() {
-    (menuElement ?? gapMenuElement)?.querySelector("button")?.click();
+    (menuElement ?? gapMenuElement ?? candidateMenuElement)?.querySelector("button")?.click();
   }
 </script>
 
@@ -427,6 +478,25 @@
             </button>
           {/if}
         {/each}
+        <!-- 停車の候補。押した所へは、下の帯と同じく再生位置が動く。 -->
+        {#each candidates as band (`${band.file.name} ${band.choice.start_ms}`)}
+          {@const left = Math.max(x(band.start_ms), 0)}
+          {@const right = Math.min(x(band.end_ms), width)}
+          {#if right > left}
+            <div
+              class="candidate"
+              class:out={!band.choice.taken}
+              style:left="{left}px"
+              style:width="{Math.max(right - left, 2)}px"
+              title="停車の候補　{clock(band.start_ms)} – {clock(band.end_ms)}　{band.choice.taken
+                ? '書き出しで抜く'
+                : '外してある'}　右クリックで{band.choice.taken ? '外す' : '採る'}"
+              oncontextmenu={(event) => openCandidateMenu(event, band)}
+            >
+              {#if right - left >= CANDIDATE_LABEL_PX}停 {short(band.end_ms - band.start_ms)}{/if}
+            </div>
+          {/if}
+        {/each}
         <!-- 停車にしてある時間。録画したまま止まっていた間も、ここで見える。 -->
         {#each stays as stay (stay.id)}
           {@const left = Math.max(x(stay.start), 0)}
@@ -505,6 +575,30 @@
         <button type="button" class="btn" onclick={chooseGapMenu}>
           {gapMenu.stay === null ? "停車にする" : "停車をやめる"}
         </button>
+      </div>
+    </div>
+  {/if}
+  {#if candidateMenu !== null}
+    {@const band = candidateMenu.band}
+    <div
+      class="menu"
+      bind:this={candidateMenuElement}
+      style:left="{candidateMenu.left}px"
+      style:bottom="{candidateMenu.bottom}px"
+      style:width="{MENU_PX}px"
+    >
+      <div class="about">
+        <b>停車の候補</b>
+        <span class="mono">{clock(band.start_ms)} – {clock(band.end_ms)}</span>
+      </div>
+      <div class="mono fine name">{band.file.name}　{hms(band.choice.start_ms)} から</div>
+      <div class="act">
+        <span class="fine">
+          {band.choice.taken
+            ? "書き出しで抜きます。止まっていなかったら外します。"
+            : "外してあります。採ると、書き出しで抜きます。"}
+        </span>
+        <button type="button" class="btn" onclick={chooseCandidateMenu}>{band.choice.taken ? "外す" : "採る"}</button>
       </div>
     </div>
   {/if}
@@ -709,6 +803,29 @@
     line-height: 22px;
     text-align: center;
     white-space: nowrap;
+  }
+  /* 停車の候補。採るものは橙で塗り、外したものは破線の枠だけにする。 */
+  .candidate {
+    position: absolute;
+    top: 2px;
+    box-sizing: border-box;
+    height: 18px;
+    overflow: hidden;
+    border: 1px solid var(--warn-ink);
+    border-radius: 3px;
+    background: var(--warn);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .candidate.out {
+    border: 1px dashed var(--warn-ink);
+    background: rgba(255, 255, 255, 0.55);
+    color: var(--warn-text);
+    font-weight: 400;
   }
   .stay-band {
     position: absolute;

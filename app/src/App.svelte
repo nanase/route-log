@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { Channel, invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open, save } from "@tauri-apps/plugin-dialog";
   import { onMount, untrack } from "svelte";
@@ -47,6 +47,7 @@
   import RouteSide from "./lib/RouteSide.svelte";
   import RouteTools from "./lib/RouteTools.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
+  import { foundMessage, replaceStops, type StopBand, stopBands } from "./lib/stops";
   import { barState, CloudSync, NO_SYNC, type SyncView } from "./lib/sync";
   import { runSyncCheck } from "./lib/sync-check";
   import { hms, short } from "./lib/time";
@@ -56,6 +57,7 @@
   import type {
     Config,
     Episode,
+    FileStops,
     LonLat,
     RideDocument,
     RideEvent,
@@ -149,6 +151,10 @@
   let videos = $state<RideVideos[]>([]);
   /** 開いている走行で、タイムラインから外している動画のファイル名 */
   let excludedNames = $state.raw<string[]>([]);
+  /** 開いている走行に使う動画の、停車の候補。探していない動画は入らない */
+  let stopFiles = $state.raw<FileStops[]>([]);
+  /** 停車を探している間の進み具合（0〜1）。探していなければ null */
+  let stopProgress = $state<number | null>(null);
   let stored = $state<RideSummary[]>([]);
   let roads = $state<RoadData | null>(null);
   /** 開いている走行の日付 */
@@ -209,6 +215,8 @@
         return { name, start_ms: start, end_ms: start + duration_ms };
       }),
   );
+  /** 停車の候補を、実時刻の軸に並べたもの */
+  const candidateBands = $derived(stopBands(timeline, stopFiles));
   const routeLine = $derived(doc === null ? [] : line(doc));
   /** 経路の各点までの距離。イベントの数だけ線をたどり直さないよう、経路が変わったときに 1 度だけ測る */
   const routeAlong = $derived(distancesAlong(routeLine));
@@ -1073,6 +1081,63 @@
     });
   });
 
+  /** 停車の候補を読むたびに進める番号。遅れて返った古い応答を使わないために持つ */
+  let stopLoads = 0;
+  /** 走行に使う動画の、停車の候補を読み直す。 */
+  function loadStops() {
+    const load = ++stopLoads;
+    const used = usedFiles;
+    if (used.length === 0) {
+      stopFiles = [];
+      return;
+    }
+    void invoke<FileStops[]>("get_stops", { files: used }).then((found) => {
+      if (load === stopLoads) stopFiles = found;
+    });
+  }
+  $effect(loadStops);
+
+  /** 開いている走行の動画の停車を探す。探してある動画は飛ばす。 */
+  async function findStops() {
+    const used = usedFiles;
+    if (used.length === 0 || stopProgress !== null) return;
+    dismiss("stops");
+    stopProgress = 0;
+    const onProgress = new Channel<number>();
+    onProgress.onmessage = (done) => {
+      if (stopProgress !== null) stopProgress = done;
+    };
+    try {
+      tell(foundMessage(await invoke<FileStops[]>("find_stops", { files: used, onProgress })));
+    } catch (e) {
+      const text = String(e);
+      if (text.includes("やめました")) tell("停車を探すのをやめました。探し終えた動画の候補は残ります", "warning");
+      else report({ key: "stops", level: "error", title: "停車を探せません。", detail: text });
+    } finally {
+      stopProgress = null;
+      // 探している間に、走行を切り替えたり動画を外したりしていることがある。いまの走行で読み直す。
+      loadStops();
+    }
+  }
+
+  /** 停車の候補を、書き出しで抜くか（採る）、抜かないか（外す）を決める。 */
+  async function setStopTaken(band: StopBand, taken: boolean) {
+    dismiss("stops");
+    try {
+      const next = await invoke<FileStops>("set_stop_taken", {
+        file: band.file,
+        startMs: band.choice.start_ms,
+        endMs: band.choice.end_ms,
+        taken,
+      });
+      stopFiles = replaceStops(stopFiles, next);
+      tell(taken ? "停車の候補を採りました" : "停車の候補を外しました");
+    } catch (e) {
+      const title = taken ? "停車の候補を採れません。" : "停車の候補を外せません。";
+      report({ key: "stops", level: "error", title, detail: String(e) });
+    }
+  }
+
   /** 動画を、開いている走行のタイムラインから外す。`excluded` が偽なら、外した動画を戻す。 */
   async function setVideoExcluded(name: string, excluded: boolean) {
     const rideDate = date;
@@ -1103,6 +1168,9 @@
         player: () => (timeline === null ? null : (player ?? null)),
         bar: () => timelineBar,
         remembered: () => invoke<string[]>("get_excluded_videos", { date }),
+        findStops,
+        stopProgress: () => stopProgress,
+        message: () => lastMessage,
       });
       await invoke("capture_check", { name: "played" });
     } catch (e) {
@@ -1321,10 +1389,14 @@
           compact={mode === "confirm"}
           canExport={doc !== null}
           canOverview={(doc?.waypoints.length ?? 0) >= 2}
+          canFindStops={usedFiles.length > 0}
+          {stopProgress}
           onrides={openRides}
           onmode={setMode}
           onexport={exportCsv}
           onoverview={() => (overviewOpen = true)}
+          onfindstops={findStops}
+          oncancelstops={() => void invoke("cancel_find_stops")}
           onsettings={() => (settingsOpen = true)}
           onretry={retrySave}
         />
@@ -1456,6 +1528,7 @@
         bind:this={timelineBar}
         {timeline}
         excluded={excludedClips}
+        candidates={candidateBands}
         {events}
         {conflicts}
         {nowMs}
@@ -1465,6 +1538,7 @@
         onexclude={setVideoExcluded}
         onstop={addStop}
         onunstop={removeEvent}
+        ontake={setStopTaken}
       />
     </div>
     {#if toast !== ""}

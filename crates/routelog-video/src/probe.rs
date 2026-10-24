@@ -8,6 +8,8 @@ use crate::Error;
 
 /// ffprobe の場所を上書きする環境変数。
 const PROGRAM_ENV: &str = "ROUTELOG_FFPROBE";
+/// ffmpeg の場所を上書きする環境変数。
+const FFMPEG_ENV: &str = "ROUTELOG_FFMPEG";
 
 /// 動画ファイル 1 本について ffprobe が答えたこと。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +94,11 @@ impl Ffprobe {
         }
         parse_probe(&String::from_utf8_lossy(&output.stdout))
     }
+}
+
+/// ffmpeg の場所。環境変数 `ROUTELOG_FFMPEG`、フォルダ `dir` の中、PATH の順に探す。
+pub fn find_ffmpeg(dir: Option<&Path>) -> OsString {
+    find_program(FFMPEG_ENV, "ffmpeg", dir)
 }
 
 /// 外の道具の場所。環境変数 `env`、フォルダ `dir` の中、PATH の順に探す。どこにも無ければ名前だけを返す。

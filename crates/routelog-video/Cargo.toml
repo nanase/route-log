@@ -2,7 +2,7 @@
 name = "routelog-video"
 version.workspace = true
 edition.workspace = true
-description = "動画ファイル名の解析と ffprobe の呼び出し"
+description = "動画ファイル名の解析、ffprobe の呼び出し、停車の候補の検出"
 
 [dependencies]
 routelog-core.workspace = true
