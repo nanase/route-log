@@ -154,13 +154,16 @@
   .space {
     flex: 1;
   }
+  /*
+   * 経由点とイベントが多くても縮めない。縮めてよいことにすると、中身の多い一覧と同じ割合で
+   * 縮み、1 行ほどになって押せなくなる。回が 3 つを超えたら、この中で送る。
+   */
   .episodes {
     display: flex;
-    flex: 0 1 auto;
+    flex: none;
     flex-direction: column;
     gap: 6px;
-    max-height: 30%;
-    min-height: 0;
+    max-height: 240px;
     padding: 0 8px 8px;
     overflow-y: auto;
   }
