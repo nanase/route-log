@@ -1,7 +1,7 @@
 /** 地図の表示と、経路の編集・保存を、画面を人が見なくても確かめる。 */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { creditImages } from "./overview";
+import { creditImages, motionInput } from "./overview";
 import { line, type Path } from "./route";
 import type { LonLat, RideDocument, RideEvent, RideSummary } from "./types";
 import type { Basemap } from "./ui";
@@ -206,7 +206,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
   const started = performance.now();
   const overview = await invoke("render_overview", {
     line: line(app.path()),
-    motion: { zoomSeconds: 1, holdSeconds: 1, startScale: 0.7 },
+    motion: motionInput({ fps: "59.94", zoomSeconds: 1, holdSeconds: 1, startScale: 0.7 }),
     credits: await creditImages(),
     path: await invoke<string>("check_path", { name: "overview.mp4" }),
     onProgress,
