@@ -1,10 +1,10 @@
-/** 回の作り方・直し方・消し方と、録画の長さの出し方を、画面を人が見なくても確かめる。 */
+/** 回の作り方・直し方・消し方と、録画の長さの出し方、Resolve への書き出しを、画面を人が見なくても確かめる。 */
 
 import { invoke } from "@tauri-apps/api/core";
 import { confirmTyped } from "./events";
 import type { MapHandle } from "./map-check";
 import type { Path } from "./route";
-import type { RideDocument, RideEvent, Timeline } from "./types";
+import type { Episode, Exported, RideDocument, RideEvent, Timeline } from "./types";
 import type { Mode } from "./ui";
 
 /** 確認のために画面全体が見せる口。 */
@@ -18,6 +18,8 @@ export interface EpisodeAppHandle {
   undo(): Promise<void>;
   /** 保存を済ませ、保存されたものを読み直す */
   saved(): Promise<RideDocument | null>;
+  /** 回を Resolve へ書き出す。フォルダは選ばせずに `dir` へ書く */
+  exportEpisode(episode: Episode, name: string, dir: string, overwrite: boolean): Promise<Exported | null>;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,5 +147,23 @@ export async function runEpisodeCheck(map: MapHandle, app: EpisodeAppHandle) {
       JSON.stringify(saved?.waypoints.map((w) => w.id)) === JSON.stringify(ids()),
   });
 
-  return { steps, captures: [split, broken] };
+  // 書き出しは、報告と同じ場所へ。フォルダを選ぶダイアログは、人が見ないと閉じられない。
+  const dir = (await invoke<string>("check_path", { name: "resolve" })).replace(/[\\/][^\\/]*$/, "");
+  const notice = () => text(document.querySelector(".notice"));
+  const front = episodes()[0];
+  const written = await app.exportEpisode(front, "前編", dir, false);
+  note("前編を Resolve へ書き出す", "FCPXML と EDL を書き、長さ・抜いた停車・マーカーの数と、マーカーの読み込み方が緑の帯に出る", {
+    result: written,
+    notice: notice(),
+  });
+  const done = await capture("exported");
+  const again = await app.exportEpisode(front, "前編", dir, false);
+  note("もう一度書き出す", "書かずに、同じ名前のファイルがあると出て、「上書きする」を押せる", {
+    result: again,
+    notice: notice(),
+  });
+  const over = await app.exportEpisode(front, "前編", dir, true);
+  note("上書きする", "書き直し、緑の帯に戻る", { result: over?.outcome, notice: notice() });
+
+  return { steps, captures: [split, broken, done] };
 }

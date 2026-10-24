@@ -18,6 +18,12 @@ export function short(ms: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+/** 長さを「n 分 m 秒」と書く。1 分に満たなければ秒だけ。 */
+export function minutesSeconds(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
 /** 長さを `h:mm:ss` にする。 */
 export function hms(ms: number): string {
   const seconds = Math.floor(ms / 1000);

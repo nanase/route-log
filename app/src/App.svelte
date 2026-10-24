@@ -5,7 +5,7 @@
   import { onMount, untrack } from "svelte";
   import { runConfirmCheck } from "./lib/confirm-check";
   import { runEpisodeCheck } from "./lib/episode-check";
-  import { addEpisode, repoint } from "./lib/episodes";
+  import { addEpisode, exportedMessage, repoint } from "./lib/episodes";
   import EventList from "./lib/EventList.svelte";
   import {
     aheadAt,
@@ -57,6 +57,7 @@
   import type {
     Config,
     Episode,
+    Exported,
     FileStops,
     LonLat,
     RideDocument,
@@ -91,6 +92,7 @@
   const BASEMAP_KEY = "routelog.basemap";
   const LAST_RIDE_KEY = "routelog.last-ride";
   const SIDE_KEY = "routelog.side-width";
+  const RESOLVE_DIR_KEY = "routelog.resolve-dir";
   /** 時刻入力のときの、動画と一覧の列の幅（px）。動画は、この幅いっぱいに出る */
   const SIDE_DEFAULT = 520;
   const SIDE_MIN = 420;
@@ -320,7 +322,7 @@
     if (date === null && first !== undefined) await select(first);
   }
 
-  /** エラーか注意を、上の帯の下に出す。同じ事柄の知らせがあれば置き換える。 */
+  /** エラー・注意・残しておきたいできたことを、上の帯の下に出す。同じ事柄の知らせがあれば置き換える。 */
   function report(notice: Notice) {
     notices = [...notices.filter((old) => old.key !== notice.key), notice];
     lastMessage = `${notice.title}${notice.detail}`;
@@ -919,6 +921,43 @@
     }
   }
 
+  /** 回を Resolve へ書き出す。書き出し先のフォルダは、前に選んだ所から選び直す。 */
+  async function exportEpisode(episode: Episode, name: string) {
+    const dir = await open({
+      directory: true,
+      title: "Resolve へ書き出すフォルダ",
+      defaultPath: localStorage.getItem(RESOLVE_DIR_KEY) ?? undefined,
+    });
+    if (dir === null) return;
+    localStorage.setItem(RESOLVE_DIR_KEY, dir);
+    await writeResolve(episode, name, dir, false);
+  }
+
+  /** 同じ名前のファイルがあれば、`overwrite` でない限り書かずに、上書きするかを尋ねる。 */
+  async function writeResolve(episode: Episode, name: string, dir: string, overwrite: boolean): Promise<Exported | null> {
+    if (doc === null) return null;
+    await flush();
+    dismiss("resolve");
+    try {
+      const result = await invoke<Exported>("export_resolve", { doc, episodeId: episode.id, name, dir, overwrite });
+      if (result.outcome === "exists") {
+        report({
+          key: "resolve",
+          level: "warning",
+          title: "同じ名前のファイルがあります。",
+          detail: result.names.join("、"),
+          action: { label: "上書きする", run: () => void writeResolve(episode, name, dir, true) },
+        });
+      } else {
+        report({ key: "resolve", level: "done", title: "書き出しました。", detail: exportedMessage(name, result) });
+      }
+      return result;
+    } catch (e) {
+      report({ key: "resolve", level: "error", title: "書き出せません。", detail: String(e) });
+      return null;
+    }
+  }
+
   /** その日付の走行を開き、記録が無ければ作る。何も変えない編集を頼むと、走行だけができる。 */
   async function createRide(rideDate: string) {
     await select(rideDate);
@@ -1240,6 +1279,7 @@
             await flush();
             return doc === null ? null : await invoke<RideDocument>("load_ride", { id: doc.ride.id });
           },
+          exportEpisode: writeResolve,
         })),
       };
     } catch (e) {
@@ -1448,6 +1488,7 @@
                 onchangeepisode={(id, change) =>
                   editEpisodes((episodes) => episodes.map((e) => (e.id === id ? { ...e, ...change } : e)))}
                 onremoveepisode={(id) => editEpisodes((episodes) => episodes.filter((e) => e.id !== id))}
+                onexportepisode={exportEpisode}
               />
             </div>
           {:else}

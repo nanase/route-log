@@ -12,7 +12,8 @@ pub mod stops;
 pub use meter::StopMeter;
 pub use name::{NamePattern, ParsedName};
 pub use probe::{
-    Ffprobe, Probe, dir_on_path, find_ffmpeg, find_in, find_program, hide_console, parse_probe,
+    Ffprobe, Probe, dir_on_path, find_ffmpeg, find_in, find_program, hide_console, parse_media,
+    parse_probe,
 };
 pub use scan::{Scan, Skipped, scan};
 

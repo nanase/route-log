@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   addEpisode,
+  exportBlocker,
+  exportedMessage,
   extentOf,
   nameOf,
   RECORDED_LIMIT_MS,
@@ -118,5 +120,37 @@ describe("録画の長さ", () => {
     expect(recordedOf(doc, spans, episode(0, 2))).toBeGreaterThan(RECORDED_LIMIT_MS);
     expect(recordedOf(doc, spans, episode(2, 3))).toBeNull();
     expect(recordedOf(doc, spans, episode(2, 1))).toBeNull();
+  });
+});
+
+describe("Resolve への書き出し", () => {
+  const spans: Span[] = [{ file: 0, start_ms: 0, end_ms: 1000 }];
+
+  test("書き出せない理由を、直す順に言う", () => {
+    expect(exportBlocker(false, null, null)).toBe("回の範囲が正しくありません");
+    expect(exportBlocker(true, null, null)).toBe("この走行に使う動画がありません");
+    expect(exportBlocker(true, spans, null)).toContain("時刻が推定できると");
+    expect(exportBlocker(true, spans, 0)).toBe("回の範囲に、録画している所がありません");
+    expect(exportBlocker(true, spans, 1)).toBeNull();
+  });
+
+  test("書き出した中身と、マーカーの読み込み方を知らせる", () => {
+    const written = {
+      outcome: "written",
+      fcpxml: "a.fcpxml",
+      edl: "a.edl",
+      lengthMs: 9_560_000,
+      cuts: 3,
+      cutMs: 74_400,
+      markers: 28,
+      unplaced: 0,
+    } as const;
+    expect(exportedMessage("前編", written)).toStartWith(
+      "「前編」のソース 2:39:20。停車 3 か所（1 分 14 秒）を抜き、マーカーは 28 個です。マーカーは、",
+    );
+    expect(exportedMessage("前編", written)).toContain("「EDL からタイムラインマーカー」");
+    const plain = exportedMessage("前編", { ...written, cuts: 0, cutMs: 0, unplaced: 2 });
+    expect(plain).toContain("マーカーは 28 個です。2 個のイベントは、録画の外か抜いた所にあるので");
+    expect(plain).not.toContain("停車");
   });
 });

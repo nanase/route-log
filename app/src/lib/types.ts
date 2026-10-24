@@ -148,6 +148,28 @@ export interface Episode {
   to: string;
 }
 
+/** 回を Resolve へ書き出した結果。Rust 側の `Exported` と同じ。 */
+export type Exported =
+  | {
+      outcome: "written";
+      /** 書いたファイルの名前 */
+      fcpxml: string;
+      edl: string;
+      /** タイムラインの長さ */
+      lengthMs: number;
+      /** 録画の中で抜いた停車の数と長さ */
+      cuts: number;
+      cutMs: number;
+      markers: number;
+      /** 録画の外か、抜いた所にあって、マーカーにできなかったイベントの数 */
+      unplaced: number;
+    }
+  | {
+      /** 同じ名前のファイルがあるので、書かなかった */
+      outcome: "exists";
+      names: string[];
+    };
+
 export interface RideDocument {
   ride: Ride;
   waypoints: Waypoint[];

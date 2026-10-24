@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { extentOf, nameOf, RECORDED_LIMIT_MS, recordedOf } from "./episodes";
+  import { exportBlocker, extentOf, nameOf, RECORDED_LIMIT_MS, recordedOf } from "./episodes";
   import Icon from "./Icon.svelte";
   import { endpointsOf } from "./overview";
   import type { Path } from "./route";
@@ -17,6 +17,7 @@
     onadd,
     onchange,
     onremove,
+    onexport,
   }: {
     path: Path;
     events: RideEvent[];
@@ -26,6 +27,8 @@
     onadd: () => void;
     onchange: (id: string, change: Partial<Omit<Episode, "id">>) => void;
     onremove: (id: string) => void;
+    /** Resolve へ書き出す。`name` は画面に出している回の名前 */
+    onexport: (episode: Episode, name: string) => void;
   } = $props();
 
   const ends = $derived(endpointsOf({ ...path, events }));
@@ -67,6 +70,7 @@
   {#each episodes as episode, index (episode.id)}
     {@const extent = extentOf(path.waypoints, episode)}
     {@const recorded = spans === null ? null : recordedOf({ ...path, events }, spans, episode)}
+    {@const blocker = exportBlocker(extent !== null, spans, recorded)}
     <div class="episode">
       <div class="top">
         <input
@@ -93,6 +97,16 @@
             録画 <b class="mono">{clock(recorded)}</b>
           </span>
         {/if}
+        <button
+          type="button"
+          class="btn small icon-only ghost export"
+          aria-label="{nameOf(episode, index)}を Resolve へ書き出す"
+          title={blocker ?? "停車を抜いたソースのタイムライン（FCPXML）と、字幕の所のマーカー（EDL）を書き出す"}
+          disabled={blocker !== null}
+          onclick={() => onexport(episode, nameOf(episode, index))}
+        >
+          <Icon name="export" size={14} />
+        </button>
         <button
           type="button"
           class="btn small icon-only ghost trash"
@@ -190,6 +204,7 @@
   .length.over b {
     color: var(--warn-ink);
   }
+  .export,
   .trash {
     flex: none;
     color: var(--ink-3);

@@ -9,7 +9,8 @@
 import { knotsOf, mergedStops, type Stop, stopsOf, timeAt } from "./events";
 import { newId } from "./ids";
 import { type Path, segmentLengths } from "./route";
-import type { Episode, RideEvent, Span, Waypoint } from "./types";
+import { hms, minutesSeconds } from "./time";
+import type { Episode, Exported, RideEvent, Span, Waypoint } from "./types";
 
 /** 回の録画の長さの目安の上限（ms）。Resolve のソースのタイムラインを、これより長くしない。Rust 側と同じ値 */
 export const RECORDED_LIMIT_MS = 5 * 60 * 60 * 1000;
@@ -91,4 +92,29 @@ export function recordedOf(doc: Path & { events: RideEvent[] }, spans: Span[], e
   const [knots, stops] = [knotsOf(doc.events), mergedStops(stopsOf(doc.events))];
   const [start, end] = [timeAt(knots, stops, reached(extent.from)), timeAt(knots, stops, reached(extent.to))];
   return start === null || end === null ? null : recordedMs(spans, stops, start, end);
+}
+
+/**
+ * 回を Resolve へ書き出せない理由。書き出せるなら null。`recorded` は `recordedOf` の値で、
+ * `spans` が null なら動画が無い。
+ */
+export function exportBlocker(hasExtent: boolean, spans: Span[] | null, recorded: number | null): string | null {
+  if (!hasExtent) return "回の範囲が正しくありません";
+  if (spans === null) return "この走行に使う動画がありません";
+  if (recorded === null) return "始まりと終わりの経由点を通った時刻が推定できると、書き出せます";
+  if (recorded <= 0) return "回の範囲に、録画している所がありません";
+  return null;
+}
+
+/** Resolve へ書き出したあとに出す知らせ。マーカーの読み込み方も添える。 */
+export function exportedMessage(name: string, written: Extract<Exported, { outcome: "written" }>): string {
+  const cuts = written.cuts > 0 ? `停車 ${written.cuts} か所（${minutesSeconds(written.cutMs)}）を抜き、` : "";
+  const unplaced =
+    written.unplaced > 0
+      ? `${written.unplaced} 個のイベントは、録画の外か抜いた所にあるので、マーカーにしていません。`
+      : "";
+  return (
+    `「${name}」のソース ${hms(written.lengthMs)}。${cuts}マーカーは ${written.markers} 個です。${unplaced}` +
+    "マーカーは、メディアプールでタイムラインを右クリックし、「タイムライン」>「読み込み」>「EDL からタイムラインマーカー」で読み込みます。"
+  );
 }

@@ -9,6 +9,13 @@ use crate::{Error, Ffprobe, NamePattern, ParsedName};
 /// ffprobe を同時に走らせる数の上限。動画は 1 台のディスクにあるので、増やしても速くならない。
 const MAX_WORKERS: usize = 8;
 
+/// ffprobe を同時に走らせる数。
+pub(crate) fn workers() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(MAX_WORKERS)
+}
+
 /// 形は合ったが読めなかったファイル。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Skipped {
@@ -34,11 +41,8 @@ pub fn scan(dir: &Path, pattern: &NamePattern, ffprobe: &Ffprobe) -> Result<Scan
     let next = AtomicUsize::new(0);
     let files = Mutex::new(Vec::new());
     let skipped = Mutex::new(Vec::new());
-    let workers = std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
-        .min(MAX_WORKERS);
     std::thread::scope(|scope| {
-        for _ in 0..workers {
+        for _ in 0..workers() {
             scope.spawn(|| {
                 while let Some((path, parsed)) =
                     candidates.get(next.fetch_add(1, Ordering::Relaxed))

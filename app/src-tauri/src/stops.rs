@@ -100,7 +100,6 @@ impl Stops {
     }
 
     /// その動画で採った候補。書き出しで抜く区間である。測っていなければ空。
-    #[allow(dead_code, reason = "停車を抜いたタイムラインの書き出しが使う")]
     pub fn taken(&self, file: &VideoFile) -> Vec<Candidate> {
         self.get(file)
             .map(|stops| {

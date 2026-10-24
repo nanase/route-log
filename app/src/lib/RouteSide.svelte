@@ -24,6 +24,7 @@
     onaddepisode,
     onchangeepisode,
     onremoveepisode,
+    onexportepisode,
   }: {
     path: Path;
     events: RideEvent[];
@@ -43,6 +44,7 @@
     onaddepisode: () => void;
     onchangeepisode: (id: string, change: Partial<Omit<Episode, "id">>) => void;
     onremoveepisode: (id: string) => void;
+    onexportepisode: (episode: Episode, name: string) => void;
   } = $props();
 
   const MODES: Record<SegmentMode, string> = { snap: "道に沿う", straight: "直線", manual: "直線（手修正）" };
@@ -90,6 +92,7 @@
     onadd={onaddepisode}
     onchange={onchangeepisode}
     onremove={onremoveepisode}
+    onexport={onexportepisode}
   />
 
   <header class="events-head">

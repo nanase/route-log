@@ -27,7 +27,8 @@ export interface ExcludedClip {
 export interface Notice {
   /** 同じ事柄の知らせは、新しいもので置き換える */
   key: string;
-  level: "error" | "warning";
+  /** done は、済んだことを、あとで読み返せるように残すとき */
+  level: "error" | "warning" | "done";
   title: string;
   detail: string;
   /** 直す手段 */

@@ -10,6 +10,7 @@ pub mod export;
 pub mod geo;
 pub mod jst;
 pub mod prefecture;
+pub mod resolve;
 pub mod ride;
 pub mod timeline;
 

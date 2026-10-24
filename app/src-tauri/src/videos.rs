@@ -16,6 +16,13 @@ pub struct State {
     timeline: Mutex<Option<Timeline>>,
 }
 
+impl State {
+    /// いま開いている走行のタイムライン。まだ作っていなければ `None`。
+    pub fn current(&self) -> Option<Timeline> {
+        self.timeline.lock().unwrap().clone()
+    }
+}
+
 #[derive(Serialize)]
 pub struct Scan {
     rides: Vec<RideVideos>,

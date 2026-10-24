@@ -3,6 +3,7 @@ mod config;
 mod events;
 mod excluded;
 mod overview;
+mod resolve;
 mod rides;
 mod stops;
 mod store;
@@ -77,6 +78,7 @@ pub fn run() {
             overview::overview_preview,
             overview::render_overview,
             overview::cancel_overview,
+            resolve::export_resolve,
             rides::list_rides,
             rides::load_ride,
             rides::create_ride,

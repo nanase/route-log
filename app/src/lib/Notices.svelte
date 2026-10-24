@@ -3,14 +3,14 @@
   import type { Notice } from "./ui";
 
   /**
-   * 上の帯のすぐ下に出す知らせ。エラーは赤、注意は橙の帯で、直すか閉じるまで残る。
+   * 上の帯のすぐ下に出す知らせ。エラーは赤、注意は橙、済んだことは緑の帯で、直すか閉じるまで残る。
    */
   let { notices, onclose }: { notices: Notice[]; onclose: (key: string) => void } = $props();
 </script>
 
 {#each notices as notice (notice.key)}
   <div class="notice float {notice.level}" role={notice.level === "error" ? "alert" : "status"}>
-    <Icon name={notice.level} />
+    <Icon name={notice.level === "done" ? "check" : notice.level} />
     <span class="text"><b>{notice.title}</b>{notice.detail}</span>
     {#if notice.action}
       <button type="button" class="btn" onclick={notice.action.run}>{notice.action.label}</button>
@@ -39,6 +39,11 @@
     border-color: var(--warn-line);
     background: var(--warn-soft);
     color: var(--warn-text);
+  }
+  .done {
+    border-color: var(--ok);
+    background: var(--ok-soft);
+    color: var(--ok-ink);
   }
   .text {
     flex: 1;
