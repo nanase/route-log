@@ -1,6 +1,7 @@
 //! 次に起動したときも使う設定。フォルダの場所は環境ごとに違うので、アプリのデータとして持つ。
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -82,16 +83,24 @@ impl ConfigFile {
 
 /// 開発中に使っている ffprobe と ffmpeg のフォルダを PATH から探し、覚える。
 ///
-/// 開発中は mise exec 経由で起動するので、PATH の先頭近くに、mise が ffmpeg の環境を整えてから
-/// 呼ぶ `.cmd` がある。リリースビルドをエクスプローラーから起動すると無いので、覚えておいた
-/// 場所を使う。
+/// mise exec 経由で起動すると、PATH の先頭近くに、mise が ffmpeg の環境を整えてから呼ぶ `.cmd` が
+/// ある。mise の shim しか無ければ、mise にそのフォルダを尋ねる。リリースビルドをエクスプローラー
+/// から起動したときや、exe をリポジトリの外に置いたときは、覚えておいた場所を使う。
 ///
 /// 書けなくても起動は止めない。この起動では PATH から探せている。
 pub fn remember_ffmpeg_dir(config: &ConfigFile) {
     let Some(dir) = routelog_video::dir_on_path("ffprobe") else {
         return;
     };
-    if is_mise_shims(&dir) || routelog_video::find_in(&dir, "ffmpeg").is_none() {
+    let dir = if is_mise_shims(&dir) {
+        match mise_bin_dir("ffprobe") {
+            Some(dir) => dir,
+            None => return,
+        }
+    } else {
+        dir
+    };
+    if routelog_video::find_in(&dir, "ffmpeg").is_none() {
         return;
     }
     let dir = dir.to_string_lossy().into_owned();
@@ -104,6 +113,20 @@ pub fn remember_ffmpeg_dir(config: &ConfigFile) {
 /// 動かない。mise exec を通さずに起動すると、PATH で最初に見つかるのはこれである。
 fn is_mise_shims(dir: &Path) -> bool {
     dir.ends_with("mise/shims")
+}
+
+/// いまいる場所の mise.toml で使う道具 `name` の、shim ではない本当のフォルダ。リポジトリの外では、
+/// mise.toml が無いので見つからない。
+fn mise_bin_dir(name: &str) -> Option<PathBuf> {
+    let mut command = Command::new("mise");
+    command
+        .args(["which", name])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    routelog_video::hide_console(&mut command);
+    let output = command.output().ok().filter(|o| o.status.success())?;
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    path.parent().map(Path::to_path_buf)
 }
 
 #[tauri::command]

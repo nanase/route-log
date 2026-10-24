@@ -72,6 +72,9 @@ Oct 13, 2026 · @Nanase
 
 - `app/` で `mise exec -- bun run tauri build` を実行する。インストーラーは作らず、`target/release/routelog.exe` だけができる
 - 画面は exe に入る。判定用データ・道路データ・ffmpeg は入れず、開発中と同じ場所から読む
+  - exe だけを別の場所に写し、mise も PATH も無しで起動しても動く。データの場所と ffmpeg の場所は `config.json` から読む
+  - ffmpeg の場所は、リポジトリの中で 1 度起動したときに覚える（開発中の起動か、`target/release` に置いたままの exe）。覚える前にリポジトリの外で起動すると、ffprobe と ffmpeg が見つからない
+  - 2026-10-24 に、写した exe を PATH を空にして起動し、地図の確認（概略図の動画の書き出しを含む）とフォルダの確認が通った
 - `[profile.release]` は Worker に合わせて大きさを優先する。開発中に最適化している crate は、リリースでも速さを優先する
 
 **道具**：node・bun・ffmpeg の版は `mise.toml` で固定し、パッケージ管理は bun に揃える。国道マップと同じ形である。Rust は rustup で入れ、Worker 用に `wasm32-unknown-unknown` を足す。
@@ -118,6 +121,8 @@ Oct 13, 2026 · @Nanase
 - `ffmpeg_dir` は、起動したときに PATH で最初に ffprobe が見つかるフォルダに ffmpeg もあれば、そのフォルダを覚える。開発中の起動で覚え、リリースビルドを直に起動したときに使う
   - mise exec を通すと、PATH の先頭近くに mise の `.mise-bins` が入る。中の `.cmd` は ffmpeg の環境（PATH など）を整えてから exe を呼ぶ。覚えるのはこのフォルダで、リリースビルドも同じ `.cmd` を呼ぶ
   - mise の shim（`mise/shims`）は覚えない。起動した場所の `mise.toml` で版を決めるので、リポジトリの外では動かない
+  - PATH で最初に見つかるのが shim なら、`mise which ffprobe` で `.mise-bins` を尋ねて覚える。mise exec を通さずに `bun tauri dev` で起動すると、こうなる。リポジトリの外では、mise は答えない
+  - 当初は shim を見つけたら何もしなかった。そのため、mise exec を通さない起動では覚えられず、`ffmpeg_dir` が空のままだった
   - PATH にある別の ffmpeg（古い版で、ffprobe が無い）より、覚えた場所を先に使う
 - 1 本あたり約 0.25 秒かかる。並列に呼び、14 本で 3.6 秒だった
 
