@@ -2,7 +2,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { creditImages, motionInput } from "./overview";
-import { line, type Path } from "./route";
+import { line, part, type Path } from "./route";
 import type { LonLat, RideDocument, RideEvent, RideSummary } from "./types";
 import type { Basemap } from "./ui";
 
@@ -192,11 +192,55 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
 
   const captures = [notice, edited];
 
+  // 回を 2 つ作る。経由点 1 → 2 と、2 → 3。欄やボタンが無ければ、確認を止める（episode-check と同じ）。
+  // episode-check の手助けを使わないのは、あちらがこのファイルの型を読むためである。
+  const ids = app.path().waypoints.map((w) => w.id);
+  const enter = (field: HTMLSelectElement | undefined, value: string) => {
+    if (field === undefined) throw new Error("欄がありません");
+    field.value = value;
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const episodeCards = () => [...document.querySelectorAll<HTMLElement>("aside .episode")];
+  const pressButton = (selector: string, label: string) => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>(selector)].find(
+      (b) => b.textContent?.trim() === label,
+    );
+    if (button === undefined) throw new Error(`「${label}」のボタンがありません`);
+    button.click();
+  };
+  const addEpisode = async () => {
+    pressButton("aside button", "足す");
+    await sleep(300);
+  };
+  await addEpisode();
+  enter(episodeCards()[0]?.querySelectorAll("select")[1], ids[1]);
+  await sleep(200);
+  await addEpisode();
+  enter(episodeCards()[1]?.querySelectorAll("select")[0], ids[1]);
+  await sleep(200);
+  note("回を 2 つ作る", "第 1 回は経由点 1 → 2、第 2 回は 2 → 3", {
+    episodes: app.path().episodes?.map((e) => [ids.indexOf(e.from) + 1, ids.indexOf(e.to) + 1]),
+  });
+
   // 概略図の動画。見本は画面の写しで確かめる。動画は短くして、報告の隣に書く。
   await app.showOverview(true);
-  await until(() => document.querySelector("dialog .preview img") !== null, 60_000);
+  const previewSrc = () => document.querySelector<HTMLImageElement>("dialog .preview img")?.src ?? "";
+  await until(() => previewSrc() !== "", 60_000);
   await sleep(500);
+  const dialogText = (selector: string) =>
+    document.querySelector(`dialog ${selector}`)?.textContent?.replace(/\s+/g, " ").trim() ?? null;
+  note("概略図の動画のダイアログを開く", "範囲は第 1 回で、1 出発 → 2。全経路を見せる時間の欄がある。見本は止まった所", {
+    scope: document.querySelector<HTMLSelectElement>("dialog select.scope")?.selectedOptions[0]?.textContent,
+    ends: dialogText(".ends"),
+    motion: dialogText(".motion"),
+  });
   captures.push(await capture("overview"));
+  const stopped = previewSrc();
+  pressButton("dialog .seg button", "最初");
+  await until(() => previewSrc() !== stopped, 60_000);
+  await sleep(500);
+  note("見本を「最初」にする", "全部の回を合わせた経路が、すべてはっきり描かれる");
+  captures.push(await capture("overview-start"));
   await app.showOverview(false);
   const phases: string[] = [];
   const onProgress = new Channel<{ phase: string; done: number; total: number }>();
@@ -204,9 +248,10 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     if (phases.at(-1) !== p.phase) phases.push(p.phase);
   };
   const started = performance.now();
+  // 第 1 回の動画。第 2 回を薄く描く。
   const overview = await invoke("render_overview", {
-    line: line(app.path()),
-    motion: motionInput({ fps: "59.94", zoomSeconds: 1, holdSeconds: 1, startScale: 0.7 }),
+    route: { line: line(part(app.path(), 0, 1)), others: [line(part(app.path(), 1, 2))] },
+    motion: motionInput({ fps: "59.94", leadSeconds: 1, zoomSeconds: 1, holdSeconds: 1, startScale: 0.7 }, true),
     credits: await creditImages(),
     path: await invoke<string>("check_path", { name: "overview.mp4" }),
     onProgress,
@@ -214,7 +259,8 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     () => "書き出した",
     (e) => String(e),
   );
-  note("概略図の動画を、寄る 1 秒、止める 1 秒で書き出す", "書き出した。進み具合が tiles、frames の順に届く", {
+  const rendered = "書き出した。進み具合が tiles、frames の順に届く";
+  note("前半の回の概略図の動画を、全経路 1 秒、寄る 1 秒、止める 1 秒で書き出す", rendered, {
     overview,
     phases,
     seconds: Math.round((performance.now() - started) / 1000),

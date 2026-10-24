@@ -1,6 +1,6 @@
 //! フレームを ffmpeg に渡して、MP4 に書く。
 //!
-//! 止まってからのフレームは同じ絵なので、1 枚だけ渡して ffmpeg に繰り返させる。
+//! 寄り始める前と止まってからのフレームは同じ絵なので、1 枚だけ渡して ffmpeg に繰り返させる。
 //!
 //! 書くのは、使えれば GPU（NVIDIA の NVENC）、使えなければ CPU（libx264）にする。
 
@@ -104,12 +104,14 @@ impl Ffmpeg {
         command.status().is_ok_and(|status| status.success())
     }
 
-    /// `out` に書き始める。渡したフレームの後に、最後のフレームを `repeat` 枚ぶん足す。
+    /// `out` に書き始める。渡したフレームの前に最初のフレームを `lead` 枚、後に最後のフレームを
+    /// `repeat` 枚ぶん足す。
     pub fn start(
         &self,
         out: &Path,
         size: [u32; 2],
         fps: Fps,
+        lead: u32,
         repeat: u32,
     ) -> Result<Encoder, Error> {
         let mut command = Command::new(&self.program);
@@ -122,7 +124,7 @@ impl Ffmpeg {
             .args([
                 "-vf",
                 &format!(
-                    "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{COLOR},tpad=stop_mode=clone:stop={repeat}"
+                    "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{COLOR},tpad=start_mode=clone:start={lead}:stop_mode=clone:stop={repeat}"
                 ),
             ])
             .args(self.codec().args())

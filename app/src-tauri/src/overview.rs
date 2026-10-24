@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use routelog_overview::{Credits, Ffmpeg, Fps, LonLat, Motion, Progress, Sources, TileStore};
+use routelog_overview::{
+    Credits, Ffmpeg, Fps, LonLat, Motion, Progress, Route, Sources, Still, TileStore,
+};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri::ipc::{Channel, Response};
@@ -56,9 +58,37 @@ impl CreditImages {
 pub struct MotionInput {
     /// フレームレートの分子と分母。59.94 fps なら [60000, 1001]
     fps: [u32; 2],
+    lead_seconds: f64,
     zoom_seconds: f64,
     hold_seconds: f64,
     start_scale: f64,
+}
+
+/// 描く経路。`line` ははっきり描く経路、`others` は全部の回を合わせた範囲のうち、その外の部分。
+#[derive(Deserialize)]
+pub struct RouteInput {
+    line: Vec<LonLat>,
+    others: Vec<Vec<LonLat>>,
+}
+
+impl RouteInput {
+    fn route(&self) -> Route<'_> {
+        Route {
+            line: &self.line,
+            others: &self.others,
+        }
+    }
+}
+
+/// 見本にする所。
+#[derive(Deserialize)]
+#[serde(tag = "at", rename_all = "camelCase")]
+pub enum StillInput {
+    /// 寄り始める前。`scale` は最初の大きさ
+    Start {
+        scale: f64,
+    },
+    Stop,
 }
 
 #[derive(Clone, Serialize)]
@@ -86,23 +116,30 @@ fn tiles(app: &tauri::AppHandle) -> Result<TileStore, String> {
     Ok(TileStore::new(dir.join("tiles").join("seamlessphoto")))
 }
 
-/// 止まった所の 1 枚を PNG で返す。前に頼まれた見本がまだ描けていなければ、それはやめる。
+/// `still` の所の 1 枚を PNG で返す。前に頼まれた見本がまだ描けていなければ、それはやめる。
 #[tauri::command]
 pub async fn overview_preview(
     app: tauri::AppHandle,
     state: tauri::State<'_, State>,
-    line: Vec<LonLat>,
+    route: RouteInput,
+    still: StillInput,
     credits: CreditImages,
 ) -> Result<Response, String> {
     let cancel = renew(&state.preview);
     let store = tiles(&app)?;
     let credits = credits.decode()?;
+    let still = match still {
+        StillInput::Start { scale } => Still::Start {
+            scale: scale.clamp(0.1, 1.0),
+        },
+        StillInput::Stop => Still::Stop,
+    };
     let png = tauri::async_runtime::spawn_blocking(move || {
         let sources = Sources {
             tiles: &store,
             credits: &credits,
         };
-        routelog_overview::preview(&line, PREVIEW_SIZE, sources, &cancel)
+        routelog_overview::preview(route.route(), still, PREVIEW_SIZE, sources, &cancel)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -115,7 +152,7 @@ pub async fn overview_preview(
 pub async fn render_overview(
     app: tauri::AppHandle,
     state: tauri::State<'_, State>,
-    line: Vec<LonLat>,
+    route: RouteInput,
     motion: MotionInput,
     credits: CreditImages,
     path: String,
@@ -129,6 +166,7 @@ pub async fn render_overview(
     let motion = Motion {
         fps: Fps::new(num, den)
             .ok_or_else(|| format!("フレームレート {num}/{den} では書き出せません"))?,
+        lead_seconds: motion.lead_seconds.clamp(0.0, 30.0),
         zoom_seconds: motion.zoom_seconds.clamp(0.0, 30.0),
         hold_seconds: motion.hold_seconds.clamp(0.0, 120.0),
         start_scale: motion.start_scale.clamp(0.1, 1.0),
@@ -139,7 +177,7 @@ pub async fn render_overview(
             credits: &credits,
         };
         routelog_overview::render(
-            &line,
+            route.route(),
             motion,
             sources,
             &ffmpeg,

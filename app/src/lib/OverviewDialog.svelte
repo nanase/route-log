@@ -7,33 +7,49 @@
     clampMotion,
     creditImages,
     type CreditImages,
+    type Drawn,
+    drawnEpisode,
+    drawnWaypoints,
     endpointsOf,
+    episodeChoices,
+    episodeFileName,
     fileName,
     FRAME_RATES,
     type FrameRate,
     motionInput,
+    othersOf,
     rememberedMotion,
     rememberMotion,
   } from "./overview";
   import { line, part } from "./route";
-  import type { RideDocument } from "./types";
+  import type { LonLat, RideDocument } from "./types";
 
   /**
-   * 経路の概略図の動画を書き出す。範囲を経由点で選び、止まった所の見本を見てから書き出す。
+   * 経路の概略図の動画を書き出す。範囲を回か経由点で選び、見本を見てから書き出す。回なら、全部の
+   * 回を合わせた経路を見せてから、この回へ寄る。他の回は、寄るにつれて薄くする。
    *
    * 動画は 4K の MP4。フレームレートは選べ、既定は 59.94 fps。背景は国土地理院の写真で、右下に出典を入れる。
    */
   let { doc, onclose }: { doc: RideDocument; onclose: () => void } = $props();
 
   type Progress = { phase: "tiles"; done: number; total: number } | { phase: "frames"; done: number; total: number };
+  /** 見本にする所。最初の見え方なら、最初の大きさを添える */
+  type StillAt = { at: "start"; scale: number } | { at: "stop" };
 
   /** 見本を頼むのを、選び終えるまで待つ時間（ms） */
   const PREVIEW_DELAY_MS = 400;
+  /** 範囲を経由点で選ぶときの、範囲の選択肢の値。回の ID とは重ならない */
+  const BY_WAYPOINTS = "waypoints";
 
   let dialog: HTMLDialogElement;
   const ends = $derived(endpointsOf(doc));
+  const choices = $derived(episodeChoices(doc.waypoints, doc.episodes));
+  /** 範囲。回の ID か、BY_WAYPOINTS。回があれば最初の回にしておく */
+  let scope = $state(untrack(() => choices[0]?.id ?? BY_WAYPOINTS));
   let from = $state(0);
   let to = $state(untrack(() => Math.max(doc.waypoints.length - 1, 0)));
+  /** 見本に出す所。最初の見え方か、止まった所 */
+  let still = $state<"start" | "stop">("stop");
   let motion = $state(rememberedMotion());
   let credits: CreditImages | undefined;
   /** 見本の画像の URL。まだ無ければ空 */
@@ -48,10 +64,18 @@
   let previewSeq = 0;
 
   const rendering = $derived(progress !== null);
-  const valid = $derived(from < to);
-  const routeLine = $derived(valid ? line(part(doc, from, to)) : []);
-  const lengthKm = $derived(valid ? ends[to].km - ends[from].km : 0);
-  const seconds = $derived(motion.zoomSeconds + motion.holdSeconds);
+  const episode = $derived(choices.find((choice) => choice.id === scope) ?? null);
+  /** 描く所。終点が始点より後でなければ null */
+  const drawn = $derived<Drawn | null>(
+    scope === BY_WAYPOINTS ? drawnWaypoints(from, to) : drawnEpisode(choices, scope),
+  );
+  const valid = $derived(drawn !== null);
+  const routeLine = $derived(drawn === null ? [] : line(part(doc, drawn.from, drawn.to)));
+  const others = $derived(drawn === null ? [] : othersOf(doc, drawn));
+  const lengthKm = $derived(drawn === null ? 0 : ends[drawn.to].km - ends[drawn.from].km);
+  /** Rust 側に渡す動きの設定。薄く描く経路が無ければ、全経路を見せる時間は 0 になる */
+  const input = $derived(motionInput(motion, others.length > 0));
+  const seconds = $derived(input.leadSeconds + input.zoomSeconds + input.holdSeconds);
   const percent = $derived(progress === null || progress.total === 0 ? 0 : (progress.done / progress.total) * 100);
 
   onMount(() => {
@@ -63,12 +87,14 @@
     if (previewUrl !== "") URL.revokeObjectURL(previewUrl);
   });
 
-  // 範囲が変わったら、少し待ってから見本を描き直す。
+  // 範囲か見本に出す所が変わったら、少し待ってから見本を描き直す。最初の見え方は、最初の
+  // 大きさでも変わる。
   $effect(() => {
-    const points = routeLine;
+    const route = { line: routeLine, others };
+    const at: StillAt = still === "start" ? { at: "start", scale: motion.startScale } : { at: "stop" };
     clearTimeout(previewTimer);
-    if (points.length < 2) return;
-    previewTimer = setTimeout(() => void preview(points), PREVIEW_DELAY_MS);
+    if (route.line.length < 2) return;
+    previewTimer = setTimeout(() => void preview(route, at), PREVIEW_DELAY_MS);
   });
 
   async function loadCredits(): Promise<CreditImages> {
@@ -76,12 +102,12 @@
     return credits;
   }
 
-  async function preview(points: [number, number][]) {
+  async function preview(route: { line: LonLat[]; others: LonLat[][] }, at: StillAt) {
     const seq = ++previewSeq;
     previewing = true;
     previewError = "";
     try {
-      const png = await invoke<ArrayBuffer>("overview_preview", { line: points, credits: await loadCredits() });
+      const png = await invoke<ArrayBuffer>("overview_preview", { route, still: at, credits: await loadCredits() });
       if (seq !== previewSeq) return;
       if (previewUrl !== "") URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(new Blob([png], { type: "image/png" }));
@@ -109,7 +135,10 @@
   async function render() {
     const path = await save({
       title: "概略図の動画を書き出す",
-      defaultPath: fileName(doc.ride.title, from, to, doc.waypoints.length),
+      defaultPath:
+        episode === null
+          ? fileName(doc.ride.title, from, to, doc.waypoints.length)
+          : episodeFileName(doc.ride.title, episode),
       filters: [{ name: "MP4", extensions: ["mp4"] }],
     });
     if (path === null) return;
@@ -119,8 +148,8 @@
     onProgress.onmessage = (next) => (progress = next);
     try {
       await invoke("render_overview", {
-        line: routeLine,
-        motion: motionInput($state.snapshot(motion)),
+        route: { line: routeLine, others },
+        motion: input,
         credits: await loadCredits(),
         path,
         onProgress,
@@ -156,7 +185,9 @@
 
   <div class="body">
     <div class="preview">
-      {#if previewUrl !== ""}<img src={previewUrl} alt="止まった所の見本" />{/if}
+      {#if previewUrl !== ""}
+        <img src={previewUrl} alt={still === "start" ? "最初の見本" : "止まった所の見本"} />
+      {/if}
       {#if !valid}
         <span class="state">始点より後の経由点を、終点に選んでください</span>
       {:else if previewError !== ""}
@@ -165,26 +196,60 @@
         <span class="state busy">写真を読み込み中…</span>
       {/if}
     </div>
-    <p class="fine caption">止まった所の見本。最初は引いた所から、ゆっくり寄ってここで止まります</p>
+    <div class="caption">
+      <div class="seg" role="group" aria-label="見本に出す所">
+        {#each [["start", "最初"], ["stop", "止まった所"]] as const as [at, label] (at)}
+          <button type="button" class:on={still === at} aria-pressed={still === at} onclick={() => (still = at)}>
+            {label}
+          </button>
+        {/each}
+      </div>
+      <p class="fine">
+        {#if others.length > 0}
+          全部の回を合わせた経路を見せてから、この回へ寄ります。他の回は、寄るにつれて薄くなります
+        {:else}
+          最初は引いた所から、ゆっくり寄って、経路の全体が収まる所で止まります
+        {/if}
+      </p>
+    </div>
 
     <div class="range">
-      <label>
-        <span class="sub">始点</span>
-        <select class="field" bind:value={from} disabled={rendering}>
-          {#each ends.slice(0, -1) as end (end.index)}
-            <option value={end.index}>{end.index + 1}　{end.name}（{end.km.toFixed(1)} km）</option>
-          {/each}
-        </select>
-      </label>
-      <span class="arrow" aria-hidden="true">→</span>
-      <label>
-        <span class="sub">終点</span>
-        <select class="field" bind:value={to} disabled={rendering}>
-          {#each ends.slice(1) as end (end.index)}
-            <option value={end.index}>{end.index + 1}　{end.name}（{end.km.toFixed(1)} km）</option>
-          {/each}
-        </select>
-      </label>
+      {#if choices.length > 0}
+        <label>
+          <span class="sub">範囲</span>
+          <select class="field scope" bind:value={scope} disabled={rendering}>
+            {#each choices as choice (choice.id)}
+              <option value={choice.id}>{choice.name}</option>
+            {/each}
+            <option value={BY_WAYPOINTS}>経由点で選ぶ</option>
+          </select>
+        </label>
+      {/if}
+      {#if scope === BY_WAYPOINTS}
+        <label>
+          <span class="sub">始点</span>
+          <select class="field" bind:value={from} disabled={rendering}>
+            {#each ends.slice(0, -1) as end (end.index)}
+              <option value={end.index}>{end.index + 1}　{end.name}（{end.km.toFixed(1)} km）</option>
+            {/each}
+          </select>
+        </label>
+        <span class="arrow" aria-hidden="true">→</span>
+        <label>
+          <span class="sub">終点</span>
+          <select class="field" bind:value={to} disabled={rendering}>
+            {#each ends.slice(1) as end (end.index)}
+              <option value={end.index}>{end.index + 1}　{end.name}（{end.km.toFixed(1)} km）</option>
+            {/each}
+          </select>
+        </label>
+      {:else if drawn !== null}
+        <span class="ends">
+          {drawn.from + 1}　{ends[drawn.from].name}
+          <span class="arrow" aria-hidden="true">→</span>
+          {drawn.to + 1}　{ends[drawn.to].name}
+        </span>
+      {/if}
       <span class="length mono">{valid ? `${lengthKm.toFixed(1)} km` : ""}</span>
     </div>
 
@@ -204,6 +269,23 @@
           </select>fps
         </span>
       </label>
+      {#if others.length > 0}
+        <label>
+          <span class="sub">全経路を見せる時間</span>
+          <span class="unit">
+            <input
+              class="field mono"
+              type="number"
+              min="0"
+              max="30"
+              step="0.5"
+              value={motion.leadSeconds}
+              disabled={rendering}
+              onchange={(e) => setMotion("leadSeconds", e.currentTarget.valueAsNumber)}
+            />秒
+          </span>
+        </label>
+      {/if}
       <label>
         <span class="sub">寄る時間</span>
         <span class="unit">
@@ -335,7 +417,14 @@
     right: 10px;
   }
   .caption {
-    margin: -6px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: -4px 0 0;
+  }
+  .caption .seg button {
+    height: 26px;
+    padding: 0 10px;
   }
   .range,
   .motion {
@@ -352,9 +441,20 @@
   .range select {
     width: 250px;
   }
+  .range select.scope {
+    width: 180px;
+  }
   .arrow {
     padding-bottom: 6px;
     color: var(--ink-3);
+  }
+  .ends {
+    display: flex;
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+  .ends .arrow {
+    padding: 0;
   }
   .length {
     padding-bottom: 6px;

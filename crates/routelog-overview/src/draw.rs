@@ -17,6 +17,11 @@ const LINE: [u8; 3] = [0xff, 0xd6, 0x0a];
 const OUTLINE: [u8; 3] = [0x11, 0x11, 0x11];
 const START: [u8; 3] = [0x1f, 0xae, 0x4b];
 const WHITE: [u8; 3] = [0xff, 0xff, 0xff];
+/// 経路の縁の太さと、線の太さ（px）。
+const OUTLINE_WIDTH: f32 = 22.0;
+const LINE_WIDTH: f32 = 12.0;
+/// 薄く描く経路の、止まった所での不透明度。
+const FAINT: f32 = 0.4;
 
 fn paint([r, g, b]: [u8; 3]) -> Paint<'static> {
     let mut paint = Paint::default();
@@ -32,7 +37,56 @@ pub fn scale_of(pixmap: &Pixmap) -> f32 {
 
 /// 経路の線。黒い縁の上に、黄色の線を重ねる。
 pub fn route(pixmap: &mut Pixmap, points: &[[f32; 2]]) {
+    stroke_route(pixmap, points, scale_of(pixmap), [0.0, 0.0]);
+}
+
+/// 寄っていく道のりの `progress`（0 から 1）の所での、薄く描く経路の不透明度。最初ははっきり
+/// 描き、止まった所で `FAINT` になる。
+pub fn fade(progress: f64) -> f32 {
+    1.0 - (1.0 - FAINT) * progress as f32
+}
+
+/// 半透明の経路の線。`opacity` は 0 から 1。線の重なった所が濃くならないよう、別の板に描いてから
+/// まとめて重ねる。板は、線の掛かる所だけの大きさにする。
+pub fn faded_routes(pixmap: &mut Pixmap, lines: &[Vec<[f32; 2]>], opacity: f32) {
+    if opacity >= 1.0 {
+        for points in lines {
+            route(pixmap, points);
+        }
+        return;
+    }
     let s = scale_of(pixmap);
+    let pad = OUTLINE_WIDTH / 2.0 * s + 2.0;
+    let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+    for p in lines.iter().flatten() {
+        min = [min[0].min(p[0]), min[1].min(p[1])];
+        max = [max[0].max(p[0]), max[1].max(p[1])];
+    }
+    let bound = [pixmap.width() as f32, pixmap.height() as f32];
+    let [left, top] = [0, 1].map(|i| (min[i] - pad).floor().clamp(0.0, bound[i]));
+    let [right, bottom] = [0, 1].map(|i| (max[i] + pad).ceil().clamp(0.0, bound[i]));
+    let Some(mut layer) = Pixmap::new((right - left) as u32, (bottom - top) as u32) else {
+        return;
+    };
+    for points in lines {
+        stroke_route(&mut layer, points, s, [left, top]);
+    }
+    let paint = PixmapPaint {
+        opacity,
+        ..PixmapPaint::default()
+    };
+    pixmap.draw_pixmap(
+        left as i32,
+        top as i32,
+        layer.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+    );
+}
+
+/// 経路の線を、`s` の大きさで描く。`origin` は、`pixmap` の左上が画面のどこに当たるか。
+fn stroke_route(pixmap: &mut Pixmap, points: &[[f32; 2]], s: f32, origin: [f32; 2]) {
     let mut builder = PathBuilder::new();
     let Some(first) = points.first() else {
         return;
@@ -48,14 +102,15 @@ pub fn route(pixmap: &mut Pixmap, points: &[[f32; 2]]) {
     let Some(path) = builder.finish() else {
         return;
     };
-    for (color, width) in [(OUTLINE, 22.0), (LINE, 12.0)] {
+    let transform = Transform::from_translate(-origin[0], -origin[1]);
+    for (color, width) in [(OUTLINE, OUTLINE_WIDTH), (LINE, LINE_WIDTH)] {
         let stroke = Stroke {
             width: width * s,
             line_cap: LineCap::Round,
             line_join: LineJoin::Round,
             ..Stroke::default()
         };
-        pixmap.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
+        pixmap.stroke_path(&path, &paint(color), &stroke, transform, None);
     }
 }
 
@@ -167,6 +222,32 @@ mod tests {
         assert_eq!(px(&pixmap, 200, 100)[..3], [0xff, 0xd6, 0x0a]);
         assert_eq!(px(&pixmap, 200, 92)[..3], [0x11, 0x11, 0x11]);
         assert_eq!(px(&pixmap, 200, 85), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn other_routes_fade_while_zooming_in() {
+        for (progress, opacity) in [(0.0, 1.0), (0.5, 0.7), (1.0, FAINT)] {
+            assert!((fade(progress) - opacity).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn faded_routes_are_see_through_and_do_not_darken_where_they_cross() {
+        let mut pixmap = Pixmap::new(400, 2160).unwrap();
+        pixmap.fill(Color::from_rgba8(0, 0, 255, 255));
+        let lines = [
+            vec![[20.0, 100.5], [380.0, 100.5]],
+            vec![[200.5, 20.0], [200.5, 380.0]],
+        ];
+        faded_routes(&mut pixmap, &lines, 0.4);
+        // 黄色の 4 割と、下の青の 6 割。交わる所も同じ色になる。
+        let yellow = [0xff, 0xd6, 0x0a].map(|c: u8| (f32::from(c) * 0.4).round() as u8);
+        for at in [px(&pixmap, 100, 100), px(&pixmap, 200, 100)] {
+            assert!(at[0].abs_diff(yellow[0]) <= 1 && at[1].abs_diff(yellow[1]) <= 1);
+            assert!(at[2].abs_diff(yellow[2] + 153) <= 1, "{at:?}");
+        }
+        // 線の外は、そのまま。
+        assert_eq!(px(&pixmap, 100, 300), [0, 0, 255, 255]);
     }
 
     #[test]

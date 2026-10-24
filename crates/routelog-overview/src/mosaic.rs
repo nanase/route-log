@@ -6,7 +6,7 @@
 use rayon::prelude::*;
 use tiny_skia::Pixmap;
 
-use crate::view::{MIN_TILE_ZOOM, TILE_PX, TileRange, View};
+use crate::view::{Flight, MIN_TILE_ZOOM, TILE_PX, TileRange, View};
 
 /// タイル 1 枚の辺（px）。
 pub const TILE: usize = TILE_PX as usize;
@@ -246,12 +246,22 @@ const BLEND: f64 = 0.5;
 impl Pyramid {
     /// 要るタイルの範囲。先頭が細かい写真で、後はズームを 1 つずつ下げたもの。
     ///
-    /// `zoom` は止まった所のタイルのズーム、`widest` はいちばん引いた所の見え方。
-    pub fn ranges(stop: &View, widest: &View, size: [u32; 2], zoom: u8) -> Vec<TileRange> {
-        let most = (f64::from(zoom) - widest.zoom).max(0.0);
-        let at = |lod: f64| View {
-            zoom: f64::from(zoom) - lod,
-            center: stop.center,
+    /// `flight` は最初の見え方から止まった所までの道のり、`zoom` は止まった所のタイルのズーム。
+    pub fn ranges(flight: &Flight, size: [u32; 2], zoom: u8) -> Vec<TileRange> {
+        let most = (f64::from(zoom) - flight.from.zoom).max(0.0);
+        // 縮め方が `near` から `far` の間の見え方を、すべて写せる範囲。道のりの途中の見え方は、
+        // その両端の見え方を含む矩形に収まる。
+        let cover = |near: f64, far: f64, tile_zoom: u8| {
+            let ends = match (
+                flight.progress_at(f64::from(zoom) - far),
+                flight.progress_at(f64::from(zoom) - near),
+            ) {
+                (Some(start), Some(end)) => [start, end],
+                _ => [0.0, 1.0],
+            };
+            let [a, b] =
+                ends.map(|progress| TileRange::covering(&flight.at(progress), size, tile_zoom));
+            a.union(&b)
         };
         let has_wide = most > FINE_UNTIL && zoom > MIN_TILE_ZOOM;
         let fine = if has_wide {
@@ -259,7 +269,7 @@ impl Pyramid {
         } else {
             most
         };
-        let mut ranges = vec![TileRange::covering(&at(fine), size, zoom)];
+        let mut ranges = vec![cover(0.0, fine, zoom)];
         if has_wide {
             // ズームを `step` 下げたタイルは、縮め方が `step - 1` から `step + 1` の間で使う。
             for step in 1..=zoom - MIN_TILE_ZOOM {
@@ -272,7 +282,7 @@ impl Pyramid {
                 } else {
                     most.min(f64::from(step + 1))
                 };
-                ranges.push(TileRange::covering(&at(lod), size, zoom - step));
+                ranges.push(cover(f64::from(step - 1), lod, zoom - step));
             }
         }
         ranges
@@ -390,23 +400,45 @@ mod tests {
         )
     }
 
+    fn flight((to, from): (View, View)) -> Flight {
+        Flight { from, to }
+    }
+
     #[test]
     fn wide_views_use_tiles_of_lower_zooms() {
         // 4 分の 1 から寄ると、ズーム 15 の写真を 2 の 2.5 乗分の 1 まで縮めることになる。
-        let (stop, widest) = views(2.0);
-        let zooms: Vec<u8> = Pyramid::ranges(&stop, &widest, [64, 32], 15)
+        let zooms: Vec<u8> = Pyramid::ranges(&flight(views(2.0)), [64, 32], 15)
             .iter()
             .map(|r| r.zoom)
             .collect();
         assert_eq!(zooms, [15, 14, 13, 12]);
         // 引かないなら、細かい写真だけでよい。
-        assert_eq!(Pyramid::ranges(&stop, &stop, [64, 32], 15).len(), 1);
+        assert_eq!(Pyramid::ranges(&flight(views(0.0)), [64, 32], 15).len(), 1);
+    }
+
+    #[test]
+    fn the_tiles_cover_the_whole_way_when_the_center_moves() {
+        let (stop, _) = views(0.0);
+        let world = |px: f64| px / f64::from(1u32 << 15);
+        // ズーム 15 の世界で、右へ 1000 px 動く。
+        let moved = View {
+            center: [stop.center[0] + world(1000.0), stop.center[1]],
+            ..stop
+        };
+        let range = |flight: Flight| Pyramid::ranges(&flight, [64, 32], 15)[0];
+        let (at_stop, at_moved) = (range(Flight::still(stop)), range(Flight::still(moved)));
+        let both = range(Flight {
+            from: moved,
+            to: stop,
+        });
+        assert_eq!((both.x, both.y), ([at_stop.x[0], at_moved.x[1]], at_stop.y));
+        assert!(at_moved.x[0] > at_stop.x[1]);
     }
 
     #[test]
     fn the_stopped_view_uses_only_the_fine_photo_and_wide_views_blend_into_lower_zooms() {
         let (stop, widest) = views(2.0);
-        let ranges = Pyramid::ranges(&stop, &widest, [64, 32], 15);
+        let ranges = Pyramid::ranges(&flight((stop, widest)), [64, 32], 15);
         let mosaics = ranges
             .iter()
             .map(|range| {

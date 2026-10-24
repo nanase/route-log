@@ -5,9 +5,10 @@
  * 画像にして渡す。
  */
 
+import { extentOf, nameOf } from "./episodes";
 import { waypointEventAt } from "./events";
-import { segmentLengths } from "./route";
-import type { RideDocument } from "./types";
+import { line, type Path, part, segmentLengths } from "./route";
+import type { Episode, LonLat, RideDocument, Waypoint } from "./types";
 
 /**
  * 選べるフレームレート。半端な値も正しく持てるよう、分数で持つ。既定の 59.94 は、Resolve の
@@ -27,6 +28,8 @@ export type FrameRate = keyof typeof FRAME_RATES;
 export interface Motion {
   /** フレームレート。FRAME_RATES の名前 */
   fps: FrameRate;
+  /** 回の動画で、寄り始める前に全経路を見せる時間（秒） */
+  leadSeconds: number;
   /** 寄っていく時間（秒） */
   zoomSeconds: number;
   /** 止まってから見せる時間（秒） */
@@ -35,7 +38,13 @@ export interface Motion {
   startScale: number;
 }
 
-export const MOTION_DEFAULT: Motion = { fps: "59.94", zoomSeconds: 5, holdSeconds: 5, startScale: 0.25 };
+export const MOTION_DEFAULT: Motion = {
+  fps: "59.94",
+  leadSeconds: 3,
+  zoomSeconds: 5,
+  holdSeconds: 5,
+  startScale: 0.25,
+};
 // 既定の値を変えたときに、前の既定の値が覚えたものとして残らないよう、名前を変えた。
 const MOTION_KEY = "routelog.overview-motion-2";
 
@@ -43,9 +52,11 @@ const MOTION_KEY = "routelog.overview-motion-2";
 export function rememberedMotion(): Motion {
   try {
     const saved = JSON.parse(localStorage.getItem(MOTION_KEY) ?? "");
-    // フレームレートは後から足した。覚えていなければ、既定の値にする。
+    // フレームレートと全経路を見せる時間は後から足した。覚えていなければ、既定の値にする。
     const ok = (key: Exclude<keyof Motion, "fps">) => typeof saved[key] === "number" && Number.isFinite(saved[key]);
-    if (ok("zoomSeconds") && ok("holdSeconds") && ok("startScale")) return clampMotion(saved);
+    if (ok("zoomSeconds") && ok("holdSeconds") && ok("startScale")) {
+      return clampMotion({ ...saved, leadSeconds: ok("leadSeconds") ? saved.leadSeconds : MOTION_DEFAULT.leadSeconds });
+    }
   } catch {
     // 覚えていないか、壊れている。
   }
@@ -61,15 +72,19 @@ export function clampMotion(motion: Motion): Motion {
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
   return {
     fps: Object.hasOwn(FRAME_RATES, motion.fps) ? motion.fps : MOTION_DEFAULT.fps,
+    leadSeconds: clamp(motion.leadSeconds, 0, 30),
     zoomSeconds: clamp(motion.zoomSeconds, 0, 30),
     holdSeconds: clamp(motion.holdSeconds, 0, 120),
     startScale: clamp(motion.startScale, 0.1, 1),
   };
 }
 
-/** Rust 側に渡す形。フレームレートは分子と分母にする。 */
-export function motionInput(motion: Motion) {
-  return { ...motion, fps: FRAME_RATES[motion.fps] };
+/**
+ * Rust 側に渡す形。フレームレートは分子と分母にする。全経路を見せる時間は、薄く描く経路が
+ * あるときだけ使う。
+ */
+export function motionInput(motion: Motion, withOthers: boolean) {
+  return { ...motion, fps: FRAME_RATES[motion.fps], leadSeconds: withOthers ? motion.leadSeconds : 0 };
 }
 
 /** 範囲の端に選べる経由点。名前と、始点からの距離（km）。 */
@@ -104,6 +119,63 @@ export function endpointsOf(doc: Pick<RideDocument, "waypoints" | "route" | "eve
 export function fileName(title: string, from: number, to: number, count: number): string {
   const whole = from === 0 && to === count - 1;
   return whole ? `${title} 概略図.mp4` : `${title} 概略図 ${from + 1}-${to + 1}.mp4`;
+}
+
+/** 範囲に選べる回。名前と、端の経由点の番号。 */
+export interface EpisodeChoice {
+  id: string;
+  /** 画面に出す名前。名前が無ければ「第 n 回」 */
+  name: string;
+  from: number;
+  to: number;
+}
+
+/** 範囲に選べる回。範囲の正しい回だけを、並びの順に出す。 */
+export function episodeChoices(waypoints: Waypoint[], episodes: Episode[]): EpisodeChoice[] {
+  return episodes.flatMap((episode, index) => {
+    const extent = extentOf(waypoints, episode);
+    return extent === null ? [] : [{ id: episode.id, name: nameOf(episode, index), ...extent }];
+  });
+}
+
+/**
+ * 概略図に描く所。経由点の番号で、`from` から `to` をはっきり描き、`whole` のうちその外を薄く
+ * 描く。回なら `whole` は全部の回を合わせた範囲、経由点で選んだなら `from` から `to` と同じ。
+ * 回の端の番号（`extentOf`）に、薄く描く範囲を足したものである。
+ */
+export interface Drawn {
+  from: number;
+  to: number;
+  whole: { from: number; to: number };
+}
+
+/** 回 `id` を描く所。範囲に選べない回なら null。 */
+export function drawnEpisode(choices: EpisodeChoice[], id: string): Drawn | null {
+  const chosen = choices.find((choice) => choice.id === id);
+  if (chosen === undefined) return null;
+  const whole = { from: Math.min(...choices.map((c) => c.from)), to: Math.max(...choices.map((c) => c.to)) };
+  return { from: chosen.from, to: chosen.to, whole };
+}
+
+/** 経由点 `from` から `to` までを描く所。薄く描く所は無い。終点が始点より後でなければ null。 */
+export function drawnWaypoints(from: number, to: number): Drawn | null {
+  return from < to ? { from, to, whole: { from, to } } : null;
+}
+
+/** 薄く描く経路。全体のうち、はっきり描く範囲の前と後ろ。 */
+export function othersOf(path: Path, drawn: Drawn): LonLat[][] {
+  return [part(path, drawn.whole.from, drawn.from), part(path, drawn.to, drawn.whole.to)]
+    .map(line)
+    .filter((points) => points.length > 0);
+}
+
+/**
+ * 回の動画のファイルの名前。Resolve へ書き出すファイルと同じく「走行の題 回の名前」で始め、
+ * ファイル名に使えない字は `_` にする（Rust 側の `resolve::file_stem` と同じ決まり）。
+ */
+export function episodeFileName(title: string, choice: EpisodeChoice): string {
+  const stem = `${title.trim()} ${choice.name.trim()}`.replace(/[\\/:*?"<>|\p{Cc}]/gu, "_");
+  return `${stem.trim().replace(/[. ]+$/, "")} 概略図.mp4`;
 }
 
 /** 出典。全国最新写真だけを使ったとき */
