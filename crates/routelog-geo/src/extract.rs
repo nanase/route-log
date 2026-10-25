@@ -681,10 +681,12 @@ fn road_events(
             Some(j) => {
                 used[j] = true;
                 let junction = &junctions[j];
-                // 国道を走っていないなら、来ている国道は名前に出さない。
-                let on_national = has_national(&change.before) || has_national(&change.after);
-                let touching: &[RouteRef] = if on_national { &junction.touching } else { &[] };
-                add(junction.route_m, &change.before, &change.after, touching);
+                add(
+                    junction.route_m,
+                    &change.before,
+                    &change.after,
+                    &junction.touching,
+                );
             }
             None => add(change.route_m, &change.before, &change.after, &[]),
         }
@@ -700,7 +702,8 @@ fn road_events(
         let before = &routes[i.saturating_sub(reach)];
         let after = &routes[(i + reach).min(routes.len() - 1)];
         let branching = junction.touching.iter().any(|route| !after.contains(route));
-        if (has_national(before) || has_national(after)) && branching {
+        // 国道を走っていなくても、国道を横切る交差点には出す（2026-10-25 に利用者と決めた）。
+        if branching {
             add(junction.route_m, before, after, &junction.touching);
         }
     }
@@ -1552,8 +1555,9 @@ mod tests {
     }
 
     #[test]
-    fn entering_a_prefectural_road_off_a_national_road_names_only_it() {
-        // 路線の無い道から県道 5 号へ入る交差点に、19 号が突き抜けている。国道は走っていない。
+    fn entering_a_prefectural_road_across_a_national_road_names_the_crossing() {
+        // 路線の無い道から県道 5 号へ入る交差点に、19 号が突き抜けている。国道は走っていないが、
+        // 横切る国道も出す。
         let events = along(
             roads(vec![
                 plain(1, vec![at(0.0, 0.0), at(1000.0, 0.0)]),
@@ -1572,7 +1576,7 @@ mod tests {
         );
         assert_eq!(
             summary(&events, EventKind::Road),
-            named(&[("長野県道5号", 1000)])
+            named(&[("国道19号（分岐）・長野県道5号", 1000)])
         );
     }
 
@@ -1711,19 +1715,49 @@ mod tests {
     }
 
     #[test]
-    fn crossing_a_national_road_off_it_is_quiet() {
+    fn crossing_a_national_road_off_it_is_a_branch() {
+        // 国道を走っていなくても、国道を横切る交差点に出す（2026-10-25 に利用者と決め直した）。
         let events = along(
             roads(vec![
                 plain(1, vec![at(0.0, 0.0), at(1000.0, 0.0), at(2000.0, 0.0)]),
                 road(
                     2,
                     vec![at(1000.0, -800.0), at(1000.0, 0.0), at(1000.0, 800.0)],
-                    vec![national(19)],
+                    vec![national(144)],
                 ),
             ]),
             2000.0,
         );
-        assert_eq!(summary(&events, EventKind::Road), named(&[]));
+        assert_eq!(
+            summary(&events, EventKind::Road),
+            named(&[("国道144号（分岐）", 1000)])
+        );
+    }
+
+    #[test]
+    fn crossing_a_national_road_on_a_prefectural_road_names_both() {
+        let events = along(
+            roads(vec![
+                road(
+                    1,
+                    vec![at(0.0, 0.0), at(1000.0, 0.0), at(2000.0, 0.0)],
+                    vec![prefectural(176)],
+                ),
+                road(
+                    2,
+                    vec![at(1000.0, -800.0), at(1000.0, 0.0), at(1000.0, 800.0)],
+                    vec![national(144)],
+                ),
+            ]),
+            2000.0,
+        );
+        assert_eq!(
+            summary(&events, EventKind::Road),
+            named(&[
+                ("長野県道176号", 0),
+                ("国道144号（分岐）・長野県道176号", 1000)
+            ])
+        );
     }
 
     #[test]
