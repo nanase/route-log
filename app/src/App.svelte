@@ -410,6 +410,15 @@
     }
   }
 
+  /** 人が「再抽出」を押した。抽出し終えたら知らせる */
+  let extractAsked = false;
+
+  /** 「再抽出」のボタン。結果が前と同じでも、抽出し終えたことが分かるように知らせる。 */
+  function extractByHand() {
+    extractAsked = true;
+    return extractAgain();
+  }
+
   /** 開いている走行のイベントを、いまの経路から抽出し直す。 */
   function extractAgain() {
     return inTurn(() => {
@@ -560,6 +569,10 @@
       if (doc === saving) {
         doc = { ...doc, route: saved.route, events: saved.events };
         conflicts = saved.conflicts;
+      }
+      if (extract && extractAsked) {
+        extractAsked = false;
+        tell(`再抽出完了（イベント ${saved.events.length} 件）`);
       }
       stored = stored.map((s) =>
         s.id === saving.ride.id
@@ -1500,7 +1513,7 @@
                 canExtract={geoReady}
                 onwaypoint={focusWaypoint}
                 onevent={focusEvent}
-                onextract={extractAgain}
+                onextract={extractByHand}
                 onsettings={() => (settingsOpen = true)}
                 onaddepisode={() => editEpisodes((episodes, path) => addEpisode(episodes, path.waypoints))}
                 onchangeepisode={(id, change) =>
@@ -1545,11 +1558,9 @@
           {:else if files.length > 0}
             <b>この日付の動画は、すべて走行から除外してあります</b>
             <span>下のタイムラインで、薄い帯を押すと戻せます。</span>
-            <span>時刻は、一覧の行を押して手で入れられます。</span>
           {:else}
-            <b>この日付の動画はありません</b>
-            <span>時刻は、一覧の行を押して手で入れられます。</span>
-            <button type="button" class="btn" onclick={() => (settingsOpen = true)}>設定で動画フォルダを選ぶ</button>
+            <b>動画が割り当てられていません</b>
+            <button type="button" class="btn" onclick={() => (settingsOpen = true)}>動画フォルダを選択</button>
           {/if}
         </div>
       {/if}
@@ -1579,7 +1590,7 @@
         onhide={hideEvents}
         onremove={removeEvent}
         onplace={(id) => (placingId = id)}
-        onextract={geoReady && doc !== null ? extractAgain : null}
+        onextract={geoReady && doc !== null ? extractByHand : null}
       />
     </div>
     <div class="timeline">

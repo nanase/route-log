@@ -90,7 +90,7 @@ impl std::fmt::Display for Invalid {
             } => {
                 write!(
                     f,
-                    "経由点 {waypoints} 個に対して区間が {segments} 個あります"
+                    "経由地 {waypoints} 個に対して区間が {segments} 個あります"
                 )
             }
             Self::Coordinate => write!(f, "経度・緯度が範囲の外です"),

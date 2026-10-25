@@ -59,13 +59,10 @@
       <span class="lead">次の候補</span>
       {#if count === 0}
         <span class="name none">イベントがまだありません</span>
-        <span class="time">「経路入力」で経路を引くと、ここに出ます</span>
       {:else if !hasVideo}
         <span class="name none">動画がありません</span>
-        <span class="time">時刻は、一覧で手で入れます</span>
       {:else}
         <span class="name none">確定を待つイベントはありません</span>
-        <span class="time">一覧で選ぶと再確定できます</span>
       {/if}
     {:else}
       <span class="lead">
