@@ -60,7 +60,7 @@
 </script>
 
 <header class="float" class:compact>
-  <button type="button" class="btn ghost ride" onclick={onrides} aria-haspopup="dialog" title="走行を切り替える">
+  <button type="button" class="btn ghost ride" onclick={onrides} aria-haspopup="dialog" title="走行ログの変更">
     {#if date === null}
       <strong>走行を選ぶ</strong>
     {:else}
@@ -95,11 +95,11 @@
     {:else if status === "syncing"}
       <span class="state busy" title="クラウドと同期しています"><span class="spinner"></span>同期中…</span>
     {:else if status === "synced"}
-      <span class="state done" title="手元とクラウドが同じです"><Icon name="check" />同期済み</span>
+      <span class="state done" title="同期済み"><Icon name="check" />同期済み</span>
     {:else if status === "unsynced"}
       <span
         class="state behind"
-        title="手元には保存してあります。クラウドと同期できなかったので、次の保存か、少し置いてからもう一度試します。{failure}"
+        title={`クラウドと同期できなかったため、しばらくしてから再試行されます${failure ? `: ${failure}` : ""}`}
       >
         <span class="dot"></span>未同期
       </span>
@@ -109,7 +109,7 @@
         class="btn small danger"
         onclick={onrides}
         aria-haspopup="dialog"
-        title="手元とクラウドの両方で変更された走行があります。押して、どちらを残すかを選びます"
+        title="変更された走行ログがあります。残すログを選択してください"
       >
         <Icon name="warning" size={13} />両方で変更
       </button>
@@ -127,7 +127,7 @@
       onclick={onfindstops}
       disabled={!canFindStops}
       aria-label="停車位置探索"
-      title="信号待ちを含む停車の候補を、動画の音と映像の動きから探す。探してある動画は飛ばす"
+      title="停車位置の候補を自動探索します"
     >
       <Icon name="search" />{#if !compact}停車位置探索{/if}
     </button>
@@ -138,9 +138,9 @@
       class="btn"
       onclick={oncancelstops}
       aria-label="停車位置探索をやめる"
-      title="停車を探すのをやめる。探し終えた動画の候補は残る"
+      title="停車位置の探索を中止します。探索済みの候補は残ります"
     >
-      <Icon name="close" />{compact ? "" : "やめる "}<span class="mono">{Math.floor(stopProgress * 100)}%</span>
+      <Icon name="close" />{compact ? "" : "中止 "}<span class="mono">{Math.floor(stopProgress * 100)}%</span>
     </button>
   {/if}
   <button
@@ -151,7 +151,7 @@
     disabled={!canOverview}
     aria-haspopup="dialog"
     aria-label="概略図生成"
-    title="動画の冒頭に入れる、経路の概略図の動画を書き出す"
+    title="経路の概略図の動画を生成します"
   >
     <Icon name="movie" />{#if !compact}概略図生成{/if}
   </button>
@@ -162,7 +162,7 @@
     onclick={onexport}
     disabled={!canExport}
     aria-label="CSV エクスポート"
-    title="通過時刻の一覧を CSV に書き出す"
+    title="通過時刻の一覧を CSV でエクスポートします"
   >
     <Icon name="export" />{#if !compact}CSV エクスポート{/if}
   </button>

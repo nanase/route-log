@@ -375,7 +375,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   await app.settled();
   note(
     "経由点の 2 分後で S、その 10 分後でもう一度 S",
-    `1 度目で、始まりが ${clock(pauseAt)} の停車ができ、ボタンが「停車おわり」に変わる。終わりを入れるまで推定は変わらない。2 度目で長さが 10 分になる。橋は停車より先にあるので、推定が遅くなる`,
+    `1 度目で、始まりが ${clock(pauseAt)} の停車ができ、ボタンが「停車終了」に変わる。終わりを入れるまで推定は変わらない。2 度目で長さが 10 分になる。橋は停車より先にあるので、推定が遅くなる`,
     {
       buttonBefore,
       opened,

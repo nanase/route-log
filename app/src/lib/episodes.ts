@@ -100,9 +100,9 @@ export function recordedOf(doc: Path & { events: RideEvent[] }, spans: Span[], e
  */
 export function exportBlocker(hasExtent: boolean, spans: Span[] | null, recorded: number | null): string | null {
   if (!hasExtent) return "パートの範囲が正しくありません";
-  if (spans === null) return "この走行に使う動画がありません";
-  if (recorded === null) return "始まりと終わりの経由地を通った時刻が推定できると、書き出せます";
-  if (recorded <= 0) return "パートの範囲に、録画している所がありません";
+  if (spans === null) return "この走行ログには動画が指定されていません";
+  if (recorded === null) return "始点と終点の経由地の通過時刻が推定されるとエクスポートできます";
+  if (recorded <= 0) return "パートの範囲に動画がありません";
   return null;
 }
 

@@ -60,7 +60,7 @@ impl fmt::Display for Problem {
             Self::NoTimes => f.write_str(
                 "始まりか終わりの経由地を通った時刻が推定できていません。前後のイベントの時刻を確定してください",
             ),
-            Self::NotRecorded => f.write_str("パートの範囲に、録画している所がありません"),
+            Self::NotRecorded => f.write_str("パートの範囲に動画がありません"),
             Self::FrameRate(files) => {
                 f.write_str("59.94 fps でない動画があります。Resolve のタイムラインは 59.94 fps です：")?;
                 let listed: Vec<String> = files

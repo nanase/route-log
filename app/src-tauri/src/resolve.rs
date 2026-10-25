@@ -62,7 +62,7 @@ pub async fn export_resolve(
     let timeline = videos
         .current()
         .filter(|t| !t.files().is_empty())
-        .ok_or("この走行に使う動画がありません")?;
+        .ok_or("この走行ログには動画が指定されていません")?;
 
     let stem = resolve::file_stem(&doc.ride.title, &name);
     let title = format!("{stem} ソース");

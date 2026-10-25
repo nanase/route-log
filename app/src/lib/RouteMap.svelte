@@ -394,7 +394,7 @@
       // 見るだけのときは、経由点を小さく出す。つかめない。押すと、そこを通った時刻を入れる相手になる。
       current.waypoints.forEach((waypoint, index) => {
         const state = timed.includes(index) ? "fixed timed" : "fixed";
-        const title = `経由地 ${index + 1}。押すと、ここを通った時刻を入力できます`;
+        const title = `経由地 ${index + 1}。クリックで通過時刻を入力`;
         const fixed = handle(`${waypointClass(index)} ${state}`, [waypoint.lon, waypoint.lat], String(index + 1), title);
         fixed.onclick(() => {
           if (placing === null) {
@@ -918,13 +918,13 @@
       {@const index = selected}
       <b>経由地 {index + 1}</b>
       {#if index < path.waypoints.length - 1}
-        <span class="to">次の点まで</span>
+        <span class="to">次の経由地まで</span>
         <div class="seg">
           <button
             type="button"
             class:on={chosen.segment_mode === "snap"}
             disabled={!canSnap && chosen.segment_mode !== "snap"}
-            title={canSnap ? "" : "判定データを選ぶと使えます"}
+            title={canSnap ? "" : "判定データを選択すると使用できます"}
             onclick={() => chosen.segment_mode !== "snap" && toggle(index)}
           >
             道に沿わせる

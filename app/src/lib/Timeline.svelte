@@ -311,11 +311,11 @@
     excluded: excluded.map((clip) => `${clock(clip.start_ms)}-${clock(clip.end_ms)}`),
     stops: stops.map((gap) => `${clock(gap.start_ms)}-${clock(gap.end_ms)}${stayOver(gap) === null ? "" : " 停車"}`),
     menu: menu === null ? null : `${menu.label} ${menu.out ? "走行に戻す" : "走行から除外"}`,
-    gapMenu: gapMenu === null ? null : gapMenu.stay === null ? "停車にする" : "停車をやめる",
+    gapMenu: gapMenu === null ? null : gapMenu.stay === null ? "停車に設定" : "停車を解除",
     candidates: candidates.map(
       (band) => `${clock(band.start_ms)}-${clock(band.end_ms)}${band.choice.taken ? "" : " 外した"}`,
     ),
-    candidateMenu: candidateMenu === null ? null : candidateMenu.band.choice.taken ? "外す" : "採る",
+    candidateMenu: candidateMenu === null ? null : candidateMenu.band.choice.taken ? "除外" : "採用",
     marks: marks.map((mark) => `${clock(mark.time)} ${mark.event.kind}${mark.warned ? " 警告" : ""}`),
     head: clock(nowMs),
   });
@@ -372,7 +372,7 @@
         type="button"
         class="btn small icon-only"
         aria-label="縮める"
-        title="広い範囲を出す"
+        title="縮小"
         disabled={view === null}
         onclick={() => zoom(2)}
       >
@@ -382,7 +382,7 @@
         type="button"
         class="btn small icon-only"
         aria-label="広げる"
-        title="再生位置のまわりを広げる"
+        title="拡大"
         disabled={!shown || span <= MIN_SPAN_MS}
         onclick={() => zoom(0.5)}
       >
@@ -451,7 +451,7 @@
               data-file={file.name}
               style:left="{left}px"
               style:width="{Math.max(right - left - 1, 1)}px"
-              title="{file.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　{file.codec}　右クリックで走行から除外"
+              title="{file.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　{file.codec}　右クリックで除外"
               oncontextmenu={(event) => openMenu(event, { name: file.name, start_ms: clip.start_ms, end_ms: clip.end_ms }, label, false)}
             >
               {#if right - left >= CLIP_LABEL_PX}{label}{/if}
@@ -469,7 +469,7 @@
               data-file={clip.name}
               style:left="{left}px"
               style:width="{Math.max(right - left - 1, 1)}px"
-              title="{clip.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　走行から除外している。押すと戻せる"
+              title="{clip.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　除外中。クリックで戻せます"
               onpointerdown={(event) => event.stopPropagation()}
               onclick={(event) => openMenu(event, clip, "除外した動画", true)}
               oncontextmenu={(event) => openMenu(event, clip, "除外した動画", true)}
@@ -489,8 +489,8 @@
               style:left="{left}px"
               style:width="{Math.max(right - left, 2)}px"
               title="停車の候補　{clock(band.start_ms)} – {clock(band.end_ms)}　{band.choice.taken
-                ? '書き出しで抜く'
-                : '外してある'}　右クリックで{band.choice.taken ? '外す' : '採る'}"
+                ? '採用（エクスポートで除く）'
+                : '除外中'}　右クリックで{band.choice.taken ? '除外' : '採用'}"
               oncontextmenu={(event) => openCandidateMenu(event, band)}
             >
               {#if right - left >= CANDIDATE_LABEL_PX}停 {short(band.end_ms - band.start_ms)}{/if}
@@ -516,7 +516,7 @@
               class:stay
               style:left="{left}px"
               style:width="{right - left}px"
-              title="{stay ? '停車' : '録画停止'}　{clock(gap.start_ms)} – {clock(gap.end_ms)}　右クリックで{stay ? '停車をやめる' : '停車にする'}"
+              title="{stay ? '停車' : '録画停止'}　{clock(gap.start_ms)} – {clock(gap.end_ms)}　右クリックで{stay ? '停車を解除' : '停車に設定'}"
               oncontextmenu={(event) => openGapMenu(event, gap)}
             >
               {#if right - left >= GAP_LABEL_PX}{stay ? "停車" : "停止"} {short(gap.end_ms - gap.start_ms)}{/if}
@@ -573,7 +573,7 @@
             : "やめると、この間も走っていたものとして、時刻を推定します。"}
         </span>
         <button type="button" class="btn" onclick={chooseGapMenu}>
-          {gapMenu.stay === null ? "停車にする" : "停車をやめる"}
+          {gapMenu.stay === null ? "停車に設定" : "停車を解除"}
         </button>
       </div>
     </div>
@@ -595,10 +595,10 @@
       <div class="act">
         <span class="fine">
           {band.choice.taken
-            ? "書き出しで抜きます。止まっていなかったら外します。"
-            : "外してあります。採ると、書き出しで抜きます。"}
+            ? "エクスポートで除外します。停車していなければ除外してください。"
+            : "除外中です。採用するとエクスポートで除外されます。"}
         </span>
-        <button type="button" class="btn" onclick={chooseCandidateMenu}>{band.choice.taken ? "外す" : "採る"}</button>
+        <button type="button" class="btn" onclick={chooseCandidateMenu}>{band.choice.taken ? "除外" : "採用"}</button>
       </div>
     </div>
   {/if}

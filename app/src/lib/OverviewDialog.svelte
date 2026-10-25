@@ -198,15 +198,12 @@
     </div>
     <div class="caption">
       <div class="seg" role="group" aria-label="見本に出す所">
-        {#each [["start", "最初"], ["stop", "止まった所"]] as const as [at, label] (at)}
+        {#each [["start", "最初"], ["stop", "ストップ"]] as const as [at, label] (at)}
           <button type="button" class:on={still === at} aria-pressed={still === at} onclick={() => (still = at)}>
             {label}
           </button>
         {/each}
       </div>
-      {#if others.length === 0}
-        <p class="fine">最初は引いた所から、ゆっくり寄って、経路の全体が収まる所で止まります</p>
-      {/if}
     </div>
 
     <div class="range">
@@ -313,7 +310,7 @@
         </span>
       </label>
       <label>
-        <span class="sub">最初の大きさ</span>
+        <span class="sub">開始時の縮尺</span>
         <span class="unit">
           <input
             class="field mono"
@@ -335,12 +332,12 @@
     {#if progress !== null}
       <div class="progress">
         <span class="sub">
-          {progress.phase === "tiles" ? "写真を取得中" : "動画を書いています"}
+          {progress.phase === "tiles" ? "写真を取得中" : "動画を生成中"}
           <span class="mono">{progress.done} / {progress.total}</span>
         </span>
         <div class="bar"><div style:width="{percent}%"></div></div>
       </div>
-      <button type="button" class="btn" onclick={() => void invoke("cancel_overview")}>やめる</button>
+      <button type="button" class="btn" onclick={() => void invoke("cancel_overview")}>中止</button>
     {:else}
       {#if message !== null}
         <span class="message" class:error={message.tone === "error"}>
@@ -464,9 +461,6 @@
   }
   .total {
     padding-bottom: 6px;
-  }
-  p {
-    margin: 0;
   }
   footer {
     display: flex;

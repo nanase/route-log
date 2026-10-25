@@ -131,7 +131,7 @@
   );
   const shown = $derived(rows.filter((row) => matchesFilter(row.labels, narrowing)));
   const narrowed = $derived(Object.keys(narrowing).length > 0);
-  const FILTER_TIPS = { has: "付いている走行だけを出しています", not: "付いていない走行だけを出しています" };
+  const FILTER_TIPS = { has: "このラベルの付いた走行だけを表示中", not: "このラベルの付いていない走行だけを表示中" };
   const FILTER_NAMES = { has: "（付いている走行だけ）", not: "（付いていない走行だけ）" };
 
   /** 同期の全体の状態。上の帯と同じ決め方で、保存のことは見ない */
@@ -228,7 +228,7 @@
       {:else if conflicts > 0}
         <span class="text">両方で変更された走行が {conflicts} 件あります。どちらを残すかを選んでください</span>
       {:else if overall === "unsynced"}
-        <span class="text" title={sync.failure}>クラウドと同期できていません。少し置いて、もう一度試します</span>
+        <span class="text" title={sync.failure}>同期できていません。しばらくしてから再試行します</span>
       {:else}
         <span class="text">すべての走行ログが同期済み</span>
       {/if}
@@ -246,7 +246,7 @@
             class:has={state === "has"}
             class:not={state === "not"}
             aria-label={label.name + (state === undefined ? "" : FILTER_NAMES[state])}
-            title={state === undefined ? "押すと、付いている走行だけを出します" : FILTER_TIPS[state]}
+            title={state === undefined ? "このラベルの付いた走行だけを表示" : FILTER_TIPS[state]}
             onclick={() => (filter = toggleFilter(narrowing, label.name))}
           >
             {#if state !== undefined}<span class="mark" aria-hidden="true">{state === "has" ? "✓" : "−"}</span>{/if}
@@ -255,7 +255,7 @@
         {/each}
         <span class="count mono">{rows.length} 件中 {shown.length} 件</span>
         {#if narrowed}
-          <button type="button" class="clear" onclick={() => (filter = {})}>外す</button>
+          <button type="button" class="clear" onclick={() => (filter = {})}>解除</button>
         {/if}
       </div>
     {/if}
@@ -349,7 +349,7 @@
                 type="button"
                 class="btn small icon-only ghost trash"
                 aria-label="{row.date} の記録を消す"
-                title="記録を消す"
+                title="記録を削除"
                 onclick={() => (asking = row.key)}
               >
                 <Icon name="trash" size={14} />

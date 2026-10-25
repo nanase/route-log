@@ -151,7 +151,7 @@
     if (aside.includes(event.id)) {
       return {
         short: "停車の場所と合いません",
-        long: "停車の間に確定した時刻ですが、停車の場所と位置が違います。時刻の推定には使いません",
+        long: "停車中に確定した時刻ですが停車位置と離れています。時刻推定には使いません",
       };
     }
     if (conflicts.includes(event.id)) {
@@ -160,7 +160,7 @@
     const time = event.time_ms;
     const stopped = time !== null && gaps.some((gap) => gap.start_ms <= time && time < gap.end_ms);
     return stopped && event.status === "estimated" && !event.hidden && !inStop(stays, time ?? 0)
-      ? { short: "録画停止の間", long: "推定時刻が録画停止の間にあります" }
+      ? { short: "録画停止の間", long: "推定時刻が録画停止中です" }
       : null;
   }
 
@@ -218,7 +218,7 @@
         type="button"
         class="btn small icon-only"
         aria-label="再抽出"
-        title="経路からイベントを抽出し直す"
+        title="経路からイベントを再抽出"
         onclick={onextract}
       >
         <Icon name="refresh" />
@@ -230,7 +230,7 @@
       type="checkbox"
       class="pick"
       aria-label="出している行をすべて選ぶ"
-      title="出している行をすべて選ぶ"
+      title="表示中の行をすべて選択"
       disabled={shown.length === 0}
       checked={shown.length > 0 && pickedShown === shown.length}
       indeterminate={pickedShown > 0 && pickedShown < shown.length}
@@ -365,7 +365,7 @@
                 type="time"
                 step="1"
                 aria-label="通過時刻"
-                title="時刻を手で入れると、その時刻で確定します"
+                title="入力した時刻で確定します"
                 value={event.status === "confirmed" && event.time_ms !== null ? clock(event.time_ms) : ""}
                 onchange={(e) => typeTime(event, e.currentTarget.value)}
               />
@@ -373,7 +373,7 @@
             {/if}
             <div class="buttons">
             {#if event.status === "confirmed" && event.kind !== "stop"}
-              <button type="button" class="btn" onclick={() => onchange(event.id, unconfirm)}>確定を外す</button>
+              <button type="button" class="btn" onclick={() => onchange(event.id, unconfirm)}>確定を解除</button>
             {/if}
             <!-- 字幕なしにしても、確定した時刻は残り、時刻推定の基準になる。 -->
             <div class="seg" role="group" aria-label="字幕に出すか">
@@ -389,7 +389,7 @@
                 type="button"
                 class:on={hidden}
                 aria-pressed={hidden}
-                title="字幕には出さない。確定した時刻は残り、前後の時刻の推定に使う"
+                title="字幕に出しません。確定した時刻は残り、前後の時刻推定に使います"
                 onclick={() => onchange(event.id, (c) => setHidden(c, true))}
               >
                 字幕なし

@@ -64,7 +64,7 @@
   <b>パート {episodes.length}</b>
   <span class="fine about">完成動画の範囲</span>
   <span class="space"></span>
-  <button type="button" class="btn small" disabled={!canAdd} onclick={onadd}><Icon name="plus" size={14} />足す</button>
+  <button type="button" class="btn small" disabled={!canAdd} onclick={onadd}><Icon name="plus" size={14} />追加</button>
 </header>
 <div class="episodes">
   {#each episodes as episode, index (episode.id)}
@@ -83,17 +83,17 @@
         {#if extent === null}
           <span class="length"></span>
         {:else if spans === null}
-          <span class="length muted" title="この走行に使う動画がありません">動画なし</span>
+          <span class="length muted" title="この走行ログには動画が指定されていません">動画なし</span>
         {:else if recorded === null}
-          <span class="length muted" title="始まりと終わりの経由地を通った時刻が推定できると、録画の長さが出ます"
+          <span class="length muted" title="始点と終点の経由地の通過時刻が推定されると録画時間が表示されます"
             >録画 不明</span
           >
         {:else if recorded > RECORDED_LIMIT_MS}
-          <span class="length over" title="録画が {limitHours} 時間を超えています。Resolve のソースのタイムラインは {limitHours} 時間までにします">
+          <span class="length over" title="予想動画時間が {limitHours} 時間を超えます">
             <Icon name="warning" size={14} />録画 <b class="mono">{clock(recorded)}</b>
           </span>
         {:else}
-          <span class="length" title="録画の長さ。録画を止めていた間と停車を除きます">
+          <span class="length" title="録画時間（録画停止と停車を除く）">
             録画 <b class="mono">{clock(recorded)}</b>
           </span>
         {/if}
@@ -101,7 +101,7 @@
           type="button"
           class="btn small icon-only ghost export"
           aria-label="{nameOf(episode, index)}を Resolve へ書き出す"
-          title={blocker ?? "停車を抜いたソースのタイムライン（FCPXML）と、字幕の所のマーカー（EDL）を書き出す"}
+          title={blocker ?? "停車を除いたソースタイムライン（FCPXML）と字幕位置のマーカー（EDL）をエクスポートします"}
           disabled={blocker !== null}
           onclick={() => onexport(episode, nameOf(episode, index))}
         >
@@ -111,7 +111,7 @@
           type="button"
           class="btn small icon-only ghost trash"
           aria-label="{nameOf(episode, index)}を消す"
-          title="パートを消す"
+          title="パートを削除"
           onclick={() => onremove(episode.id)}
         >
           <Icon name="trash" size={14} />
@@ -129,7 +129,7 @@
   {:else}
     <p class="empty">
       {canAdd
-        ? "「足す」で、完成動画の範囲を、始まりと終わりの経由地で決めます。"
+        ? "「追加」で、完成動画の範囲を、始まりと終わりの経由地で決めます。"
         : "経由地を 2 つ追加すると、パートを作れます。"}
     </p>
   {/each}

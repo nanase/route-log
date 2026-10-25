@@ -1507,7 +1507,7 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="grip"
-        title="ドラッグで、動画と一覧の幅を変える。ダブルクリックで元の幅に戻す"
+        title="ドラッグで幅を変更、ダブルクリックで元に戻す"
         onpointerdown={resizeSide}
         ondblclick={resetSide}
       ></div>

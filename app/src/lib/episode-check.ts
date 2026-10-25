@@ -100,7 +100,7 @@ export async function runEpisodeCheck(map: MapHandle, app: EpisodeAppHandle) {
     recordedHours: recorded / 3600_000,
   });
 
-  press("足す");
+  press("追加");
   await sleep(300);
   note("「足す」を押す", "回が 1 つでき、範囲は 1 → 5。名前の欄には「パート 1」が薄く出る。録画は動画の長さの合計と同じ", {
     placeholder: cards()[0]?.querySelector("input")?.placeholder,
@@ -111,7 +111,7 @@ export async function runEpisodeCheck(map: MapHandle, app: EpisodeAppHandle) {
   await sleep(200);
   enter(cards()[0].querySelectorAll("select")[1], w4);
   await sleep(200);
-  press("足す");
+  press("追加");
   await sleep(300);
   enter(cards()[1].querySelectorAll("select")[0], w4);
   await sleep(300);

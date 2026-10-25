@@ -19,7 +19,7 @@
 <span class="tag" style:--soft="var(--label-{color}-soft)" style:--ink="var(--label-{color}-ink)">
   {name}
   {#if onremove}
-    <button type="button" class="drop" aria-label="ラベル「{name}」を外す" title="外す" onclick={onremove}>×</button>
+    <button type="button" class="drop" aria-label="ラベル「{name}」を外す" title="ラベルを外す" onclick={onremove}>×</button>
   {/if}
 </span>
 

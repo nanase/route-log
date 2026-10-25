@@ -209,7 +209,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     button.click();
   };
   const addEpisode = async () => {
-    pressButton("aside button", "足す");
+    pressButton("aside button", "追加");
     await sleep(300);
   };
   await addEpisode();

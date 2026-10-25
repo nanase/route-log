@@ -213,8 +213,8 @@ export async function runTimelineCheck(
     const step = "最初の候補を右クリックして、板のボタンを押す";
     steps.push({ step, expected, found, menu, candidates: candidates(), stored: await stored() });
   };
-  await flip("板に「外す」と出る。押すと、最初の候補が「外した」になり、手元の覚えでも外れる", "stop-menu");
-  await flip("板に「採る」と出る。押すと、最初の候補が採るに戻る", "stop-out-menu");
+  await flip("板に「除外」と出る。押すと、最初の候補が除外になり、手元の覚えでも外れる", "stop-menu");
+  await flip("板に「採用」と出る。押すと、最初の候補が採用に戻る", "stop-out-menu");
 
   return {
     files: files.map((f) => f.name),

@@ -65,7 +65,7 @@
         <span class="time">時刻は、一覧で手で入れます</span>
       {:else}
         <span class="name none">確定を待つイベントはありません</span>
-        <span class="time">一覧で選ぶと、確定し直せます</span>
+        <span class="time">一覧で選ぶと再確定できます</span>
       {/if}
     {:else}
       <span class="lead">
@@ -93,7 +93,7 @@
       class="btn primary confirm"
       onclick={onconfirm}
       disabled={target === null || !hasVideo}
-      title={hasVideo ? "動画のいまの位置の時刻で確定する" : "動画が無いときは、一覧で時刻を手で入れます"}
+      title={hasVideo ? "再生位置の時刻で確定" : "動画がないため、一覧で時刻を入力してください"}
     >
       {confirmed ? "時刻を確定し直す" : "時刻を確定"}<kbd>Enter</kbd>
     </button>
@@ -116,7 +116,7 @@
         onclick={onadd}
         disabled={!hasVideo}
         aria-label="いまの位置に手動のイベントを足す"
-        title="いまの位置に手動のイベントを足す"
+        title="再生位置に手動イベントを追加"
       >
         追加<kbd>A</kbd>
       </button>
@@ -127,10 +127,10 @@
         onclick={onstop}
         disabled={!hasVideo}
         title={stopOpen
-          ? "いまの位置を、停車の終わりにする"
-          : "いまの位置から停車にする。録画したまま止まっていたときに使う。出るところで、もう一度押す"}
+          ? "再生位置を停車の終わりにする"
+          : "再生位置を停車の始まりにします。録画したまま止まっていたときに使い、走り出す位置でもう一度押します"}
       >
-        {stopOpen ? "停車おわり" : "停車"}<kbd>S</kbd>
+        {stopOpen ? "停車終了" : "停車"}<kbd>S</kbd>
       </button>
     </div>
   </div>
