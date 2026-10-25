@@ -16,7 +16,9 @@ pub mod timeline;
 
 pub use episode::{Episode, Extent, RECORDED_LIMIT_MS, recorded_ms};
 pub use estimate::{Knot, Stop, clear_estimates, knots, position_at, refresh, stops, time_at};
-pub use event::{Event, EventDetail, EventKind, EventStatus, RouteClass, RouteRef, carry_over};
+pub use event::{
+    Event, EventDetail, EventKind, EventStatus, RouteClass, RouteRef, carry_over, same_name,
+};
 pub use prefecture::route_name;
 pub use ride::{Ride, RideDocument, Route, SegmentMode, Waypoint};
 pub use timeline::{Gap, Position, RideVideos, Span, Timeline, VideoFile, group_by_date};

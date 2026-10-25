@@ -461,10 +461,9 @@ fn place_markers(
             Some(frames) => markers.push(Marker {
                 frames,
                 kind: event.kind,
-                name: if event.label.trim().is_empty() {
-                    kind_name(event.kind).to_owned()
-                } else {
-                    event.label.trim().to_owned()
+                name: match event.shown_name().trim() {
+                    "" => kind_name(event.kind).to_owned(),
+                    name => name.to_owned(),
                 },
             }),
             None => unplaced += 1,
@@ -979,6 +978,22 @@ mod tests {
         let leads: MarkerLeads = serde_json::from_str(r#"{"road": 1500}"#).unwrap();
         assert_eq!(leads.road, 1500);
         assert_eq!(leads.tunnel, 2000);
+    }
+
+    #[test]
+    fn a_structure_marker_has_its_official_length() {
+        let mut bridge = event(EventKind::Bridge, "明治橋", 200.0, Some(at(120)));
+        bridge.detail.official_name = Some("明治橋".into());
+        bridge.detail.official_length_m = Some(146.0);
+        let made = SourceTimeline::new(
+            &doc(vec![bridge]),
+            &extent(0, 1600),
+            &timeline(),
+            &both(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(made.markers[0].name, "明治橋 146m");
     }
 
     #[test]

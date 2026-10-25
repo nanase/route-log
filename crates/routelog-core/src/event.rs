@@ -92,6 +92,19 @@ pub struct EventDetail {
     /// 終わりの時刻ではなく長さで持つので、時計の補正値を変えても、長さは変わらない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stay_ms: Option<i64>,
+    /// `bridge`・`tunnel`：国土交通省のデータベースで対応づけた施設の名前。何件かをまとめたときは
+    /// 「・」で繋ぐ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub official_name: Option<String>,
+    /// `bridge`・`tunnel`：対応づけた施設の公称の長さ（m）。何件かをまとめたときは足したもの。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub official_length_m: Option<f64>,
+    /// 人が字幕にするかどうかを切り替えた。抽出し直しても、橋・トンネルの字幕の有無を決め直さない。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_by_hand: bool,
+    /// 人が名前を直したか、名前の候補から選んだ。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub named_by_hand: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,6 +124,87 @@ pub struct Event {
     pub hidden: bool,
     #[serde(default)]
     pub detail: EventDetail,
+}
+
+impl Event {
+    /// 抽出したときの名前。無ければ、いまの名前。
+    fn extracted_name(&self) -> &str {
+        self.detail
+            .extracted_label
+            .as_deref()
+            .unwrap_or(&self.label)
+    }
+
+    /// 人が名前を直したか、名前の候補から選んだ。
+    pub fn renamed(&self) -> bool {
+        self.detail.named_by_hand || self.label != self.extracted_name()
+    }
+
+    /// 一覧とマーカーに出す名前。
+    ///
+    /// 橋・トンネルは、国土交通省のデータベースの名前と公称の長さを使い、「犬戻トンネル 737m」の
+    /// 形にする。OSM の名前と違えば、人が選ぶまで「OSM の名前／公称の名前」と両方を並べる。
+    pub fn shown_name(&self) -> String {
+        if !matches!(self.kind, EventKind::Bridge | EventKind::Tunnel) {
+            return self.label.clone();
+        }
+        let name = match self.detail.official_name.as_deref() {
+            Some(official) if !self.renamed() => {
+                if self.label.is_empty() || same_name(&self.label, official) {
+                    official.to_owned()
+                } else {
+                    format!("{}／{official}", self.label)
+                }
+            }
+            _ => self.label.clone(),
+        };
+        match self.detail.official_length_m {
+            Some(length_m) if !name.is_empty() && !ends_with_length(&name) => {
+                format!("{name} {}m", length(length_m))
+            }
+            _ => name,
+        }
+    }
+}
+
+/// 長さの数。小数があれば 1 桁、無ければ整数にする。
+fn length(length_m: f64) -> String {
+    let tenths = (length_m * 10.0).round() as i64;
+    if tenths % 10 == 0 {
+        (tenths / 10).to_string()
+    } else {
+        format!("{:.1}", tenths as f64 / 10.0)
+    }
+}
+
+/// 「737m」「291.3m」のような長さで終わるか。
+fn ends_with_length(name: &str) -> bool {
+    let Some(rest) = name.strip_suffix('m') else {
+        return false;
+    };
+    let digits = rest
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .count();
+    digits > 0 && rest[..rest.len() - digits].ends_with(' ')
+}
+
+/// 字幕で区別しない揺れ（全角と半角、ケ・ヶ・ヵ・ケ）を揃えた名前。
+fn loose(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            '\u{3000}' => ' ',
+            'ヶ' | 'ヵ' | 'ケ' => 'ケ',
+            _ => c,
+        })
+        .collect()
+}
+
+/// 字幕で区別しない揺れだけが違う、同じ名前か。
+pub fn same_name(a: &str, b: &str) -> bool {
+    loose(a) == loose(b)
 }
 
 /// 保存してあるイベントの形。
@@ -469,5 +563,73 @@ mod tests {
         let json = serde_json::to_string(&timed).unwrap();
         assert!(json.contains(r#""hidden":true"#), "{json}");
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), timed);
+    }
+
+    fn structure(kind: EventKind, label: &str) -> Event {
+        let mut e = extracted(kind, label, 0.0);
+        e.detail.extracted_label = Some(label.into());
+        e
+    }
+
+    #[test]
+    fn a_structure_shows_its_official_length() {
+        let mut e = structure(EventKind::Tunnel, "犬戻トンネル");
+        e.detail.official_name = Some("犬戻トンネル".into());
+        e.detail.official_length_m = Some(737.0);
+        assert_eq!(e.shown_name(), "犬戻トンネル 737m");
+        e.detail.official_length_m = Some(291.3);
+        assert_eq!(e.shown_name(), "犬戻トンネル 291.3m");
+    }
+
+    #[test]
+    fn an_unnamed_structure_takes_the_official_name() {
+        let mut e = structure(EventKind::Tunnel, "");
+        e.detail.official_name = Some("池沢隧道".into());
+        e.detail.official_length_m = Some(379.0);
+        assert_eq!(e.shown_name(), "池沢隧道 379m");
+    }
+
+    #[test]
+    fn different_names_are_both_shown_until_one_is_chosen() {
+        let mut e = structure(EventKind::Tunnel, "新鳥居トンネル");
+        e.detail.official_name = Some("鳥居トンネル".into());
+        e.detail.official_length_m = Some(1738.0);
+        assert_eq!(e.shown_name(), "新鳥居トンネル／鳥居トンネル 1738m");
+        e.detail.named_by_hand = true;
+        assert_eq!(e.shown_name(), "新鳥居トンネル 1738m");
+    }
+
+    #[test]
+    fn names_that_differ_only_in_width_or_small_ke_are_the_same() {
+        assert!(same_name("角ケ平トンネル", "角ヶ平トンネル"));
+        assert!(same_name("大白川第１トンネル", "大白川第1トンネル"));
+        assert!(!same_name("角ケ平隧道", "角ヶ平トンネル"));
+        let mut e = structure(EventKind::Tunnel, "角ケ平トンネル");
+        e.detail.official_name = Some("角ヶ平トンネル".into());
+        assert_eq!(e.shown_name(), "角ヶ平トンネル");
+    }
+
+    #[test]
+    fn a_name_ending_in_a_length_gets_no_second_length() {
+        let mut e = structure(EventKind::Tunnel, "犬戻トンネル 737m");
+        e.detail.extracted_label = Some("犬戻トンネル".into());
+        e.detail.official_length_m = Some(737.0);
+        assert_eq!(e.shown_name(), "犬戻トンネル 737m");
+    }
+
+    #[test]
+    fn other_kinds_show_their_label() {
+        let mut e = structure(EventKind::Road, "国道19号");
+        e.detail.official_length_m = Some(10.0);
+        assert_eq!(e.shown_name(), "国道19号");
+    }
+
+    #[test]
+    fn the_new_fields_are_left_out_when_empty() {
+        let json = serde_json::to_string(&structure(EventKind::Bridge, "明治橋")).unwrap();
+        assert!(
+            !json.contains("official") && !json.contains("by_hand"),
+            "{json}"
+        );
     }
 }

@@ -60,7 +60,7 @@ pub fn csv(events: &[Event], timeline: &Timeline) -> String {
                 .unwrap_or_default(),
             position.map(|p| offset(p.offset_ms)).unwrap_or_default(),
             kind_name(event.kind).to_owned(),
-            event.label.clone(),
+            event.shown_name(),
             routes.join(";"),
             match event.status {
                 EventStatus::Confirmed => "confirmed",
@@ -242,6 +242,14 @@ mod tests {
         assert!(
             csv(&events, &timeline()).contains(",custom,\"左へ, \"\"旧道\"\" に入る\",,estimated")
         );
+    }
+
+    #[test]
+    fn a_structure_is_written_with_its_official_length() {
+        let mut bridge = event(EventKind::Bridge, "明治橋", None, EventStatus::Estimated);
+        bridge.detail.official_name = Some("明治橋".into());
+        bridge.detail.official_length_m = Some(146.0);
+        assert!(csv(&[bridge], &timeline()).contains(",bridge,明治橋 146m,"));
     }
 
     #[test]
