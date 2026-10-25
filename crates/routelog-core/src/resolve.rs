@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::episode::Extent;
 use crate::estimate::{self, Stop};
 use crate::event::EventKind;
@@ -265,7 +267,52 @@ fn kind_name(kind: EventKind) -> &'static str {
     }
 }
 
-/// Resolve のマーカーの色。種類で分ける。
+/// マーカーを、通った時刻より前へずらす長さ（ミリ秒）。字幕はフェードインさせて入れるので、少し
+/// 早めに置く。種類はマーカーの色と同じに分ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MarkerLeads {
+    /// 出発・到着
+    pub endpoint: i64,
+    pub road: i64,
+    /// 県境・市区町村境
+    pub boundary: i64,
+    pub bridge: i64,
+    pub tunnel: i64,
+    pub michi_no_eki: i64,
+    pub other: i64,
+}
+
+impl Default for MarkerLeads {
+    /// どれも 2 秒。利用者は、字幕を 1 秒ほどかけて出すため、2 秒ほど前に置いている。
+    fn default() -> Self {
+        Self {
+            endpoint: 2000,
+            road: 2000,
+            boundary: 2000,
+            bridge: 2000,
+            tunnel: 2000,
+            michi_no_eki: 2000,
+            other: 2000,
+        }
+    }
+}
+
+impl MarkerLeads {
+    fn of(&self, kind: EventKind) -> i64 {
+        match kind {
+            EventKind::Departure | EventKind::Arrival => self.endpoint,
+            EventKind::Road => self.road,
+            EventKind::PrefBoundary | EventKind::MuniBoundary => self.boundary,
+            EventKind::Bridge => self.bridge,
+            EventKind::Tunnel => self.tunnel,
+            EventKind::MichiNoEki => self.michi_no_eki,
+            _ => self.other,
+        }
+    }
+}
+
+/// Resolve のマーカーの色。種類で分ける。`MarkerLeads` も同じ分け方にする。
 fn color(kind: EventKind) -> &'static str {
     match kind {
         EventKind::Departure | EventKind::Arrival => "ResolveColorRed",
@@ -469,6 +516,14 @@ impl SourceTimeline {
     /// マーカーの数。
     pub fn marker_count(&self) -> usize {
         self.markers.len()
+    }
+
+    /// マーカーを、種類ごとに `leads` だけ前へずらす。タイムラインの頭より前にはしない。
+    pub fn lead_markers(&mut self, leads: &MarkerLeads) {
+        for marker in &mut self.markers {
+            marker.frames = (marker.frames - ms_to_frames(leads.of(marker.kind))).max(0);
+        }
+        self.markers.sort_by_key(|m| m.frames);
     }
 
     /// FCPXML 1.10。`name` はタイムラインの名前になる。
@@ -887,6 +942,43 @@ mod tests {
         let made =
             SourceTimeline::new(&doc(tunnel), &extent(0, 1600), &timeline(), &both(), &[]).unwrap();
         assert_eq!(made.markers[0].name, "トンネル");
+    }
+
+    #[test]
+    fn markers_lead_by_kind_but_not_before_the_timeline() {
+        let events = vec![
+            event(EventKind::Departure, "出発地", 0.0, Some(at(1))),
+            event(EventKind::Road, "国道19号", 600.0, Some(at(400))),
+            event(EventKind::Bridge, "橋", 610.0, Some(at(401))),
+        ];
+        let mut made =
+            SourceTimeline::new(&doc(events), &extent(0, 1600), &timeline(), &both(), &[]).unwrap();
+        made.lead_markers(&MarkerLeads {
+            road: 500,
+            bridge: 3000,
+            ..MarkerLeads::default()
+        });
+        let shown: Vec<(i64, &str)> = made
+            .markers
+            .iter()
+            .map(|m| (m.frames, m.name.as_str()))
+            .collect();
+        // 出発は 1 秒の所にあり、2 秒前は頭より前になる。橋は路線より後を通るが、前に来る。
+        assert_eq!(
+            shown,
+            [
+                (0, "出発地"),
+                (ms_to_frames(401_000) - ms_to_frames(3000), "橋"),
+                (ms_to_frames(400_000) - ms_to_frames(500), "国道19号"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_marker_leads_read_from_an_older_config_are_two_seconds() {
+        let leads: MarkerLeads = serde_json::from_str(r#"{"road": 1500}"#).unwrap();
+        assert_eq!(leads.road, 1500);
+        assert_eq!(leads.tunnel, 2000);
     }
 
     #[test]

@@ -71,6 +71,7 @@ pub fn run() {
             check::close_check,
             check::check_path,
             config::get_config,
+            config::set_marker_leads,
             config::open_road_data,
             config::open_geo_data,
             excluded::get_excluded_videos,

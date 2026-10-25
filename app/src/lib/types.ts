@@ -194,6 +194,17 @@ export interface Config {
   geo_data_dir: string | null;
 }
 
+/** Resolve へ書き出すマーカーを、種類ごとに前へずらす長さ（ms）。分け方はマーカーの色と同じ。 */
+export interface MarkerLeads {
+  endpoint: number;
+  road: number;
+  boundary: number;
+  bridge: number;
+  tunnel: number;
+  michi_no_eki: number;
+  other: number;
+}
+
 /** 地図に重ねる道路データ（PMTiles）の場所。 */
 export interface RoadData {
   national: string;

@@ -87,7 +87,8 @@ pub async fn export_resolve(
             .collect()
     });
     let ffprobe = Ffprobe::find(config.get().ffmpeg_dir());
-    let made = tauri::async_runtime::spawn_blocking(move || {
+    let leads = config.get().marker_leads;
+    let mut made = tauri::async_runtime::spawn_blocking(move || {
         // 範囲の動画だけを読む。1 本に 0.25 秒ほどかかる。
         let used = resolve::files_in(&timeline, &extent);
         let files = timeline.files();
@@ -100,6 +101,7 @@ pub async fn export_resolve(
     })
     .await
     .map_err(|e| e.to_string())??;
+    made.lead_markers(&leads);
 
     let write = |name: &str, text: String| {
         let path = dir.join(name);

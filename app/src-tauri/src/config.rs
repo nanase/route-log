@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
+use routelog_core::resolve::MarkerLeads;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
@@ -40,6 +41,9 @@ pub struct Config {
     /// ffprobe と ffmpeg があるフォルダ。開発中の起動で覚え、リリースビルドを直に起動したときに使う。
     #[serde(default)]
     pub ffmpeg_dir: Option<String>,
+    /// Resolve へ書き出すマーカーを、種類ごとに前へずらす長さ。
+    #[serde(default)]
+    pub marker_leads: MarkerLeads,
 }
 
 impl Config {
@@ -132,6 +136,15 @@ fn mise_bin_dir(name: &str) -> Option<PathBuf> {
 #[tauri::command]
 pub fn get_config(config: tauri::State<ConfigFile>) -> Config {
     config.get()
+}
+
+/// マーカーを前へずらす長さを覚える。
+#[tauri::command]
+pub fn set_marker_leads(
+    config: tauri::State<ConfigFile>,
+    leads: MarkerLeads,
+) -> Result<(), String> {
+    config.update(|c| c.marker_leads = leads)
 }
 
 /// 地図に重ねる道路データの場所。

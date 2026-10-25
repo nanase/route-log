@@ -1,11 +1,12 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import Icon from "./Icon.svelte";
-  import type { Config } from "./types";
+  import type { Config, MarkerLeads } from "./types";
   import type { Folder, FolderState } from "./ui";
 
   /**
-   * 設定。初回に 1 度選べば済むフォルダ 3 つ、走行ごとの時計の補正、クラウド同期の接続先をまとめる。
+   * 設定。初回に 1 度選べば済むフォルダ 3 つ、走行ごとの時計の補正、マーカーの前倒し、クラウド同期の
+   * 接続先をまとめる。
    */
   let {
     config,
@@ -44,6 +45,20 @@
   let editingSync = $state(false);
   let syncMessage = $state("");
   let busy = $state(false);
+  /** マーカーの前倒し。開いたときに読み直す。読むまでは null */
+  let leads = $state<MarkerLeads | null>(null);
+  let leadMessage = $state("");
+
+  /** マーカーの前倒しの欄。並びと呼び名は、マーカーの色の分け方に合わせる */
+  const LEADS: [keyof MarkerLeads, string][] = [
+    ["endpoint", "出発・到着"],
+    ["road", "路線"],
+    ["boundary", "県境・市区町村境"],
+    ["bridge", "橋"],
+    ["tunnel", "トンネル"],
+    ["michi_no_eki", "道の駅"],
+    ["other", "その他"],
+  ];
 
   const folders = $derived([
     {
@@ -76,7 +91,26 @@
     // 開いたときに、最初の欄やボタンを勝手に選ばない。
     dialog.focus();
     void loadSync();
+    void loadLeads();
   });
+
+  async function loadLeads() {
+    leads = (await invoke<{ marker_leads: MarkerLeads }>("get_config")).marker_leads;
+  }
+
+  /** 秒で入れた値を 0.5 秒刻みに丸めて覚える。空や負の値は 0 にする */
+  async function setLead(key: keyof MarkerLeads, seconds: number) {
+    if (leads === null) return;
+    const ms = Math.max(0, Math.round((Number.isFinite(seconds) ? seconds : 0) * 2) * 500);
+    const next = { ...leads, [key]: ms };
+    leads = next;
+    try {
+      await invoke("set_marker_leads", { leads: next });
+      leadMessage = "";
+    } catch (e) {
+      leadMessage = String(e);
+    }
+  }
 
   async function loadSync() {
     const settings = await invoke<{ api_url: string | null; has_token: boolean }>("get_sync_settings");
@@ -184,6 +218,36 @@
       </button>
       <span>秒</span>
     </div>
+  </section>
+
+  <section class="leads">
+    <div class="text">
+      <b>マーカーの前倒し</b>
+      <span class="sub">Resolve へエクスポートするマーカーを早める秒数</span>
+    </div>
+    {#if leads !== null}
+      <div class="lead-grid">
+        {#each LEADS as [key, name] (key)}
+          <label>
+            <span class="sub">{name}</span>
+            <span class="unit">
+              <input
+                class="field mono"
+                type="number"
+                min="0"
+                max="10"
+                step="0.5"
+                value={leads[key] / 1000}
+                onchange={(e) => void setLead(key, e.currentTarget.valueAsNumber)}
+              />秒
+            </span>
+          </label>
+        {/each}
+      </div>
+    {/if}
+    {#if leadMessage}
+      <span class="failed"><Icon name="error" size={14} />{leadMessage}</span>
+    {/if}
   </section>
 
   <section class="line">
@@ -321,6 +385,33 @@
   .stepper input {
     width: 72px;
     font-size: 14px;
+    text-align: right;
+  }
+  .leads {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--line);
+  }
+  .lead-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px 12px;
+  }
+  .lead-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .unit {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .unit input {
+    width: 64px;
+    font-size: 13px;
     text-align: right;
   }
   .sync {
