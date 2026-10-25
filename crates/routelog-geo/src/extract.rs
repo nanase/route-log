@@ -448,9 +448,10 @@ struct Hit<'a> {
     distance_m: f64,
     /// 交差点を通る道。
     roads: Vec<&'a Road>,
-    /// そのうち、この点で走っている道の ID。
-    running: Vec<i64>,
 }
+
+/// 交差点の前後でこの数以上の点で走っていた道を、走った道とみなす。
+const RUNNING_SAMPLES: usize = 3;
 
 /// 経路が通る交差点。走っている道の頂点のうち、ほかの道も通るものを、通るたびに 1 つ数える。
 ///
@@ -474,12 +475,10 @@ fn find_junctions(
         {
             let (at, roads) = &index.points[found.data];
             let roads: Vec<&Road> = roads.iter().map(|&r| &tile.data.roads[r]).collect();
-            let running: Vec<i64> = roads
+            if !roads
                 .iter()
-                .filter(|road| matched[i].iter().any(|(m, _)| m.id == road.id))
-                .map(|road| road.id)
-                .collect();
-            if running.is_empty() {
+                .any(|road| matched[i].iter().any(|(m, _)| m.id == road.id))
+            {
                 continue;
             }
             hits.push(Hit {
@@ -487,7 +486,6 @@ fn find_junctions(
                 sample: i,
                 distance_m: found.geom().distance_2(&xy).sqrt(),
                 roads,
-                running,
             });
         }
     }
@@ -501,15 +499,23 @@ fn find_junctions(
         else {
             return;
         };
-        // 組のどこかで走った道の路線は、走る路線の組に入る。来ている国道は、ほかの道から数える。
-        let running: HashSet<i64> = group
-            .iter()
-            .flat_map(|hit| hit.running.iter().copied())
-            .collect();
+        // 交差点の前後で走った道の路線は、走る路線の組に入る。来ている国道は、ほかの道から数える。
+        // 交差点の際では、まっすぐ先へ続くだけの道も、端の数 m だけ走っているように見える。
+        // 前後 `road_noise_m` のうち `RUNNING_SAMPLES` 点以上で走っていた道だけを、走った道とする。
+        let reach = (options.road_noise_m / options.step_m).ceil() as usize;
+        let window =
+            nearest.sample.saturating_sub(reach)..(nearest.sample + reach + 1).min(matched.len());
+        let running = |road: &Road| {
+            matched[window.clone()]
+                .iter()
+                .filter(|roads| roads.iter().any(|(m, _)| m.id == road.id))
+                .count()
+                >= RUNNING_SAMPLES
+        };
         let touching: BTreeSet<RouteRef> = group
             .iter()
             .flat_map(|hit| &hit.roads)
-            .filter(|road| road.kind == "road" && !running.contains(&road.id))
+            .filter(|road| road.kind == "road" && !running(road))
             .flat_map(|road| &road.routes)
             .filter(|route| route.class == RouteClass::National)
             .cloned()
@@ -658,12 +664,10 @@ fn road_events(
             Some(j) => {
                 used[j] = true;
                 let junction = &junctions[j];
-                add(
-                    junction.route_m,
-                    &change.before,
-                    &change.after,
-                    &junction.touching,
-                );
+                // 国道を走っていないなら、来ている国道は名前に出さない。
+                let on_national = has_national(&change.before) || has_national(&change.after);
+                let touching: &[RouteRef] = if on_national { &junction.touching } else { &[] };
+                add(junction.route_m, &change.before, &change.after, touching);
             }
             None => add(change.route_m, &change.before, &change.after, &[]),
         }
@@ -1453,6 +1457,34 @@ mod tests {
     }
 
     #[test]
+    fn a_national_road_going_straight_on_where_the_route_turns_is_a_branch() {
+        // 147 号を東へ来て、19 号へ左に曲がる。254 号は、147 号の先へまっすぐ続く。
+        let events = route(
+            roads(vec![
+                road(1, vec![at(0.0, 0.0), at(1000.0, 0.0)], vec![national(147)]),
+                road(
+                    2,
+                    vec![at(1000.0, 0.0), at(2000.0, 0.0)],
+                    vec![national(254)],
+                ),
+                road(
+                    3,
+                    vec![at(1000.0, -1000.0), at(1000.0, 0.0), at(1000.0, 1000.0)],
+                    vec![national(19)],
+                ),
+            ]),
+            &[at(0.0, 0.0), at(1000.0, 0.0), at(1000.0, 1000.0)],
+        );
+        assert_eq!(
+            summary(&events, EventKind::Road),
+            named(&[
+                ("国道147号", 0),
+                ("国道19号・国道147号（分岐）・国道254号（分岐）", 1000),
+            ])
+        );
+    }
+
+    #[test]
     fn a_prefectural_road_meeting_is_not_named() {
         let events = along(
             roads(vec![
@@ -1481,6 +1513,31 @@ mod tests {
                     2,
                     vec![at(1000.0, 0.0), at(2000.0, 0.0)],
                     vec![prefectural(5)],
+                ),
+            ]),
+            2000.0,
+        );
+        assert_eq!(
+            summary(&events, EventKind::Road),
+            named(&[("長野県道5号", 1000)])
+        );
+    }
+
+    #[test]
+    fn entering_a_prefectural_road_off_a_national_road_names_only_it() {
+        // 路線の無い道から県道 5 号へ入る交差点に、19 号が突き抜けている。国道は走っていない。
+        let events = along(
+            roads(vec![
+                plain(1, vec![at(0.0, 0.0), at(1000.0, 0.0)]),
+                road(
+                    2,
+                    vec![at(1000.0, 0.0), at(2000.0, 0.0)],
+                    vec![prefectural(5)],
+                ),
+                road(
+                    3,
+                    vec![at(1000.0, -800.0), at(1000.0, 0.0), at(1000.0, 800.0)],
+                    vec![national(19)],
                 ),
             ]),
             2000.0,

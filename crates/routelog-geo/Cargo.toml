@@ -12,3 +12,6 @@ geozero = { version = "0.15", default-features = false, features = ["with-geo"] 
 rstar = "0.13"
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
