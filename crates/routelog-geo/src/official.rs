@@ -4,10 +4,16 @@
 //! 読む。施設ごとに 1 点で、施設名、路線名、公称の長さを持つ。
 
 use std::collections::BTreeSet;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use geozero::mvt::{Message, Tile, tile};
 use routelog_core::geo::{self, LonLat};
 use routelog_core::{Event, EventKind, RouteClass, RouteRef};
+
+use crate::Error;
 
 /// 緯度 1 度の長さ（m）。
 const M_PER_DEGREE: f64 = 111_195.08;
@@ -252,6 +258,14 @@ fn route_number(route: &str) -> Option<(RouteClass, u32)> {
     Some((class, digits.parse().ok()?))
 }
 
+/// 車道の橋の横にある、側道橋・歩道橋・地下道のような施設か。車道の橋と同じ長さで別の施設に
+/// なっているので、まとめると長さが倍になる。
+fn beside(name: &str) -> bool {
+    ["側道", "歩道", "側橋", "地下道"]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
 /// 候補の施設 1 件と、その点数の材料。
 struct Candidate<'a> {
     facility: &'a Facility,
@@ -304,7 +318,7 @@ pub fn attach(events: &mut [Event], line: &[LonLat], facilities: &[Facility]) {
         };
         let mut candidates: Vec<Candidate> = facilities
             .iter()
-            .filter(|f| f.kind == kind)
+            .filter(|f| f.kind == kind && (beside(&name) || !beside(&f.name)))
             .map(|f| Candidate {
                 facility: f,
                 distance_m: along.distance_m(from_m, to_m, f.at),
@@ -386,6 +400,153 @@ fn along_m(along: &Along, from_m: f64, to_m: f64, at: LonLat) -> f64 {
         .filter_map(|m| along.point(m).map(|p| (m, geo::distance_m(p, at))))
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map_or(from_m, |(m, _)| m)
+}
+
+/// 全国Q地図の TileJSON。タイルの URL は版ごとに変わるので、ここから引く。
+const TILEJSON: [(FacilityKind, &str); 2] = [
+    (
+        FacilityKind::Tunnel,
+        "https://mapdata.qchizu.jp/m56001/2024-tunnel.tilejson",
+    ),
+    (
+        FacilityKind::Bridge,
+        "https://mapdata.qchizu.jp/m56001/2024-bridge_detail.tilejson",
+    ),
+];
+/// タイルを続けて取るときの間。全国Q地図は、まとめて取るなら 1 秒に 20 枚までとしている。
+const FETCH_INTERVAL: Duration = Duration::from_millis(50);
+
+impl FacilityKind {
+    fn folder(self) -> &'static str {
+        match self {
+            FacilityKind::Tunnel => "tunnel",
+            FacilityKind::Bridge => "bridge",
+        }
+    }
+}
+
+/// 取ってきたタイルの置き場所。`<dir>/tunnel/<x>-<y>.pbf` と `<dir>/bridge/<x>-<y>.pbf` に
+/// 置く。施設の無いタイル（404）は、空のファイルで覚える。
+pub struct Store {
+    dir: PathBuf,
+    agent: ureq::Agent,
+    /// 種類ごとのタイルの URL の型。1 回の起動で 1 度だけ TileJSON から読む。
+    urls: Mutex<Vec<(FacilityKind, String)>>,
+}
+
+impl Store {
+    pub fn new(dir: impl Into<PathBuf>) -> Store {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(30))
+            .user_agent(concat!("route-log/", env!("CARGO_PKG_VERSION")))
+            .build();
+        Store {
+            dir: dir.into(),
+            agent,
+            urls: Mutex::default(),
+        }
+    }
+
+    fn path(&self, kind: FacilityKind, (x, y): (u32, u32)) -> PathBuf {
+        self.dir.join(kind.folder()).join(format!("{x}-{y}.pbf"))
+    }
+
+    fn wanted(tiles: &BTreeSet<(u32, u32)>) -> impl Iterator<Item = (FacilityKind, (u32, u32))> {
+        TILEJSON
+            .iter()
+            .flat_map(|(kind, _)| tiles.iter().map(move |tile| (*kind, *tile)))
+    }
+
+    /// 手元に無いタイルの数。種類ごとに数える。
+    pub fn missing(&self, tiles: &BTreeSet<(u32, u32)>) -> usize {
+        Self::wanted(tiles)
+            .filter(|(kind, tile)| !self.path(*kind, *tile).exists())
+            .count()
+    }
+
+    /// 手元に無いタイルを取ってきて置き、取った数を返す。途中で失敗したら、そこまでに取った
+    /// タイルは残してエラーを返す。
+    pub fn fetch(&self, tiles: &BTreeSet<(u32, u32)>) -> Result<usize, Error> {
+        let mut fetched = 0;
+        for (kind, tile) in Self::wanted(tiles) {
+            let path = self.path(kind, tile);
+            if path.exists() {
+                continue;
+            }
+            let url = self
+                .url(kind)?
+                .replace("{z}", &ZOOM.to_string())
+                .replace("{x}", &tile.0.to_string())
+                .replace("{y}", &tile.1.to_string());
+            if fetched > 0 {
+                std::thread::sleep(FETCH_INTERVAL);
+            }
+            let bytes = match self.agent.get(&url).call() {
+                Ok(response) => {
+                    let mut bytes = Vec::new();
+                    response
+                        .into_reader()
+                        .read_to_end(&mut bytes)
+                        .map_err(|e| Error::Fetch(format!("{url}: {e}")))?;
+                    bytes
+                }
+                Err(ureq::Error::Status(404, _)) => Vec::new(),
+                Err(e) => return Err(Error::Fetch(format!("{url}: {e}"))),
+            };
+            write(&path, &bytes)?;
+            fetched += 1;
+        }
+        Ok(fetched)
+    }
+
+    /// 種類ごとのタイルの URL の型（`{z}/{x}/{y}` を含む）。
+    fn url(&self, kind: FacilityKind) -> Result<String, Error> {
+        let mut urls = self.urls.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, url)) = urls.iter().find(|(k, _)| *k == kind) {
+            return Ok(url.clone());
+        }
+        let (_, tilejson) = TILEJSON
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .expect("種類ごとにある");
+        let fail = |e: &dyn std::fmt::Display| Error::Fetch(format!("{tilejson}: {e}"));
+        let text = self
+            .agent
+            .get(tilejson)
+            .call()
+            .map_err(|e| fail(&e))?
+            .into_string()
+            .map_err(|e| fail(&e))?;
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| fail(&e))?;
+        let url = json["tiles"][0]
+            .as_str()
+            .ok_or_else(|| Error::Fetch(format!("{tilejson}: tiles がありません")))?
+            .to_owned();
+        urls.push((kind, url.clone()));
+        Ok(url)
+    }
+
+    /// 手元にあるタイルの施設。通信はしない。読めないタイルは飛ばす。
+    pub fn facilities(&self, tiles: &BTreeSet<(u32, u32)>) -> Vec<Facility> {
+        Self::wanted(tiles)
+            .filter_map(|(kind, tile)| {
+                let bytes = std::fs::read(self.path(kind, tile)).ok()?;
+                Some(decode(&bytes, kind, tile.0, tile.1))
+            })
+            .flatten()
+            .collect()
+    }
+}
+
+/// 別名で書いてから置き換え、書きかけのファイルを残さない。
+fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let io = |e: std::io::Error| Error::Open(path.display().to_string(), e);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(io)?;
+    }
+    let partial = path.with_extension("part");
+    std::fs::write(&partial, bytes).map_err(io)?;
+    std::fs::rename(&partial, path).map_err(io)
 }
 
 #[cfg(test)]
@@ -592,6 +753,23 @@ mod tests {
     }
 
     #[test]
+    fn side_bridges_are_not_joined_to_the_bridge() {
+        // 車道の橋の横に、同じ長さの側道橋が別の施設として並んでいる。
+        let mut events = vec![
+            road(0.0, vec![national(19)]),
+            structure(EventKind::Bridge, "", 1000.0, 1020.0),
+        ];
+        let facilities = [
+            bridge(1010.0, 3.0, "犀沢橋", 8.2, "国道19号"),
+            bridge(1010.0, 8.0, "犀沢橋側道橋（下り）", 8.2, "国道19号"),
+            bridge(1010.0, 9.0, "犀沢橋側道橋（上り）", 8.1, "国道19号"),
+        ];
+        attach(&mut events, &line(), &facilities);
+        let name = events[1].detail.official_name.clone().unwrap_or_default();
+        assert!(!name.contains("側道") && !name.contains("歩道"), "{name}");
+    }
+
+    #[test]
     fn a_shed_gets_nothing() {
         let mut shed = structure(EventKind::Tunnel, "小松原洞門", 1000.0, 1150.0);
         shed.hidden = true;
@@ -712,5 +890,21 @@ mod tests {
         assert!(tiles.contains(&(7247, 3231)), "{tiles:?}");
         assert!(tiles.contains(&(7246, 3231)), "{tiles:?}");
         assert!(!tiles.contains(&(7248, 3231)), "{tiles:?}");
+    }
+
+    #[test]
+    fn an_empty_file_means_no_facilities() {
+        let dir = std::env::temp_dir().join(format!("routelog-official-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(&dir);
+        let tiles = BTreeSet::from([(7247, 3231)]);
+        assert_eq!(store.missing(&tiles), 2);
+        for kind in ["tunnel", "bridge"] {
+            std::fs::create_dir_all(dir.join(kind)).unwrap();
+            std::fs::write(dir.join(kind).join("7247-3231.pbf"), b"").unwrap();
+        }
+        assert_eq!(store.missing(&tiles), 0);
+        assert!(store.facilities(&tiles).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use routelog_core::{Event, RideDocument, SegmentMode, carry_over};
+use routelog_geo::official::{self, Store};
 use routelog_geo::{Options, SnapOptions, Tiles};
 
 /// 読んである判定用データ。フォルダが変われば読み直す。
@@ -49,14 +50,21 @@ impl Extractor {
     }
 
     /// 経路からイベントを抽出し直し、人が手を入れた結果を引き継ぐ。
+    ///
+    /// 橋・トンネルには、手元にある国土交通省のデータベースのタイルで、公称の名前と長さを付ける。
+    /// タイルが無ければ付かないだけで、通信はしない。
     pub fn extract(
         &self,
         dir: &Path,
         doc: &RideDocument,
+        structures: &Store,
     ) -> Result<Vec<Event>, routelog_geo::Error> {
         let line = doc.line();
         let extracted = if line.len() >= 2 {
-            self.tiles(dir).extract(&line, &Options::default())?
+            let mut events = self.tiles(dir).extract(&line, &Options::default())?;
+            let facilities = structures.facilities(&crate::structures::tiles_of(doc));
+            official::attach(&mut events, &line, &facilities);
+            events
         } else {
             Vec::new()
         };

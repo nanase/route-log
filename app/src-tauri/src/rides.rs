@@ -131,9 +131,10 @@ pub async fn save_ride(
         let handle = app.clone();
         let (returned, events) = tauri::async_runtime::spawn_blocking(move || {
             let extractor = handle.state::<Extractor>();
+            let structures = handle.state::<crate::structures::Structures>();
             let events = extractor
                 .snap(Path::new(&dir), &mut doc)
-                .and_then(|()| extractor.extract(Path::new(&dir), &doc));
+                .and_then(|()| extractor.extract(Path::new(&dir), &doc, &structures.0));
             (doc, events)
         })
         .await

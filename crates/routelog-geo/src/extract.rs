@@ -755,9 +755,13 @@ fn structure_events(
             let mut event = event(kind, name.to_owned(), samples[start].route_m);
             event.detail.end_m = Some(end_m);
             let short = end_m - samples[start].route_m < options.bridge_min_m;
+            // OSM でトンネルとして描かれた洞門・覆道もある。名前で見分ける。
+            let shed_name = ["洞門", "覆道", "シェッド", "シェルター"]
+                .iter()
+                .any(|word| name.ends_with(word));
             event.hidden = match structure {
                 Structure::Bridge => short,
-                _ => structure == Structure::Shed,
+                _ => structure == Structure::Shed || shed_name,
             };
             event
         })
@@ -1860,6 +1864,25 @@ mod tests {
             .collect();
         // 橋は 100 m 未満を字幕なしにする。トンネルは短くても字幕にする。
         assert_eq!(hidden, ["小さな橋", "四の岩覆道"]);
+    }
+
+    #[test]
+    fn a_tunnel_named_as_a_shed_is_hidden() {
+        // OSM でトンネルとして描かれた洞門・覆道がある。
+        let events = along(
+            roads(vec![
+                structure(1, 500.0, 650.0, Structure::Tunnel, "小松原洞門"),
+                structure(2, 1000.0, 1100.0, Structure::Tunnel, "大平覆道"),
+                structure(3, 1500.0, 1600.0, Structure::Tunnel, "白地トンネル"),
+            ]),
+            2000.0,
+        );
+        let hidden: Vec<_> = events
+            .iter()
+            .filter(|e| e.hidden)
+            .map(|e| e.label.as_str())
+            .collect();
+        assert_eq!(hidden, ["小松原洞門", "大平覆道"]);
     }
 
     #[test]

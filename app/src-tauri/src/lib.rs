@@ -7,6 +7,7 @@ mod resolve;
 mod rides;
 mod stops;
 mod store;
+mod structures;
 mod sync;
 mod videos;
 
@@ -60,6 +61,7 @@ pub fn run() {
                 dir.join("excluded-videos.json"),
             ));
             app.manage(sync::Synced::open(dir.join("sync.json")));
+            app.manage(structures::Structures::open(app.handle())?);
             sync::init_credentials();
             Ok(())
         })
@@ -90,6 +92,7 @@ pub fn run() {
             stops::find_stops,
             stops::cancel_find_stops,
             stops::set_stop_taken,
+            structures::fetch_structures,
             sync::get_sync_settings,
             sync::set_sync_settings,
             sync::sync_list,

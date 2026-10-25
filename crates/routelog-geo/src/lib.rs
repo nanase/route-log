@@ -18,4 +18,6 @@ pub enum Error {
     Open(String, std::io::Error),
     #[error("{0} を読めません: {1}")]
     Read(String, String),
+    #[error("橋・トンネルのタイルを取れません: {0}")]
+    Fetch(String),
 }
