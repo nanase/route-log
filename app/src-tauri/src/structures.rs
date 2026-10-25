@@ -30,20 +30,25 @@ pub fn tiles_of(doc: &RideDocument) -> std::collections::BTreeSet<(u32, u32)> {
     official::tiles_along(&doc.line(), MARGIN_M)
 }
 
-/// その走行の経路のまわりの、橋・トンネルのタイルを取る。取った数を返す。0 なら、抽出し直す
-/// 必要は無い。
+/// その走行の経路のまわりの、橋・トンネルのタイルのうち手元に無いものを取り、抽出し直すと公称の
+/// 名前・長さか橋の字幕の有無が変わるかを返す。
+///
+/// 取れないタイルがあっても、手元にあるタイルで決める。別の走行で取ったタイルも使う。
 #[tauri::command]
 pub async fn fetch_structures(
     structures: tauri::State<'_, Structures>,
     doc: RideDocument,
-) -> Result<usize, String> {
+) -> Result<bool, String> {
     let store = structures.0.clone();
-    let tiles = tiles_of(&doc);
-    if store.missing(&tiles) == 0 {
-        return Ok(0);
-    }
-    tauri::async_runtime::spawn_blocking(move || store.fetch(&tiles))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let tiles = tiles_of(&doc);
+        if store.missing(&tiles) > 0 {
+            // 通信できなくても、手元のタイルで決める。
+            let _ = store.fetch(&tiles);
+        }
+        let facilities = store.facilities(&tiles);
+        official::needs_attach(&doc.events, &doc.line(), &facilities)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }

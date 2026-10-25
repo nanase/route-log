@@ -358,24 +358,27 @@ pub fn attach(events: &mut [Event], line: &[LonLat], facilities: &[Facility]) {
             .filter(|c| acceptable(c))
             .max_by(|a, b| score(a).total_cmp(&score(b)));
         // 路線の合う、名前の違う施設を合わせると長さが合うなら、まとめる。
-        let group: Vec<&Candidate> = candidates
-            .iter()
-            .filter(|c| c.route_match && c.facility.length_m.is_some())
-            .collect();
-        let group_m: f64 = group.iter().filter_map(|c| c.facility.length_m).sum();
-        let group_ratio = length_ratio(osm_m, Some(group_m));
+        // 1 件では長さが合わないときだけ考える。合う施設がすでにあるのに足すと、近くの溝橋のような
+        // 小さな施設まで足してしまう。足すのは、経路の上で範囲の中にある施設だけである。
         let single_ratio = single.map_or(0.0, |c| length_ratio(osm_m, c.facility.length_m));
+        let mut group: Vec<(f64, &Facility)> = if single_ratio < LENGTH_RATIO {
+            candidates
+                .iter()
+                .filter(|c| c.route_match && c.facility.length_m.is_some())
+                .map(|c| (along_m(&along, from_m, to_m, c.facility.at), c.facility))
+                .filter(|(m, _)| (from_m..=to_m).contains(m))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let group_m: f64 = group.iter().filter_map(|(_, f)| f.length_m).sum();
+        let group_ratio = length_ratio(osm_m, Some(group_m));
         let chosen: Vec<&Facility> = if group.len() >= 2
             && group_ratio >= LENGTH_RATIO
-            && group_ratio > single_ratio
             && !single.is_some_and(|c| c.name_match)
         {
-            let mut joined: Vec<(f64, &Facility)> = group
-                .iter()
-                .map(|c| (along_m(&along, from_m, to_m, c.facility.at), c.facility))
-                .collect();
-            joined.sort_by(|a, b| a.0.total_cmp(&b.0));
-            joined.into_iter().map(|(_, f)| f).collect()
+            group.sort_by(|a, b| a.0.total_cmp(&b.0));
+            group.into_iter().map(|(_, f)| f).collect()
         } else {
             single.map(|c| c.facility).into_iter().collect()
         };
@@ -392,8 +395,32 @@ pub fn attach(events: &mut [Event], line: &[LonLat], facilities: &[Facility]) {
     }
 }
 
-/// 施設の点が、経路の範囲のどこに近いか（始点からの距離）。まとめた名前を経路の順に並べる。
+/// 対応づけし直すと、公称の名前・長さか、人が切り替えていない橋の字幕の有無が変わるか。
+///
+/// 保存してある走行を開いたときに、抽出し直すかを決める。タイルを別の走行で取ってあっても、
+/// 取る途中で走行を切り替えていても、手元のタイルで決まる。
+pub fn needs_attach(events: &[Event], line: &[LonLat], facilities: &[Facility]) -> bool {
+    let mut attached = events.to_vec();
+    attach(&mut attached, line, facilities);
+    events.iter().zip(&attached).any(|(before, after)| {
+        before.detail.official_name != after.detail.official_name
+            || before.detail.official_length_m != after.detail.official_length_m
+            || (before.kind == EventKind::Bridge
+                && !before.detail.hidden_by_hand
+                && before.hidden != after.hidden)
+    })
+}
+
+/// 置いてよいタイルか。施設の無いタイル（空）か、MVT として読めるもの。宿の Wi-Fi のログインの
+/// ページのような、タイルでない中身を覚えない。
+fn is_tile(bytes: &[u8]) -> bool {
+    bytes.is_empty() || Tile::decode(bytes).is_ok()
+}
+
+/// 施設の点が、経路の範囲とその前後 `MATCH_M` のどこに近いか（始点からの距離）。範囲の外の施設を
+/// 見分け、まとめた名前を経路の順に並べる。
 fn along_m(along: &Along, from_m: f64, to_m: f64, at: LonLat) -> f64 {
+    let (from_m, to_m) = ((from_m - MATCH_M).max(0.0), to_m + MATCH_M);
     let steps = ((to_m - from_m) / 10.0).ceil().max(1.0) as usize;
     (0..=steps)
         .map(|i| from_m + (to_m - from_m) * i as f64 / steps as f64)
@@ -432,6 +459,8 @@ pub struct Store {
     agent: ureq::Agent,
     /// 種類ごとのタイルの URL の型。1 回の起動で 1 度だけ TileJSON から読む。
     urls: Mutex<Vec<(FacilityKind, String)>>,
+    /// 取得を 1 つずつ行うための錠。
+    fetching: Mutex<()>,
 }
 
 impl Store {
@@ -444,6 +473,7 @@ impl Store {
             dir: dir.into(),
             agent,
             urls: Mutex::default(),
+            fetching: Mutex::default(),
         }
     }
 
@@ -464,10 +494,14 @@ impl Store {
             .count()
     }
 
-    /// 手元に無いタイルを取ってきて置き、取った数を返す。途中で失敗したら、そこまでに取った
-    /// タイルは残してエラーを返す。
+    /// 手元に無いタイルを取ってきて置き、取った数を返す。取れないタイルは飛ばして、次の機会に
+    /// 取り直す。1 枚も取れずに失敗したときだけ、エラーを返す。
+    ///
+    /// 走行を開いたときと保存したときの取得が重なっても、1 秒に 20 枚を超えないよう、1 つずつ行う。
     pub fn fetch(&self, tiles: &BTreeSet<(u32, u32)>) -> Result<usize, Error> {
+        let _one_at_a_time = self.fetching.lock().unwrap_or_else(|e| e.into_inner());
         let mut fetched = 0;
+        let mut failed = None;
         for (kind, tile) in Self::wanted(tiles) {
             let path = self.path(kind, tile);
             if path.exists() {
@@ -478,25 +512,37 @@ impl Store {
                 .replace("{z}", &ZOOM.to_string())
                 .replace("{x}", &tile.0.to_string())
                 .replace("{y}", &tile.1.to_string());
-            if fetched > 0 {
+            if fetched > 0 || failed.is_some() {
                 std::thread::sleep(FETCH_INTERVAL);
             }
             let bytes = match self.agent.get(&url).call() {
                 Ok(response) => {
                     let mut bytes = Vec::new();
-                    response
-                        .into_reader()
-                        .read_to_end(&mut bytes)
-                        .map_err(|e| Error::Fetch(format!("{url}: {e}")))?;
-                    bytes
+                    match response.into_reader().read_to_end(&mut bytes) {
+                        Ok(_) if is_tile(&bytes) => bytes,
+                        Ok(_) => {
+                            failed = Some(Error::Fetch(format!("{url}: タイルではありません")));
+                            continue;
+                        }
+                        Err(e) => {
+                            failed = Some(Error::Fetch(format!("{url}: {e}")));
+                            continue;
+                        }
+                    }
                 }
                 Err(ureq::Error::Status(404, _)) => Vec::new(),
-                Err(e) => return Err(Error::Fetch(format!("{url}: {e}"))),
+                Err(e) => {
+                    failed = Some(Error::Fetch(format!("{url}: {e}")));
+                    continue;
+                }
             };
             write(&path, &bytes)?;
             fetched += 1;
         }
-        Ok(fetched)
+        match failed {
+            Some(error) if fetched == 0 => Err(error),
+            _ => Ok(fetched),
+        }
     }
 
     /// 種類ごとのタイルの URL の型（`{z}/{x}/{y}` を含む）。
@@ -767,6 +813,63 @@ mod tests {
         attach(&mut events, &line(), &facilities);
         let name = events[1].detail.official_name.clone().unwrap_or_default();
         assert!(!name.contains("側道") && !name.contains("歩道"), "{name}");
+    }
+
+    #[test]
+    fn a_small_culvert_nearby_is_not_joined() {
+        // OSM の長さは公称より長いことが多い。近くの溝橋を足すと長さが合ってしまう。
+        let mut events = vec![
+            road(0.0, vec![national(19)]),
+            structure(EventKind::Bridge, "", 1000.0, 1150.0),
+        ];
+        let facilities = [
+            bridge(1075.0, 5.0, "犀川大橋", 140.0, "国道19号"),
+            bridge(1100.0, 30.0, "266.4（溝橋）", 5.0, "国道19号"),
+        ];
+        attach(&mut events, &line(), &facilities);
+        assert_eq!(official(&events[1]), (Some("犀川大橋"), Some(140.0)));
+    }
+
+    #[test]
+    fn a_facility_beyond_the_structure_is_not_joined() {
+        let mut events = vec![
+            road(0.0, vec![national(19)]),
+            structure(EventKind::Tunnel, "笹平トンネル", 1000.0, 2140.0),
+        ];
+        let facilities = [
+            tunnel(1300.0, 25.0, "笹平第１トンネル", 586.0, "国道19号"),
+            tunnel(1880.0, 4.0, "笹平第２トンネル", 521.0, "国道19号"),
+            // 出口の 80 m 先にある別のトンネル。
+            tunnel(2220.0, 5.0, "小さなトンネル", 60.0, "国道19号"),
+        ];
+        attach(&mut events, &line(), &facilities);
+        assert_eq!(
+            official(&events[1]),
+            (Some("笹平第１トンネル・笹平第２トンネル"), Some(1107.0))
+        );
+    }
+
+    #[test]
+    fn a_ride_needs_attaching_only_when_the_names_would_change() {
+        let mut events = vec![
+            road(0.0, vec![national(19)]),
+            structure(EventKind::Tunnel, "犬戻トンネル", 1000.0, 1740.0),
+        ];
+        let facilities = [tunnel(1370.0, 13.0, "犬戻トンネル", 737.0, "国道19号")];
+        assert!(needs_attach(&events, &line(), &facilities));
+        attach(&mut events, &line(), &facilities);
+        assert!(!needs_attach(&events, &line(), &facilities));
+    }
+
+    #[test]
+    fn a_page_that_is_not_a_tile_is_not_kept() {
+        assert!(!is_tile(b"<html><body>Wi-Fi login</body></html>"));
+        assert!(is_tile(b""));
+        assert!(is_tile(&tile_with(
+            "tunnel",
+            (0, 0),
+            &[("施設名", text("a"))]
+        )));
     }
 
     #[test]

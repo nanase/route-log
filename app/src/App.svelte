@@ -397,14 +397,14 @@
   }
 
   /**
-   * 走行の経路のまわりの、橋・トンネルのタイルを裏で取る。新しく取れたら、抽出し直して公称の名前と
-   * 長さを付ける。通信できないときは、手元にあるタイルだけで付ける。
+   * 走行の経路のまわりの、橋・トンネルのタイルを裏で取る。抽出し直すと公称の名前・長さが変わるなら、
+   * 抽出し直す。通信できないときは、手元にあるタイルだけで決める。
    */
   async function fetchStructures(target: RideDocument) {
     if (!config.geo_data_dir) return;
     try {
-      const fetched = await invoke<number>("fetch_structures", { doc: target });
-      if (fetched > 0 && doc?.ride.id === target.ride.id) void extractAgain();
+      const changed = await invoke<boolean>("fetch_structures", { doc: target });
+      if (changed && doc?.ride.id === target.ride.id) void extractAgain();
     } catch {
       // 次に開いたときか、経路を保存したときに、もう一度取りに行く。
     }
@@ -554,7 +554,8 @@
         events: RideEvent[];
         conflicts: string[];
       }>("save_ride", { doc: saving, extract });
-      if (extract) void fetchStructures(saving);
+      // 吸着した道沿いのタイルを取るので、保存で引き直した経路と、抽出した結果で調べる。
+      if (extract) void fetchStructures({ ...saving, route: saved.route, events: saved.events });
       // 保存を待つ間に編集が進んでいたら、返ってきたイベントは古い。次の保存に任せる。
       if (doc === saving) {
         doc = { ...doc, route: saved.route, events: saved.events };
