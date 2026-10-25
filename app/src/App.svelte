@@ -34,6 +34,7 @@
   import Hints from "./lib/Hints.svelte";
   import { forShortcut, keepKeys } from "./lib/keys";
   import { KINDS } from "./lib/kinds";
+  import { shownName } from "./lib/names";
   import type { LabelFilter } from "./lib/labels";
   import { runMapCheck } from "./lib/map-check";
   import NextGuide from "./lib/NextGuide.svelte";
@@ -268,7 +269,7 @@
       else if (rest === null) note = "";
       else note = rest >= 0 ? `あと ${short(rest)}` : `${short(-rest)} 前`;
     }
-    return { at, kind: event.kind, label: event.label || KINDS[event.kind], note };
+    return { at, kind: event.kind, label: shownName(event) || KINDS[event.kind], note };
   });
   /** 浮かせた板に隠れる幅（px）。経路の全体を出すときや、位置をまん中に出すときに避ける */
   const pad = $derived(
@@ -395,6 +396,20 @@
     config = await invoke<Config>("get_config");
   }
 
+  /**
+   * 走行の経路のまわりの、橋・トンネルのタイルを裏で取る。新しく取れたら、抽出し直して公称の名前と
+   * 長さを付ける。通信できないときは、手元にあるタイルだけで付ける。
+   */
+  async function fetchStructures(target: RideDocument) {
+    if (!config.geo_data_dir) return;
+    try {
+      const fetched = await invoke<number>("fetch_structures", { doc: target });
+      if (fetched > 0 && doc?.ride.id === target.ride.id) void extractAgain();
+    } catch {
+      // 次に開いたときか、経路を保存したときに、もう一度取りに行く。
+    }
+  }
+
   /** 開いている走行のイベントを、いまの経路から抽出し直す。 */
   function extractAgain() {
     return inTurn(() => {
@@ -432,6 +447,7 @@
     const names = await invoke<string[]>("get_excluded_videos", { date: next });
     doc = loaded;
     date = next;
+    if (loaded !== null) void fetchStructures(loaded);
     // 次に起動したときに、同じ走行から始められるようにする。
     localStorage.setItem(LAST_RIDE_KEY, next);
     excludedNames = names;
@@ -538,6 +554,7 @@
         events: RideEvent[];
         conflicts: string[];
       }>("save_ride", { doc: saving, extract });
+      if (extract) void fetchStructures(saving);
       // 保存を待つ間に編集が進んでいたら、返ってきたイベントは古い。次の保存に任せる。
       if (doc === saving) {
         doc = { ...doc, route: saved.route, events: saved.events };

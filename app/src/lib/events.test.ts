@@ -247,7 +247,8 @@ describe("確定", () => {
     expect(hidden).toMatchObject({ status: "confirmed", time_ms: 100_000, hidden: true, detail: { camera_ms: 70_000 } });
     const back = setHidden(hidden, false);
     expect("hidden" in back).toBe(false);
-    expect(back).toEqual(confirmed);
+    // 戻しても、人が決めた印は残る。
+    expect(back).toEqual({ ...confirmed, detail: { ...confirmed.detail, hidden_by_hand: true } });
   });
 
   test("経由点のイベントは、字幕にしないものとして作り、位置で見分ける", () => {

@@ -273,10 +273,14 @@ export function unconfirm(event: RideEvent): RideEvent {
   return { ...event, status: "estimated", time_ms: null, detail };
 }
 
-/** 字幕にするかどうかを切り替える。確定した時刻は、そのまま残る。 */
+/**
+ * 字幕にするかどうかを切り替える。確定した時刻は、そのまま残る。人が決めた印を付け、抽出し直しても
+ * 橋・トンネルの字幕の有無を決め直させない。
+ */
 export function setHidden(event: RideEvent, hidden: boolean): RideEvent {
   const { hidden: _, ...rest } = event;
-  return hidden ? { ...rest, hidden: true } : rest;
+  const marked = { ...rest, detail: { ...rest.detail, hidden_by_hand: true } };
+  return hidden ? { ...marked, hidden: true } : marked;
 }
 
 /**

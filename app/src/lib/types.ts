@@ -134,6 +134,14 @@ export interface RideEvent {
     at?: LonLat;
     /** 停車のイベントの、停車していた長さ（ミリ秒）。終わりの時刻は、通過時刻にこれを足したもの */
     stay_ms?: number;
+    /** 橋・トンネルの、国土交通省のデータベースの施設の名前。何件かをまとめたときは「・」で繋ぐ */
+    official_name?: string;
+    /** 橋・トンネルの公称の長さ（m） */
+    official_length_m?: number;
+    /** 人が字幕にするかどうかを切り替えた */
+    hidden_by_hand?: boolean;
+    /** 人が名前を直したか、候補から選んだ */
+    named_by_hand?: boolean;
   };
 }
 

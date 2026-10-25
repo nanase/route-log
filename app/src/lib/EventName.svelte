@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { shownName } from "./names";
   import RouteBadge from "./RouteBadge.svelte";
   import type { RideEvent } from "./types";
 
   /**
-   * イベントの名前。路線のイベントでは、名前の前に標識を置く。名前の字も残す。
+   * イベントの名前。路線のイベントでは、名前の前に標識を置く。名前の字も残す。橋・トンネルは、
+   * 公称の名前と長さを添える。
    */
   let { event }: { event: RideEvent } = $props();
 
@@ -23,7 +25,7 @@
 {:else}
   <span class="name">
     {#each routes as route, i (i)}<RouteBadge {route} />{/each}
-    {event.label || "（名前なし）"}
+    {shownName(event) || "（名前なし）"}
   </span>
 {/if}
 

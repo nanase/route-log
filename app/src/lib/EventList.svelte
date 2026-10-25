@@ -3,6 +3,7 @@
   import { asideOf, confirmTyped, inStop, retimeStop, setHidden, stopsOf, unconfirm, unpinStop } from "./events";
   import Icon from "./Icon.svelte";
   import { KIND_ORDER, KINDS } from "./kinds";
+  import { nameChoices, setName, shownName } from "./names";
   import KindTag from "./KindTag.svelte";
   import StatusMark from "./StatusMark.svelte";
   import { clock, jstToMs, short } from "./time";
@@ -95,7 +96,7 @@
       (event) =>
         matches[filter](event) &&
         (kinds.length === 0 || kinds.includes(event.kind)) &&
-        (word === "" || `${event.label}${KINDS[event.kind]}`.toLowerCase().includes(word)),
+        (word === "" || `${shownName(event)}${KINDS[event.kind]}`.toLowerCase().includes(word)),
     );
   });
   const narrowed = $derived(filter !== "all" || kinds.length > 0 || query.trim() !== "");
@@ -323,10 +324,25 @@
                 value={event.label}
                 onchange={(e) => {
                   const label = e.currentTarget.value.trim();
-                  onchange(event.id, (current) => ({ ...current, label }));
+                  onchange(event.id, (current) => setName(current, label));
                 }}
               />
             </label>
+            {#if nameChoices(event).length > 0}
+              <!-- OSM とデータベースで名前が違う。選ばなければ、マーカーには両方を並べる。 -->
+              <div class="choices" role="group" aria-label="名前の候補">
+                {#each nameChoices(event) as choice (choice)}
+                  <button
+                    type="button"
+                    class="btn small"
+                    class:on={event.detail.named_by_hand === true && event.label === choice}
+                    onclick={() => onchange(event.id, (current) => setName(current, choice))}
+                  >
+                    {choice}
+                  </button>
+                {/each}
+              </div>
+            {/if}
             {#if event.kind === "stop" && event.time_ms !== null}
               <!-- 停車は、始まりと終わりの時刻を持つ。その間は、進んでいないものとして推定する。 -->
               {#each [["start", "始まり", event.time_ms], ["end", "終わり", event.time_ms + (event.detail.stay_ms ?? 0)]] as const as [edge, name, time] (edge)}
@@ -663,6 +679,15 @@
   }
   .edit .label {
     width: 132px;
+  }
+  /* 名前の候補。選んだものは、操作の主色で囲む。 */
+  .choices {
+    display: flex;
+    gap: 4px;
+  }
+  .choices .on {
+    border-color: var(--primary);
+    color: var(--primary);
   }
   .place {
     display: flex;

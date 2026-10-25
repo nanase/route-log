@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { KINDS } from "./kinds";
+  import { shownName } from "./names";
   import KindTag from "./KindTag.svelte";
   import type { StopBand } from "./stops";
   import { clock, hms, short } from "./time";
@@ -538,7 +539,7 @@
             class:target={event.id === targetId}
             class:warned={mark.warned}
             style:left="{at}px"
-            title="{event.label || KINDS[event.kind]}　{clock(mark.time)}"
+            title="{shownName(event) || KINDS[event.kind]}　{clock(mark.time)}"
             onclick={() => onselect(event)}
           >
             <KindTag kind={event.kind} />
