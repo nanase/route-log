@@ -146,11 +146,11 @@ describe("Resolve への書き出し", () => {
       unplaced: 0,
     } as const;
     expect(exportedMessage("前編", written)).toStartWith(
-      "「前編」のソース 2:39:20。停車 3 か所（1 分 14 秒）を抜き、マーカーは 28 個です。マーカーは、",
+      "「前編」のソース 2:39:20・停車 3 か所（1 分 14 秒）を除外・マーカー 28 個。マーカーの読み込み：",
     );
     expect(exportedMessage("前編", written)).toContain("「EDL からタイムラインマーカー」");
     const plain = exportedMessage("前編", { ...written, cuts: 0, cutMs: 0, unplaced: 2 });
-    expect(plain).toContain("マーカーは 28 個です。2 個のイベントは、録画の外か抜いた所にあるので");
+    expect(plain).toContain("マーカー 28 個（録画外の 2 個を除く）");
     expect(plain).not.toContain("停車");
   });
 });

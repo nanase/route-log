@@ -333,7 +333,7 @@ struct Refusal {
 fn explain(error: ureq::Error) -> String {
     match error {
         ureq::Error::Status(403, _) => {
-            "クラウドに拒まれました。サービストークンを確かめてください".into()
+            "同期が拒否されました。サービストークンを確認してください".into()
         }
         ureq::Error::Status(code, response) => {
             // 断った理由が本文にあれば添える。400 は、送った走行をクラウドが読めなかったときに返る。
@@ -341,14 +341,9 @@ fn explain(error: ureq::Error) -> String {
                 .into_json::<Refusal>()
                 .map(|refusal| format!("（{}）", refusal.error))
                 .unwrap_or_default();
-            let advice = if code == 400 {
-                "。クラウドの側（Worker）が古いと、新しい形の走行を読めません。デプロイし直してください"
-            } else {
-                ""
-            };
-            format!("クラウドが {code} を返しました{reason}{advice}")
+            format!("同期先が {code} を返しました{reason}")
         }
-        ureq::Error::Transport(transport) => format!("クラウドに繋がりません: {transport}"),
+        ureq::Error::Transport(transport) => format!("同期先に接続できません: {transport}"),
     }
 }
 

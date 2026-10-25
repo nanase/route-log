@@ -38,7 +38,7 @@ export function replaceStops(stops: FileStops[], next: FileStops): FileStops[] {
 /** 停車を探し終えた走行に出す知らせ。 */
 export function foundMessage(stops: FileStops[]): string {
   const all = stops.flatMap((entry) => entry.candidates);
-  if (all.length === 0) return "停車の候補は見つかりませんでした";
+  if (all.length === 0) return "停車の候補なし";
   const out = all.filter((choice) => !choice.taken).length;
-  return `停車の候補が ${all.length} 件あります${out > 0 ? `（${out} 件は外してあります）` : ""}`;
+  return `停車の候補 ${all.length} 件${out > 0 ? `（除外 ${out} 件）` : ""}`;
 }

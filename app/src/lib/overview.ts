@@ -209,7 +209,7 @@ export async function creditImages(): Promise<CreditImages> {
 async function creditPng(lines: string[]): Promise<number[]> {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
-  if (context === null) throw new Error("出典を描けません");
+  if (context === null) throw new Error("出典の描画に失敗");
   context.font = FONT;
   const width = Math.min(Math.ceil(Math.max(...lines.map((t) => context.measureText(t).width))) + PAD[1] * 2, BASE_WIDTH);
   canvas.width = width;
@@ -224,6 +224,6 @@ async function creditPng(lines: string[]): Promise<number[]> {
   context.textBaseline = "middle";
   lines.forEach((text, i) => context.fillText(text, width - PAD[1], PAD[0] + LINE_PX * (i + 0.5)));
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (blob === null) throw new Error("出典を描けません");
+  if (blob === null) throw new Error("出典の描画に失敗");
   return Array.from(new Uint8Array(await blob.arrayBuffer()));
 }

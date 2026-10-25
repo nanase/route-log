@@ -100,7 +100,7 @@
         <button
           type="button"
           class="btn small icon-only ghost export"
-          aria-label="{nameOf(episode, index)}を Resolve へ書き出す"
+          aria-label="{nameOf(episode, index)}をエクスポート"
           title={blocker ?? "停車を除いたソースタイムライン（FCPXML）と字幕位置のマーカー（EDL）をエクスポートします"}
           disabled={blocker !== null}
           onclick={() => onexport(episode, nameOf(episode, index))}
@@ -123,13 +123,9 @@
         {@render pick(episode, "to", "終わりの経由地", extent === null)}
       </div>
       {#if extent === null}
-        <p class="problem"><Icon name="warning" size={14} />終わりは、始まりより後の経由地にします</p>
+        <p class="problem"><Icon name="warning" size={14} />終点は始点より後の経由地を選択</p>
       {/if}
     </div>
-  {:else}
-    {#if !canAdd}
-      <p class="empty">経由地を 2 つ追加すると、パートを作れます。</p>
-    {/if}
   {/each}
 </div>
 
@@ -235,11 +231,5 @@
     margin: 0;
     color: var(--danger);
     font-size: 12px;
-  }
-  .empty {
-    margin: 0;
-    padding: 0 4px;
-    color: var(--ink-3);
-    white-space: normal;
   }
 </style>

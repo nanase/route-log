@@ -85,7 +85,7 @@
     </div>
     {#if !canSnap}
       <span class="fine">
-        「道に沿わせる」は、判定データを選ぶと使えます。
+        「道に沿わせる」には判定データが必要です。
         <button type="button" class="link" onclick={onsettings}>設定を開く</button>
       </span>
     {/if}
@@ -115,7 +115,7 @@
         checked={showRoads && hasRoads}
         disabled={!hasRoads}
         onchange={(event) => onroads(event.currentTarget.checked)}
-      />道路の線を重ねる
+      />道路の線を表示
     </label>
     {#if hasRoads}
       <div class="legend">
@@ -124,7 +124,7 @@
       </div>
     {:else}
       <span class="fine">
-        道路データを選ぶと重なります。
+        道路データが必要です。
         <button type="button" class="link" onclick={onsettings}>設定を開く</button>
       </span>
     {/if}

@@ -242,7 +242,7 @@
     />
     <label class="search">
       <Icon name="search" size={14} />
-      <input type="search" placeholder="名前で探す" aria-label="名前で探す" bind:value={query} />
+      <input type="search" placeholder="名前で絞り込み" aria-label="名前で絞り込み" bind:value={query} />
     </label>
     <div class="kinds" role="group" aria-label="種類で絞り込む">
       {#each present as kind (kind)}
@@ -268,7 +268,7 @@
       <button type="button" class="btn small" onclick={() => hidePicked(true)}>
         <StatusMark status="estimated" hidden />字幕なし
       </button>
-      <button type="button" class="btn small ghost" onclick={uncheckAll}>選択をやめる</button>
+      <button type="button" class="btn small ghost" onclick={uncheckAll}>選択解除</button>
     </div>
   {/if}
 
@@ -366,7 +366,7 @@
                 {:else}
                   <span class="fine">{event.detail.at === undefined ? "前後の時刻から推定" : "地図で決めた所"}</span>
                   <button type="button" class="btn" onclick={() => onplace(event.id)}>
-                    {event.detail.at === undefined ? "地図で決める" : "決め直す"}
+                    {event.detail.at === undefined ? "地図で指定" : "再指定"}
                   </button>
                   {#if event.detail.at !== undefined}
                     <button type="button" class="btn" onclick={() => onchange(event.id, unpinStop)}>推定に戻す</button>
@@ -405,7 +405,7 @@
                 type="button"
                 class:on={hidden}
                 aria-pressed={hidden}
-                title="字幕に出しません。確定した時刻は残り、前後の時刻推定に使います"
+                title="字幕に出さない（確定した時刻は推定に使用）"
                 onclick={() => onchange(event.id, (c) => setHidden(c, true))}
               >
                 字幕なし
@@ -413,7 +413,7 @@
             </div>
             {#if REMOVABLE.includes(event.kind)}
               <button type="button" class="btn remove" onclick={() => onremove(event.id)}>
-                <Icon name="trash" size={14} />消す
+                <Icon name="trash" size={14} />削除
               </button>
             {/if}
             </div>
@@ -424,11 +424,11 @@
       <p class="empty">
         {#if events.length === 0}
           {onextract === null
-            ? "判定データを選ぶと、経路からイベントを抽出します。"
-            : "経路を入力すると、ここにイベントが出ます。"}
+            ? "判定データ未選択"
+            : "イベントなし"}
         {:else}
-          当てはまるイベントはありません。
-          {#if narrowed}<button type="button" class="link" onclick={clear}>絞り込みをやめる</button>{/if}
+          該当なし
+          {#if narrowed}<button type="button" class="link" onclick={clear}>絞り込み解除</button>{/if}
         {/if}
       </p>
     {/each}

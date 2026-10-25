@@ -569,8 +569,8 @@
       <div class="act">
         <span class="fine">
           {gapMenu.stay === null
-            ? "同じ場所で止まっていたなら、停車にします。この間は進んでいないものとして、時刻を推定します。"
-            : "やめると、この間も走っていたものとして、時刻を推定します。"}
+            ? "停車中は進んでいないものとして時刻を推定します。"
+            : "解除するとこの間も走行中として時刻を推定します。"}
         </span>
         <button type="button" class="btn" onclick={chooseGapMenu}>
           {gapMenu.stay === null ? "停車に設定" : "停車を解除"}
@@ -617,7 +617,7 @@
       <div class="mono fine name">{menu.clip.name}</div>
       <div class="act">
         <span class="fine">
-          {menu.out ? "戻すと、再生と時刻にまた使います。" : "除外すると、再生にも時刻にも使いません。あとで戻せます。"}
+          {menu.out ? "戻すと再生と時刻推定に再び使用します。" : "除外すると再生にも時刻推定にも使用しません（後で戻せます）。"}
         </span>
         <button type="button" class="btn" onclick={chooseMenu}>{menu.out ? "走行に戻す" : "走行から除外"}</button>
       </div>

@@ -211,7 +211,7 @@
       <h2 id="rides-title">走行</h2>
       <form onsubmit={(event) => (event.preventDefault(), create())}>
         <input class="field mono" type="date" aria-label="新しい走行の日付" bind:value={newDate} />
-        <button type="submit" class="btn" disabled={newDate === ""}>この日付で作る</button>
+        <button type="submit" class="btn" disabled={newDate === ""}>この日付で新規作成</button>
       </form>
     </header>
 
@@ -221,10 +221,10 @@
       {#if message !== ""}
         <span class="text">{message}</span>
       {:else if !sync.configured}
-        <span class="text">クラウド同期の接続先が、まだ設定されていません</span>
+        <span class="text">同期設定が設定されていません</span>
         <button type="button" class="btn sized" onclick={onsettings}>設定を開く</button>
       {:else if overall === "syncing"}
-        <span class="text">クラウドと同期しています…</span>
+        <span class="text">同期中…</span>
       {:else if conflicts > 0}
         <span class="text">両方で変更された走行が {conflicts} 件あります。どちらを残すかを選んでください</span>
       {:else if overall === "unsynced"}
@@ -263,10 +263,10 @@
     <div class="rows">
       {#if rows.length === 0}
         <p class="empty">
-          走行がまだありません。上の欄に日付を入れて作るか、設定で動画フォルダを選んでください。
+          走行なし
         </p>
       {:else if shown.length === 0}
-        <p class="empty">当てはまる走行がありません。絞り込みを外すと、すべての走行が出ます。</p>
+        <p class="empty">該当する走行なし</p>
       {/if}
       {#each shown as row (row.key)}
         {@const open = row.date === date && !row.remote}
@@ -280,14 +280,14 @@
             </span>
             <span>
               {#if local}
-                <b>この走行の記録を消しますか。</b>経路とイベントが消えます。{#if sync.configured}クラウドからも消えます。{/if}動画のファイルは消えません。
+                <b>この走行の記録を削除しますか</b>経路とイベントを削除します。{#if sync.configured}同期先からも削除します。{/if}動画ファイルは残ります。
               {:else}
-                <b>クラウドにある、この走行の記録を消しますか。</b>手元には記録がありません。動画のファイルは消えません。
+                <b>同期先にあるこの走行の記録を削除しますか</b>手元に記録はありません。動画ファイルは残ります。
               {/if}
             </span>
             <div class="buttons">
-              <button type="button" class="btn" onclick={() => (asking = null)}>やめる</button>
-              <button type="button" class="btn danger" disabled={busy} onclick={() => remove(id)}>記録を消す</button>
+              <button type="button" class="btn" onclick={() => (asking = null)}>キャンセル</button>
+              <button type="button" class="btn danger" disabled={busy} onclick={() => remove(id)}>記録を削除</button>
             </div>
           </div>
         {:else}
@@ -299,11 +299,11 @@
                   <input
                     class="field title"
                     aria-label="走行の題"
-                    placeholder="題を付ける"
+                    placeholder="題名"
                     value={title === row.date ? "" : title}
                     onchange={(event) => ontitle(event.currentTarget.value.trim() || row.date)}
                   />
-                  <span class="pill here">開いている</span>
+                  <span class="pill here">表示中</span>
                 </span>
                 {#if row.id !== null}
                   <LabelEditor labels={row.labels} {known} onchange={onlabels} />
@@ -339,7 +339,7 @@
                     手元で上書き
                   </button>
                   <button type="button" class="btn small" onclick={() => resolve(id, "cloud")} disabled={busy}>
-                    クラウドで上書き
+                    同期先で上書き
                   </button>
                 {/if}
               {/if}

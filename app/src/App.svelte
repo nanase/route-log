@@ -350,19 +350,19 @@
       videos = scan.rides;
       videoState = "ready";
       const count = videos.reduce((n, ride) => n + ride.files.length, 0);
-      tell(`動画 ${count} 本を読み込みました`);
+      tell(`動画 ${count} 本を読み込み`);
       if (scan.skipped.length > 0) {
         report({
           key: "video",
           level: "warning",
-          title: `読めないファイルが ${scan.skipped.length} 本あります。`,
+          title: `読めないファイル ${scan.skipped.length} 本`,
           detail: scan.skipped[0].reason,
         });
       }
       await openFirst();
     } catch (e) {
       videoState = "error";
-      report({ key: "video", level: "error", title: "動画フォルダを読めません。", detail: String(e), action: repick("video") });
+      report({ key: "video", level: "error", title: "動画フォルダの読み込みに失敗", detail: String(e), action: repick("video") });
     }
     config = await invoke<Config>("get_config");
   }
@@ -375,7 +375,7 @@
       roadState = "ready";
     } catch (e) {
       roadState = "error";
-      report({ key: "road", level: "error", title: "道路データを開けません。", detail: String(e), action: repick("road") });
+      report({ key: "road", level: "error", title: "道路データの読み込みに失敗", detail: String(e), action: repick("road") });
     }
     config = await invoke<Config>("get_config");
   }
@@ -386,12 +386,12 @@
     try {
       await invoke("open_geo_data", { dir });
       geoState = "ready";
-      tell("判定データを開きました");
+      tell("判定データを読み込み");
       void extractAgain();
     } catch (e) {
       // 選ぶのは、roads.fgb・admin.fgb・michi-no-eki.fgb の 3 つが入ったフォルダである。
       geoState = "error";
-      report({ key: "geo", level: "error", title: "判定データを開けません。", detail: String(e), action: repick("geo") });
+      report({ key: "geo", level: "error", title: "判定データの読み込みに失敗", detail: String(e), action: repick("geo") });
     }
     config = await invoke<Config>("get_config");
   }
@@ -431,9 +431,9 @@
   }
 
   const FOLDERS: Record<Folder, { title: string; load: (dir: string) => Promise<void> }> = {
-    video: { title: "動画フォルダを選ぶ", load: loadVideos },
-    road: { title: "道路データのフォルダを選ぶ", load: loadRoads },
-    geo: { title: "判定データのフォルダを選ぶ", load: loadGeo },
+    video: { title: "動画フォルダを選択", load: loadVideos },
+    road: { title: "道路データのフォルダを選択", load: loadRoads },
+    geo: { title: "判定データのフォルダを選択", load: loadGeo },
   };
 
   async function pick(folder: Folder) {
@@ -494,7 +494,7 @@
    */
   function inTurn(task: () => void | Promise<void>): Promise<void> {
     return queued(task).catch((e) => {
-      report({ key: "edit", level: "error", title: "編集できません。", detail: String(e) });
+      report({ key: "edit", level: "error", title: "編集に失敗", detail: String(e) });
     });
   }
 
@@ -513,8 +513,8 @@
       report({
         key: "ride",
         level: "warning",
-        title: "走行を開いていません。",
-        detail: "走行を選ぶか、日付を入れて作ってください。",
+        title: "走行未選択。",
+        detail: "走行を選択するか日付を入れて新規作成してください",
         action: { label: "走行を選ぶ", run: openRides },
       });
     }
@@ -596,7 +596,7 @@
       report({
         key: "save",
         level: "error",
-        title: "保存できません。",
+        title: "保存に失敗",
         detail: String(e),
         action: { label: "もう一度", run: retrySave },
       });
@@ -752,12 +752,12 @@
     const [open, offsetMs] = [openStop(events), clockOffsetMs];
     if (open !== null) {
       void editEvents((current) => patch(current, open.id, (event) => closeStop(event, realMs, offsetMs)));
-      tell("停車の終わりを入れました");
+      tell("停車終了を設定");
       return;
     }
     const stop = stopBetween(realMs, realMs, offsetMs);
     void editEvents((current) => insertByPosition(current, { ...stop, route_m: placeOf(current, realMs) }));
-    tell("停車の始まりを入れました。出るところまで動画を進めて、もう一度押します");
+    tell("停車開始を設定。走り出す位置でもう一度押してください");
   }
 
   const removeEvent = (id: string) => editEvents((current) => current.filter((event) => event.id !== id));
@@ -773,7 +773,7 @@
     placingId = null;
     if (id === undefined) return;
     void editEvents((current) => patch(current, id, (event) => pinStop(event, at, routeM)));
-    tell("停車の場所を決めました");
+    tell("停車位置を設定");
   }
 
   /** まとめて選んだイベントを、字幕なし（`hidden` が真）か字幕ありにする。 */
@@ -946,9 +946,9 @@
     dismiss("export");
     try {
       const rows = await invoke<number>("export_csv", { doc, path });
-      tell(`${rows} 件を書き出しました`);
+      tell(`${rows} 件をエクスポート`);
     } catch (e) {
-      report({ key: "export", level: "error", title: "書き出せません。", detail: String(e) });
+      report({ key: "export", level: "error", title: "エクスポートに失敗", detail: String(e) });
     }
   }
 
@@ -956,7 +956,7 @@
   async function exportEpisode(episode: Episode, name: string) {
     const dir = await open({
       directory: true,
-      title: "Resolve へ書き出すフォルダ",
+      title: "エクスポート先のフォルダ",
       defaultPath: localStorage.getItem(RESOLVE_DIR_KEY) ?? undefined,
     });
     if (dir === null) return;
@@ -975,16 +975,16 @@
         report({
           key: "resolve",
           level: "warning",
-          title: "同じ名前のファイルがあります。",
+          title: "同名のファイルあり",
           detail: result.names.join("、"),
-          action: { label: "上書きする", run: () => void writeResolve(episode, name, dir, true) },
+          action: { label: "上書き", run: () => void writeResolve(episode, name, dir, true) },
         });
       } else {
-        report({ key: "resolve", level: "done", title: "書き出しました。", detail: exportedMessage(name, result) });
+        report({ key: "resolve", level: "done", title: "エクスポート完了。", detail: exportedMessage(name, result) });
       }
       return result;
     } catch (e) {
-      report({ key: "resolve", level: "error", title: "書き出せません。", detail: String(e) });
+      report({ key: "resolve", level: "error", title: "エクスポートに失敗", detail: String(e) });
       return null;
     }
   }
@@ -1052,7 +1052,7 @@
         saveState = "saved";
         dismiss("save");
         await switchTo(pulled.ride.ride_date);
-        tell("クラウドの新しい内容を読み込みました");
+        tell("同期先の更新を読み込み");
       } else if (doc === null && (date === null ? booted : date === pulled.ride.ride_date)) {
         // 記録の無かった日付を開いているか、起動が済んでも何も開いていない。受け取った走行を出す。
         await switchTo(pulled.ride.ride_date);
@@ -1088,14 +1088,14 @@
         if (!Object.values(view.rides).includes("conflict")) dismiss("sync");
       },
       // 同期できなくても、編集と保存は続けられる。赤い帯は出さず、右下に短く出す。
-      offline: () => tell("手元には保存してあります。クラウドと同期できません。少し置いて、もう一度試します", "warning"),
+      offline: () => tell("同期できません。しばらくしてから再試行します", "warning"),
       conflicted: (id) =>
         report({
           key: "sync",
           level: "warning",
-          title: `${rideDateOf(id) ?? "ある日付"} の走行が、手元とクラウドの両方で変更されています。`,
+          title: `${rideDateOf(id) ?? "ある日付"} の走行が手元と同期先の両方で変更されています。`,
           detail: "どちらを残すかを選んでください。",
-          action: { label: "選ぶ", run: openRides },
+          action: { label: "選択", run: openRides },
         }),
     },
   );
@@ -1110,7 +1110,7 @@
     try {
       await sync.remove(id);
     } catch (e) {
-      const advice = "クラウドから消せないので、記録を消していません。通信できるときに、もう一度消してください。";
+      const advice = "同期先から削除できないため記録を残しました。通信できるときに再度削除してください";
       throw new Error(`${advice}${e}`);
     }
     try {
@@ -1136,7 +1136,7 @@
     } finally {
       sync.forget(id);
     }
-    tell("走行の記録を消しました");
+    tell("走行の記録を削除");
   }
 
   /** タイムラインを作り直すたびに進める番号。遅れて返った古い応答を使わないために持つ */
@@ -1181,8 +1181,8 @@
       tell(foundMessage(await invoke<FileStops[]>("find_stops", { files: used, onProgress })));
     } catch (e) {
       const text = String(e);
-      if (text.includes("やめました")) tell("停車位置探索をやめました。探し終えた動画の候補は残ります", "warning");
-      else report({ key: "stops", level: "error", title: "停車を探せません。", detail: text });
+      if (text.includes("やめました")) tell("停車位置探索を中止（探索済みの候補は残ります）", "warning");
+      else report({ key: "stops", level: "error", title: "停車位置探索に失敗", detail: text });
     } finally {
       stopProgress = null;
       // 探している間に、走行を切り替えたり動画を外したりしていることがある。いまの走行で読み直す。
@@ -1201,9 +1201,9 @@
         taken,
       });
       stopFiles = replaceStops(stopFiles, next);
-      tell(taken ? "停車の候補を採りました" : "停車の候補を外しました");
+      tell(taken ? "停車の候補を採用" : "停車の候補を除外");
     } catch (e) {
-      const title = taken ? "停車の候補を採れません。" : "停車の候補を外せません。";
+      const title = taken ? "停車の候補の採用に失敗" : "停車の候補の除外に失敗";
       report({ key: "stops", level: "error", title, detail: String(e) });
     }
   }
@@ -1216,9 +1216,9 @@
     try {
       const names = await invoke<string[]>("set_video_excluded", { date: rideDate, name, excluded });
       if (date === rideDate) excludedNames = names;
-      tell(excluded ? "動画を走行から除外しました" : "動画を走行に戻しました");
+      tell(excluded ? "動画を除外" : "動画の除外を解除");
     } catch (e) {
-      const title = excluded ? "動画を走行から外せません。" : "動画を走行に戻せません。";
+      const title = excluded ? "動画の除外に失敗" : "除外の解除に失敗";
       report({ key: "exclude", level: "error", title, detail: String(e) });
     }
   }
@@ -1526,7 +1526,7 @@
             <label class="follow float"><input type="checkbox" bind:checked={follow} />現在位置に追従</label>
             {#if placing !== null}
               <div class="placing float" role="status">
-                停車した場所を、経路の上で押します
+                停車位置を経路上でクリック
                 <button type="button" class="btn" onclick={() => (placingId = null)}>やめる Esc</button>
               </div>
             {/if}
@@ -1538,7 +1538,7 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="grip"
-        title="ドラッグで幅を変更、ダブルクリックで元に戻す"
+        title="ドラッグで幅を変更（ダブルクリックで元に戻す）"
         onpointerdown={resizeSide}
         ondblclick={resetSide}
       ></div>
@@ -1553,11 +1553,10 @@
       {:else}
         <div class="no-video">
           {#if date === null}
-            <b>走行を開いていません</b>
-            <button type="button" class="btn" onclick={openRides}>走行を選ぶ</button>
+            <b>走行未選択</b>
+            <button type="button" class="btn" onclick={openRides}>走行を選択</button>
           {:else if files.length > 0}
-            <b>この日付の動画は、すべて走行から除外してあります</b>
-            <span>下のタイムラインで、薄い帯を押すと戻せます。</span>
+            <b>すべての動画を除外中</b>
           {:else}
             <b>動画が割り当てられていません</b>
             <button type="button" class="btn" onclick={() => (settingsOpen = true)}>動画フォルダを選択</button>
@@ -1651,7 +1650,7 @@
       onpick={pick}
       onclock={setClockOffset}
       onsynced={() => {
-        tell("同期の接続先を保存しました");
+        tell("同期の接続先を保存");
         void sync.start();
       }}
       onclose={() => (settingsOpen = false)}

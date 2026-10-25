@@ -71,14 +71,14 @@
     {
       id: "road" as const,
       name: "道路データ",
-      note: "地図に重ねる国道・都道府県道の線。選ばなくても使えます",
+      note: "地図に重ねる国道・都道府県道の線（任意）",
       state: roadState,
       dir: config.road_data_dir,
     },
     {
       id: "geo" as const,
       name: "判定データ",
-      note: "イベントの抽出と「道に沿わせる」に使います",
+      note: "イベントの抽出と「道に沿わせる」に使用",
       state: geoState,
       dir: config.geo_data_dir,
     },
@@ -156,9 +156,9 @@
           {:else if folder.state === "loading"}
             <span class="pill muted">読み込み中…</span>
           {:else if folder.state === "error"}
-            <span class="pill warn"><Icon name="warning" size={13} />開けません</span>
+            <span class="pill warn"><Icon name="warning" size={13} />読み込み失敗</span>
           {:else}
-            <span class="pill warn"><Icon name="warning" size={13} />まだ選んでいません</span>
+            <span class="pill warn"><Icon name="warning" size={13} />未選択</span>
           {/if}
         </span>
         <button
@@ -168,7 +168,7 @@
           disabled={folder.state === "loading"}
           onclick={() => onpick(folder.id)}
         >
-          {folder.dir ? "再選択" : "フォルダを選ぶ"}
+          {folder.dir ? "再選択" : "フォルダを選択"}
         </button>
         <span class="sub note">
           {folder.note}{#if folder.dir}<span class="mono dir" title={folder.dir}>{folder.dir}</span>{/if}
@@ -182,7 +182,7 @@
       <b>時計の補正</b>
       <span class="sub">
         {#if rideDate === null}
-          時計のずれを補正します。走行を開くと補正できます
+          時計のずれを補正します（走行を開くと有効）
         {:else}
           時計のずれを補正します。<span class="mono">{rideDate}</span> の走行に有効です
         {/if}
@@ -223,7 +223,7 @@
   <section class="leads">
     <div class="text">
       <b>マーカーの前倒し</b>
-      <span class="sub">Resolve へエクスポートするマーカーを早める秒数</span>
+      <span class="sub">エクスポートするマーカーを早める秒数</span>
     </div>
     {#if leads !== null}
       <div class="lead-grid">
@@ -252,17 +252,17 @@
 
   <section class="line">
     <div class="text">
-      <b>クラウド同期の接続先</b>
+      <b>同期の接続先</b>
     </div>
     {#if savedUrl !== undefined}
       {#if syncReady}
         <span class="pill ok"><Icon name="check" size={13} />設定済み</span>
       {:else}
-        <span class="pill warn"><Icon name="warning" size={13} />まだ設定していません</span>
+        <span class="pill warn"><Icon name="warning" size={13} />未設定</span>
       {/if}
       {#if !editingSync}
         <button type="button" class="btn" class:primary={!syncReady} onclick={() => (editingSync = true)}>
-          {syncReady ? "変更" : "設定する"}
+          {syncReady ? "変更" : "設定"}
         </button>
       {/if}
     {/if}
@@ -278,7 +278,7 @@
         <input
           class="field"
           bind:value={clientId}
-          placeholder={hasToken ? "保存済み。替えるときだけ入れる" : ""}
+          placeholder={hasToken ? "保存済み（変更時のみ入力）" : ""}
           spellcheck="false"
         />
       </label>
@@ -288,12 +288,12 @@
           class="field"
           type="password"
           bind:value={clientSecret}
-          placeholder={hasToken ? "保存済み。替えるときだけ入れる" : ""}
+          placeholder={hasToken ? "保存済み（変更時のみ入力）" : ""}
         />
       </label>
       <div class="wide buttons">
         {#if syncMessage !== ""}<span class="failed"><Icon name="error" />{syncMessage}</span>{/if}
-        <button type="button" class="btn" onclick={() => (editingSync = false)}>やめる</button>
+        <button type="button" class="btn" onclick={() => (editingSync = false)}>キャンセル</button>
         <button type="submit" class="btn primary" disabled={busy}>接続先を保存</button>
       </div>
     </form>

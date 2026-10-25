@@ -165,7 +165,7 @@ pub async fn render_overview(
     let [num, den] = motion.fps;
     let motion = Motion {
         fps: Fps::new(num, den)
-            .ok_or_else(|| format!("フレームレート {num}/{den} では書き出せません"))?,
+            .ok_or_else(|| format!("フレームレート {num}/{den} は非対応です"))?,
         lead_seconds: motion.lead_seconds.clamp(0.0, 30.0),
         zoom_seconds: motion.zoom_seconds.clamp(0.0, 30.0),
         hold_seconds: motion.hold_seconds.clamp(0.0, 120.0),

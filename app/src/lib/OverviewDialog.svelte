@@ -134,7 +134,7 @@
 
   async function render() {
     const path = await save({
-      title: "概略図の動画を書き出す",
+      title: "概略図生成",
       defaultPath:
         episode === null
           ? fileName(doc.ride.title, from, to, doc.waypoints.length)
@@ -155,10 +155,10 @@
         onProgress,
       });
       const name = path.split(/[\\/]/).at(-1) ?? path;
-      message = { tone: "ok", text: `${name} を書き出しました` };
+      message = { tone: "ok", text: `${name} を生成` };
     } catch (e) {
       const text = String(e);
-      message = { tone: "error", text: text.includes("やめました") ? "書き出しをやめました" : text };
+      message = { tone: "error", text: text.includes("やめました") ? "生成を中止" : text };
     }
     progress = null;
   }
@@ -189,7 +189,7 @@
         <img src={previewUrl} alt={still === "start" ? "最初の見本" : "止まった所の見本"} />
       {/if}
       {#if !valid}
-        <span class="state">始点より後の経由地を、終点に選んでください</span>
+        <span class="state">終点は始点より後の経由地を選択</span>
       {:else if previewError !== ""}
         <span class="state error"><Icon name="error" />{previewError}</span>
       {:else if previewing}

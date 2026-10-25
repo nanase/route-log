@@ -372,7 +372,7 @@ export async function runSyncCheck(apiUrl: string, step: string, map: MapHandle,
       await sleep(300);
       const asking = document.querySelector("dialog .asking")?.textContent?.replace(/\s+/g, " ").trim() ?? "";
       await capture("delete-ask");
-      note("ごみ箱のボタンを押す", "「クラウドからも消えます」と「動画のファイルは消えません」が出る。「クラウドからも消す」の選択は無い", asking.includes("クラウドからも消えます") && asking.includes("動画のファイルは消えません") && document.querySelector("dialog .asking input") === null, {
+      note("ごみ箱のボタンを押す", "「同期先からも削除します」と「動画ファイルは残ります」が出る。「同期先からも消す」の選択は無い", asking.includes("同期先からも削除します") && asking.includes("動画ファイルは残ります") && document.querySelector("dialog .asking input") === null, {
         asking,
       });
 
@@ -385,7 +385,7 @@ export async function runSyncCheck(apiUrl: string, step: string, map: MapHandle,
       note(
         "通信できないときに消そうとする",
         "消さずに理由を出す。手元にもクラウドにも、走行が残る",
-        refused.includes("クラウドから消せない") && (await local(ride.id)) && app.doc()?.ride.id === ride.id && (await cloudTitle(ride.id)) !== null,
+        refused.includes("同期先から削除できない") && (await local(ride.id)) && app.doc()?.ride.id === ride.id && (await cloudTitle(ride.id)) !== null,
         { message: refused, local: await local(ride.id), open: app.doc()?.ride.id === ride.id, cloud: await cloudTitle(ride.id) },
       );
 

@@ -97,7 +97,7 @@
           onclick={() => add(option.name)}
         >
           {#if option.fresh}
-            <span class="fresh">「{option.name}」を新しく付ける</span>
+            <span class="fresh">「{option.name}」を新規追加</span>
           {:else}
             <LabelTag name={option.name} />
             <span class="count mono">{option.count} 件</span>

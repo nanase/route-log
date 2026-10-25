@@ -106,15 +106,12 @@ export function exportBlocker(hasExtent: boolean, spans: Span[] | null, recorded
   return null;
 }
 
-/** Resolve へ書き出したあとに出す知らせ。マーカーの読み込み方も添える。 */
+/** エクスポートしたあとに出す知らせ。マーカーの読み込み方も添える。 */
 export function exportedMessage(name: string, written: Extract<Exported, { outcome: "written" }>): string {
-  const cuts = written.cuts > 0 ? `停車 ${written.cuts} か所（${minutesSeconds(written.cutMs)}）を抜き、` : "";
-  const unplaced =
-    written.unplaced > 0
-      ? `${written.unplaced} 個のイベントは、録画の外か抜いた所にあるので、マーカーにしていません。`
-      : "";
+  const cuts = written.cuts > 0 ? `・停車 ${written.cuts} か所（${minutesSeconds(written.cutMs)}）を除外` : "";
+  const unplaced = written.unplaced > 0 ? `（録画外の ${written.unplaced} 個を除く）` : "";
   return (
-    `「${name}」のソース ${hms(written.lengthMs)}。${cuts}マーカーは ${written.markers} 個です。${unplaced}` +
-    "マーカーは、メディアプールでタイムラインを右クリックし、「タイムライン」>「読み込み」>「EDL からタイムラインマーカー」で読み込みます。"
+    `「${name}」のソース ${hms(written.lengthMs)}${cuts}・マーカー ${written.markers} 個${unplaced}。` +
+    "マーカーの読み込み：メディアプールでタイムラインを右クリック →「タイムライン」>「読み込み」>「EDL からタイムラインマーカー」"
   );
 }

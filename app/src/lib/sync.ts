@@ -226,7 +226,7 @@ export class CloudSync {
           // ここまでの保存は、次の送信に入る。
           this.again.delete(id);
           const outcome = await this.backend.push(id, true);
-          if (outcome === "conflict") throw new Error("クラウドの走行が、また書き換えられました。もう一度選んでください");
+          if (outcome === "conflict") throw new Error("同期先の走行が再び更新されました。もう一度選択してください");
         } else {
           const doc = await this.backend.fetch(id);
           await this.host.apply(doc, null, true);

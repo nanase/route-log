@@ -58,7 +58,7 @@ pub async fn export_resolve(
         .ok_or("パートが見つかりません")?;
     let extent = doc
         .extent(episode)
-        .ok_or("パートの範囲が正しくありません。終わりは、始まりより後の経由地にします")?;
+        .ok_or("パートの範囲が不正です（終点は始点より後の経由地に）")?;
     let timeline = videos
         .current()
         .filter(|t| !t.files().is_empty())

@@ -93,13 +93,13 @@
     {:else if status === "saving"}
       <span class="state busy"><span class="spinner"></span>保存中…</span>
     {:else if status === "syncing"}
-      <span class="state busy" title="クラウドと同期しています"><span class="spinner"></span>同期中…</span>
+      <span class="state busy" title="同期中"><span class="spinner"></span>同期中…</span>
     {:else if status === "synced"}
       <span class="state done" title="同期済み"><Icon name="check" />同期済み</span>
     {:else if status === "unsynced"}
       <span
         class="state behind"
-        title={`クラウドと同期できなかったため、しばらくしてから再試行されます${failure ? `: ${failure}` : ""}`}
+        title={`同期できなかったため、しばらくしてから再試行されます${failure ? `: ${failure}` : ""}`}
       >
         <span class="dot"></span>未同期
       </span>
@@ -114,7 +114,7 @@
         <Icon name="warning" size={13} />両方で変更
       </button>
     {:else if status === "save_error"}
-      <span class="pill danger"><Icon name="error" size={13} />保存できません</span>
+      <span class="pill danger"><Icon name="error" size={13} />保存失敗</span>
       <button type="button" class="btn small" onclick={onretry}>もう一度</button>
     {/if}
   </div>

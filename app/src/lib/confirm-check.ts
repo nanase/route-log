@@ -395,7 +395,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   const stopRow = document.querySelector<HTMLElement>(`.rows [data-id="${stopId}"]`);
   if (stopRow?.getAttribute("aria-expanded") !== "true") stopRow?.click();
   await sleep(300);
-  pressIn(".place .btn", "地図で決める");
+  pressIn(".place .btn", "地図で指定");
   await sleep(200);
   const banner = text(".placing");
   await player.seek(pauseAt - 60_000);
@@ -418,7 +418,7 @@ export async function runConfirmCheck(timeline: Timeline, player: PlayerHandle, 
   ];
   const apart = (a: LonLat | null, b: LonLat | null) => (a === null || b === null ? null : Math.round(distanceM(a, b)));
   note(
-    "停車の行で「地図で決める」を押し、止まる 1 分前の推定位置を地図で押す",
+    "停車の行で「地図で指定」を押し、止まる 1 分前の推定位置を地図で押す",
     "地図に案内が出る。停車の位置が押した所に移り、停車の間の現在位置は押した所に止まる。停車の終わりで飛ばず、2 秒後も数十 m 以内",
     {
       banner,

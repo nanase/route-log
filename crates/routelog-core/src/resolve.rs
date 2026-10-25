@@ -60,11 +60,11 @@ impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoTimes => f.write_str(
-                "始まりか終わりの経由地を通った時刻が推定できていません。前後のイベントの時刻を確定してください",
+                "始点か終点の通過時刻が未推定です。前後のイベントの時刻を確定してください",
             ),
             Self::NotRecorded => f.write_str("パートの範囲に動画がありません"),
             Self::FrameRate(files) => {
-                f.write_str("59.94 fps でない動画があります。Resolve のタイムラインは 59.94 fps です：")?;
+                f.write_str("59.94 fps 以外の動画があります：")?;
                 let listed: Vec<String> = files
                     .iter()
                     .map(|(name, (num, den))| format!("{name}（{} fps）", fps(*num, *den)))
@@ -72,7 +72,11 @@ impl fmt::Display for Problem {
                 f.write_str(&listed.join("、"))
             }
             Self::NoTimecode(names) => {
-                write!(f, "タイムコードを読めない動画があります：{}", names.join("、"))
+                write!(
+                    f,
+                    "タイムコードを読めない動画があります：{}",
+                    names.join("、")
+                )
             }
         }
     }

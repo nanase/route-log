@@ -80,7 +80,7 @@
         {/if}
       </button>
     {:else}
-      <p class="empty">地図をクリックして、経由地を追加してください。</p>
+      <p class="empty">地図をクリックして経由地を追加</p>
     {/each}
   </div>
 

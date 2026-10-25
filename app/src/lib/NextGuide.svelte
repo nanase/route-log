@@ -58,11 +58,11 @@
     {#if target === null}
       <span class="lead">次の候補</span>
       {#if count === 0}
-        <span class="name none">イベントがまだありません</span>
+        <span class="name none">イベントなし</span>
       {:else if !hasVideo}
-        <span class="name none">動画がありません</span>
+        <span class="name none">動画なし</span>
       {:else}
-        <span class="name none">確定を待つイベントはありません</span>
+        <span class="name none">未確定のイベントなし</span>
       {/if}
     {:else}
       <span class="lead">
@@ -75,7 +75,7 @@
       </span>
       <span class="mono time">
         {#if target.time_ms === null}
-          推定なし。前後を確定すると出ます
+          推定なし
         {:else if confirmed}
           確定 {clock(target.time_ms)}
         {:else}
@@ -92,7 +92,7 @@
       disabled={target === null || !hasVideo}
       title={hasVideo ? "再生位置の時刻で確定" : "動画がないため、一覧で時刻を入力してください"}
     >
-      {confirmed ? "時刻を確定し直す" : "時刻を確定"}<kbd>Enter</kbd>
+      {confirmed ? "時刻を再確定" : "時刻を確定"}<kbd>Enter</kbd>
     </button>
     <div class="more">
       <button type="button" class="btn" onclick={() => onmove(-1)} title="前のイベントへ">前<kbd>P</kbd></button>
@@ -124,8 +124,8 @@
         onclick={onstop}
         disabled={!hasVideo}
         title={stopOpen
-          ? "再生位置を停車の終わりにする"
-          : "再生位置を停車の始まりにします。録画したまま止まっていたときに使い、走り出す位置でもう一度押します"}
+          ? "再生位置を停車終了に設定"
+          : "再生位置を停車開始に設定（走り出す位置でもう一度押す）"}
       >
         {stopOpen ? "停車終了" : "停車"}<kbd>S</kbd>
       </button>

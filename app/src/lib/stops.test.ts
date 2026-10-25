@@ -60,7 +60,7 @@ test("動画 1 本の候補を差し替え、無ければ足す", () => {
 });
 
 test("知らせには、候補の数と外した数を書く", () => {
-  expect(foundMessage([])).toBe("停車の候補は見つかりませんでした");
-  expect(foundMessage([stops(FIRST, [0, 10]), stops(SECOND, [0, 10])])).toBe("停車の候補が 2 件あります");
-  expect(foundMessage([stops(FIRST, [0, 10, false], [20, 30])])).toBe("停車の候補が 2 件あります（1 件は外してあります）");
+  expect(foundMessage([])).toBe("停車の候補なし");
+  expect(foundMessage([stops(FIRST, [0, 10]), stops(SECOND, [0, 10])])).toBe("停車の候補 2 件");
+  expect(foundMessage([stops(FIRST, [0, 10, false], [20, 30])])).toBe("停車の候補 2 件（除外 1 件）");
 });
