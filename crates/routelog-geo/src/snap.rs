@@ -119,7 +119,7 @@ pub fn usable(road: &Road) -> bool {
     road.kind == "road" && !road.motorroad
 }
 
-fn key(point: LonLat) -> (u64, u64) {
+pub(crate) fn key(point: LonLat) -> (u64, u64) {
     (point[0].to_bits(), point[1].to_bits())
 }
 

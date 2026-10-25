@@ -8,6 +8,37 @@ use std::collections::BTreeSet;
 
 use routelog_core::{RouteClass, RouteRef, route_name};
 
+/// 経路が通る交差点。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Junction {
+    /// 経路の始点からの距離（m）。
+    pub route_m: f64,
+    /// 交差点に来ている国道。番号の若い順で、重ならない。
+    pub touching: Vec<RouteRef>,
+}
+
+/// 経路の上で、まとめ始めた交差点から `merge_m` 以内にある交差点を 1 つにまとめる。位置は
+/// 最初の交差点にする。
+///
+/// 上下線が分かれた道やずれた交差点は、地図データでは何点かに分かれている。升目の境にある
+/// 交差点は、両方の升目から同じ位置に出てくる。交差点の続く市街でも、まとめるのは
+/// `merge_m` の幅までである。
+pub(crate) fn merge(mut points: Vec<Junction>, merge_m: f64) -> Vec<Junction> {
+    points.sort_by(|a, b| a.route_m.total_cmp(&b.route_m));
+    let mut merged: Vec<Junction> = Vec::new();
+    for point in points {
+        match merged.last_mut() {
+            Some(junction) if point.route_m - junction.route_m <= merge_m => {
+                let all: BTreeSet<RouteRef> =
+                    junction.touching.drain(..).chain(point.touching).collect();
+                junction.touching = all.into_iter().collect();
+            }
+            _ => merged.push(point),
+        }
+    }
+    merged
+}
+
 /// 交差点の名前。
 ///
 /// `before` と `after` は交差点の前と後で走る路線、`touching` は交差点に来ている路線。
