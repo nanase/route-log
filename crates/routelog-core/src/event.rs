@@ -254,11 +254,13 @@ impl From<Stored> for Event {
 /// 経路から抽出し直したイベントに、人が手を入れた結果を引き継ぐ。
 ///
 /// - 抽出したイベントは、同じ種類で、抽出したときの名前が同じで、位置が近い元のイベントが
-///   あれば、その ID・状態・時刻・字幕にするかどうか・人が直した名前を受け継ぐ。位置は新しい
-///   経路のものにする
+///   あれば、その ID・状態・時刻・字幕にするかどうか・人が直した名前を受け継ぐ。位置と公称の
+///   名前・長さは新しいものにする
+/// - 橋・トンネルの字幕にするかどうかは、人が切り替えたものだけを受け継ぐ。ほかは抽出で決め直す
 /// - 抽出しないイベント（出発・到着・経由点・手動）は、そのまま残す
 /// - 受け継ぐ相手のいない元のイベントは消える
-/// - 名前の無い橋は、人が名前を付けていなければ捨てる。字幕にできず、一覧を埋めるだけになる
+/// - 名前の無い橋は、人が名前を付けておらず、公称の名前も無ければ捨てる。字幕にできず、一覧を
+///   埋めるだけになる
 ///
 /// 結果は位置の順に並ぶ。
 pub fn carry_over(existing: &[Event], extracted: Vec<Event>) -> Vec<Event> {
@@ -288,14 +290,27 @@ pub fn carry_over(existing: &[Event], extracted: Vec<Event>) -> Vec<Event> {
                 event.detail.extracted_label = Some(event.label.clone());
                 event.detail.camera_ms = old.detail.camera_ms;
                 event.id = old.id.clone();
-                event.label = old.label.clone();
+                if old.renamed() {
+                    event.label = old.label.clone();
+                    event.detail.named_by_hand = old.detail.named_by_hand;
+                }
                 event.time_ms = old.time_ms;
                 event.status = old.status;
-                event.hidden = old.hidden;
+                // 橋・トンネルの字幕の有無は、公称の長さが後から届くことがあるので、人が切り替えて
+                // いなければ決め直す。
+                let decided = matches!(event.kind, EventKind::Bridge | EventKind::Tunnel);
+                if !decided || old.detail.hidden_by_hand {
+                    event.hidden = old.hidden;
+                    event.detail.hidden_by_hand = old.detail.hidden_by_hand;
+                }
             }
             event
         })
-        .filter(|event| event.kind != EventKind::Bridge || !event.label.is_empty())
+        .filter(|event| {
+            event.kind != EventKind::Bridge
+                || !event.label.is_empty()
+                || event.detail.official_name.is_some()
+        })
         .collect();
     events.extend(existing.iter().filter(|e| !e.kind.is_extracted()).cloned());
     events.sort_by(|a, b| a.route_m.total_cmp(&b.route_m));
@@ -434,13 +449,15 @@ mod tests {
 
     #[test]
     fn a_short_bridge_a_person_chose_to_show_stays_shown() {
-        let old = [event(
+        let mut shown = event(
             "a",
             EventKind::Bridge,
             "短い橋",
             1000.0,
             EventStatus::Estimated,
-        )];
+        );
+        shown.detail.hidden_by_hand = true;
+        let old = [shown];
         let mut short = extracted(EventKind::Bridge, "短い橋", 1000.0);
         short.hidden = true;
         let new = carry_over(&old, vec![short]);
@@ -457,6 +474,7 @@ mod tests {
             EventStatus::Confirmed,
         );
         old.hidden = true;
+        old.detail.hidden_by_hand = true;
         let new = carry_over(
             &[old],
             vec![extracted(EventKind::Tunnel, "白地トンネル", 1010.0)],
@@ -563,6 +581,126 @@ mod tests {
         let json = serde_json::to_string(&timed).unwrap();
         assert!(json.contains(r#""hidden":true"#), "{json}");
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), timed);
+    }
+
+    fn with_official(mut e: Event, name: &str, length_m: f64) -> Event {
+        e.detail.extracted_label = Some(e.label.clone());
+        e.detail.official_name = Some(name.into());
+        e.detail.official_length_m = Some(length_m);
+        e
+    }
+
+    #[test]
+    fn a_renamed_event_keeps_its_name_and_time() {
+        let mut old = event(
+            "a",
+            EventKind::Tunnel,
+            "山吹トンネル",
+            1000.0,
+            EventStatus::Confirmed,
+        );
+        old.detail.extracted_label = Some(String::new());
+        let new = carry_over(
+            &[old],
+            vec![with_official(
+                extracted(EventKind::Tunnel, "", 1010.0),
+                "池沢隧道",
+                379.0,
+            )],
+        );
+        assert_eq!(new.len(), 1);
+        assert_eq!(
+            (new[0].id.as_str(), new[0].label.as_str()),
+            ("a", "山吹トンネル")
+        );
+        assert_eq!(new[0].status, EventStatus::Confirmed);
+        assert_eq!(new[0].detail.official_name.as_deref(), Some("池沢隧道"));
+        assert_eq!(new[0].shown_name(), "山吹トンネル 379m");
+    }
+
+    #[test]
+    fn an_untouched_unnamed_tunnel_takes_the_new_name_and_keeps_its_time() {
+        let mut old = event("a", EventKind::Tunnel, "", 1000.0, EventStatus::Confirmed);
+        old.detail.extracted_label = Some(String::new());
+        let new = carry_over(
+            &[old],
+            vec![with_official(
+                extracted(EventKind::Tunnel, "", 1010.0),
+                "池沢隧道",
+                379.0,
+            )],
+        );
+        assert_eq!((new[0].id.as_str(), new[0].time_ms), ("a", Some(1_000)));
+        assert_eq!(new[0].shown_name(), "池沢隧道 379m");
+    }
+
+    #[test]
+    fn a_name_chosen_by_hand_stays_chosen() {
+        let mut old = event(
+            "a",
+            EventKind::Tunnel,
+            "新鳥居トンネル",
+            1000.0,
+            EventStatus::Confirmed,
+        );
+        old.detail.named_by_hand = true;
+        let new = carry_over(
+            &[old],
+            vec![with_official(
+                extracted(EventKind::Tunnel, "新鳥居トンネル", 1000.0),
+                "鳥居トンネル",
+                1738.0,
+            )],
+        );
+        assert!(new[0].detail.named_by_hand);
+        assert_eq!(new[0].shown_name(), "新鳥居トンネル 1738m");
+    }
+
+    #[test]
+    fn a_bridge_is_shown_again_by_the_new_rule_unless_switched_by_hand() {
+        let mut old = event(
+            "a",
+            EventKind::Bridge,
+            "明治橋",
+            1000.0,
+            EventStatus::Estimated,
+        );
+        old.hidden = true;
+        let new = carry_over(
+            &[old.clone()],
+            vec![extracted(EventKind::Bridge, "明治橋", 1000.0)],
+        );
+        assert!(!new[0].hidden);
+        old.detail.hidden_by_hand = true;
+        let new = carry_over(&[old], vec![extracted(EventKind::Bridge, "明治橋", 1000.0)]);
+        assert!(new[0].hidden && new[0].detail.hidden_by_hand);
+    }
+
+    #[test]
+    fn a_road_event_still_keeps_its_hidden() {
+        let mut old = event(
+            "a",
+            EventKind::Road,
+            "国道19号",
+            1000.0,
+            EventStatus::Estimated,
+        );
+        old.hidden = true;
+        let new = carry_over(&[old], vec![extracted(EventKind::Road, "国道19号", 1000.0)]);
+        assert!(new[0].hidden);
+    }
+
+    #[test]
+    fn an_unnamed_bridge_with_an_official_name_is_kept() {
+        let new = carry_over(
+            &[],
+            vec![
+                with_official(extracted(EventKind::Bridge, "", 1000.0), "元橋", 212.0),
+                extracted(EventKind::Bridge, "", 2000.0),
+            ],
+        );
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].shown_name(), "元橋 212m");
     }
 
     fn structure(kind: EventKind, label: &str) -> Event {
