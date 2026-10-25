@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import Spinner from "./Spinner.svelte";
   import type { BarState } from "./sync";
   import type { Mode } from "./ui";
 
@@ -91,9 +92,9 @@
     {#if status === "saved"}
       <span class="state done"><Icon name="check" />保存済み</span>
     {:else if status === "saving"}
-      <span class="state busy"><span class="spinner"></span>保存中…</span>
+      <span class="state busy"><Spinner />保存中…</span>
     {:else if status === "syncing"}
-      <span class="state busy" title="同期中"><span class="spinner"></span>同期中…</span>
+      <span class="state busy" title="同期中"><Spinner />同期中…</span>
     {:else if status === "synced"}
       <span class="state done" title="同期済み"><Icon name="check" />同期済み</span>
     {:else if status === "unsynced"}
@@ -140,7 +141,7 @@
       aria-label="停車位置探索をやめる"
       title="停車位置の探索を中止します。探索済みの候補は残ります"
     >
-      <Icon name="close" />{compact ? "" : "中止 "}<span class="mono">{Math.floor(stopProgress * 100)}%</span>
+      <Spinner />{compact ? "" : "中止 "}<span class="mono">{Math.floor(stopProgress * 100)}%</span>
     </button>
   {/if}
   <button
@@ -227,15 +228,6 @@
   }
   .behind {
     color: var(--warn-ink);
-  }
-  .spinner {
-    box-sizing: border-box;
-    width: 12px;
-    height: 12px;
-    border: 2px solid var(--line-strong);
-    border-top-color: var(--ink-2);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
   }
   .dot {
     width: 8px;

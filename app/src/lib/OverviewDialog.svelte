@@ -3,6 +3,7 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { onDestroy, onMount, untrack } from "svelte";
   import Icon from "./Icon.svelte";
+  import Spinner from "./Spinner.svelte";
   import {
     clampMotion,
     creditImages,
@@ -193,7 +194,7 @@
       {:else if previewError !== ""}
         <span class="state error"><Icon name="error" />{previewError}</span>
       {:else if previewing}
-        <span class="state busy">写真を読み込み中…</span>
+        <span class="state busy"><Spinner />写真を読み込み中…</span>
       {/if}
     </div>
     <div class="caption">
@@ -332,7 +333,7 @@
     {#if progress !== null}
       <div class="progress">
         <span class="sub">
-          {progress.phase === "tiles" ? "写真を取得中" : "動画を生成中"}
+          <Spinner />{progress.phase === "tiles" ? "写真を取得中" : "動画を生成中"}
           <span class="mono">{progress.done} / {progress.total}</span>
         </span>
         <div class="bar"><div style:width="{percent}%"></div></div>

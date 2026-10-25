@@ -22,6 +22,7 @@
     reverse: '<path d="M17 6v12L7 12z"/>',
     pause: '<path d="M9 6v12M15 6v12"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>',
+    layers: '<path d="M12 4l8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4"/>',
     help: '<path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 16.5v.5"/><circle cx="12" cy="12" r="9"/>',
   } as const;
 

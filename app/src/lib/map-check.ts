@@ -473,5 +473,29 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
   captures.push(await capture("settings"));
   await app.showSettings(false);
 
+  // 操作方法を閉じると、縮尺はボタンの右へ寄る。開閉は次の起動にも残る。
+  const scaleLeft = () => document.querySelector<HTMLElement>(".maplibregl-ctrl-scale")?.getBoundingClientRect().left ?? null;
+  const hintsRight = () =>
+    document.querySelector<HTMLElement>(".left > section[aria-label='操作方法'], .left > .closed")?.getBoundingClientRect().right ?? null;
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+  await sleep(300);
+  note("? で操作方法を閉じる", "閉じたボタンの右に縮尺が出て、重ならない。覚えが off になる", {
+    hintsRight: hintsRight(),
+    scaleLeft: scaleLeft(),
+    stored: localStorage.getItem("routelog.hints"),
+  });
+  captures.push(await capture("hints-closed"));
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+  await sleep(300);
+
+  // 地図の表示の板を、拡大・縮小の下のボタンで開く。
+  document.querySelector<HTMLButtonElement>(".layers .toggle")?.click();
+  await sleep(300);
+  note("拡大・縮小の下のボタンを押す", "背景地図の 3 つと、道路の線の欄の板が開く", {
+    tiles: document.querySelectorAll(".layers .tile").length,
+  });
+  captures.push(await capture("layers"));
+  document.querySelector<HTMLButtonElement>(".layers .toggle")?.click();
+
   return { steps, captures };
 }

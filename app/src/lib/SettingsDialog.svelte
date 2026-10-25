@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import Icon from "./Icon.svelte";
+  import Spinner from "./Spinner.svelte";
   import type { Config, MarkerLeads } from "./types";
   import type { Folder, FolderState } from "./ui";
 
@@ -154,7 +155,7 @@
           {#if folder.state === "ready"}
             <span class="pill ok"><Icon name="check" size={13} />読み込み済み</span>
           {:else if folder.state === "loading"}
-            <span class="pill muted">読み込み中…</span>
+            <span class="pill muted"><Spinner size={11} />読み込み中…</span>
           {:else if folder.state === "error"}
             <span class="pill warn"><Icon name="warning" size={13} />読み込み失敗</span>
           {:else}

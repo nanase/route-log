@@ -2,6 +2,7 @@
   import EventName from "./EventName.svelte";
   import { asideOf, confirmTyped, inStop, retimeStop, setHidden, stopsOf, unconfirm, unpinStop } from "./events";
   import Icon from "./Icon.svelte";
+  import Spinner from "./Spinner.svelte";
   import { KIND_ORDER, KINDS } from "./kinds";
   import { nameChoices, setName, shownName } from "./names";
   import KindTag from "./KindTag.svelte";
@@ -31,6 +32,7 @@
     onremove,
     onplace,
     onextract,
+    extracting,
   }: {
     events: RideEvent[];
     /** 次の候補 */
@@ -54,6 +56,8 @@
     onplace: (id: string | null) => void;
     /** 抽出し直す。判定用データを開いていなければ null */
     onextract: (() => void) | null;
+    /** 抽出し直している最中 */
+    extracting: boolean;
   } = $props();
 
   /** 状態での絞り込み。未確定は、字幕にするもののうち、まだ確定していないもの */
@@ -220,9 +224,10 @@
         class="btn small icon-only"
         aria-label="再抽出"
         title="経路からイベントを再抽出"
+        disabled={extracting}
         onclick={onextract}
       >
-        <Icon name="refresh" />
+        {#if extracting}<Spinner size={14} />{:else}<Icon name="refresh" />{/if}
       </button>
     {/if}
   </header>

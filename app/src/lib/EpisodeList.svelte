@@ -1,6 +1,7 @@
 <script lang="ts">
   import { exportBlocker, extentOf, nameOf, RECORDED_LIMIT_MS, recordedOf } from "./episodes";
   import Icon from "./Icon.svelte";
+  import Spinner from "./Spinner.svelte";
   import { endpointsOf } from "./overview";
   import type { Path } from "./route";
   import type { Episode, RideEvent, Span } from "./types";
@@ -18,6 +19,7 @@
     onchange,
     onremove,
     onexport,
+    exportingId,
   }: {
     path: Path;
     events: RideEvent[];
@@ -27,8 +29,10 @@
     onadd: () => void;
     onchange: (id: string, change: Partial<Omit<Episode, "id">>) => void;
     onremove: (id: string) => void;
-    /** Resolve へ書き出す。`name` は画面に出している回の名前 */
+    /** エクスポートする。`name` は画面に出しているパートの名前 */
     onexport: (episode: Episode, name: string) => void;
+    /** エクスポートしているパート */
+    exportingId: string | null;
   } = $props();
 
   const ends = $derived(endpointsOf({ ...path, events }));
@@ -102,10 +106,10 @@
           class="btn small icon-only ghost export"
           aria-label="{nameOf(episode, index)}をエクスポート"
           title={blocker ?? "停車を除いたソースタイムライン（FCPXML）と字幕位置のマーカー（EDL）をエクスポートします"}
-          disabled={blocker !== null}
+          disabled={blocker !== null || exportingId !== null}
           onclick={() => onexport(episode, nameOf(episode, index))}
         >
-          <Icon name="export" size={14} />
+          {#if exportingId === episode.id}<Spinner size={14} />{:else}<Icon name="export" size={14} />{/if}
         </button>
         <button
           type="button"

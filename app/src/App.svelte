@@ -32,6 +32,7 @@
   import { distancesAlong, pointAt } from "./lib/geo";
   import Icon from "./lib/Icon.svelte";
   import Hints from "./lib/Hints.svelte";
+  import MapLayers from "./lib/MapLayers.svelte";
   import { forShortcut, keepKeys } from "./lib/keys";
   import { KINDS } from "./lib/kinds";
   import { shownName } from "./lib/names";
@@ -276,7 +277,9 @@
     mode === "route" ? { top: 68, right: 324, bottom: 12, left: 248 } : { top: 68, right: 12, bottom: 12, left: 12 },
   );
   /** 地図の縮尺を置く位置。左下に浮かせた板の右へ逃がす */
-  const scaleLeft = $derived(mode === "confirm" ? 168 : hintsShown ? 362 : 112);
+  /** 左下の操作方法の板（閉じていればボタン）の幅 */
+  let hintsWidth = $state(0);
+  const scaleLeft = $derived(mode === "confirm" ? 168 : hintsWidth + 24);
   /** 上の帯に 1 つだけ出す、保存と同期の状態 */
   const bar = $derived(barState(doc === null ? null : saveState, syncView));
   /** 上の帯に出す、開いている走行の動画の要約 */
@@ -410,8 +413,8 @@
     }
   }
 
-  /** 人が「再抽出」を押した。抽出し終えたら知らせる */
-  let extractAsked = false;
+  /** 人が「再抽出」を押し、抽出し終えるのを待っている。ボタンに動いていることを出す */
+  let extractAsked = $state(false);
 
   /** 「再抽出」のボタン。結果が前と同じでも、抽出し終えたことが分かるように知らせる。 */
   function extractByHand() {
@@ -592,6 +595,7 @@
       sync.saved(saving.ride.id);
     } catch (e) {
       extractNeeded ||= extract;
+      if (extract) extractAsked = false;
       saveState = "error";
       report({
         key: "save",
@@ -953,6 +957,9 @@
   }
 
   /** 回を Resolve へ書き出す。書き出し先のフォルダは、前に選んだ所から選び直す。 */
+  /** エクスポートしているパート。動画を読むので数秒かかる */
+  let exportingId = $state<string | null>(null);
+
   async function exportEpisode(episode: Episode, name: string) {
     const dir = await open({
       directory: true,
@@ -967,6 +974,7 @@
   /** 同じ名前のファイルがあれば、`overwrite` でない限り書かずに、上書きするかを尋ねる。 */
   async function writeResolve(episode: Episode, name: string, dir: string, overwrite: boolean): Promise<Exported | null> {
     if (doc === null) return null;
+    exportingId = episode.id;
     await flush();
     dismiss("resolve");
     try {
@@ -986,6 +994,8 @@
     } catch (e) {
       report({ key: "resolve", level: "error", title: "エクスポートに失敗", detail: String(e) });
       return null;
+    } finally {
+      exportingId = null;
     }
   }
 
@@ -1473,13 +1483,23 @@
         />
         <Notices {notices} onclose={dismiss} />
         <div class="stage">
-          <div class="zoom float" class:beside={mode === "route"}>
-            <button type="button" aria-label="拡大" title="拡大" onclick={() => routeMap?.zoomBy(1)}>
-              <Icon name="plus" />
-            </button>
-            <button type="button" aria-label="縮小" title="縮小" onclick={() => routeMap?.zoomBy(-1)}>
-              <Icon name="minus" />
-            </button>
+          <div class="mapbar" class:beside={mode === "route"}>
+            <div class="zoom float">
+              <button type="button" aria-label="拡大" title="拡大" onclick={() => routeMap?.zoomBy(1)}>
+                <Icon name="plus" />
+              </button>
+              <button type="button" aria-label="縮小" title="縮小" onclick={() => routeMap?.zoomBy(-1)}>
+                <Icon name="minus" />
+              </button>
+            </div>
+            <MapLayers
+              {basemap}
+              hasRoads={roads !== null}
+              {showRoads}
+              onbasemap={setBasemap}
+              onroads={(shown) => (showRoads = shown)}
+              onsettings={() => (settingsOpen = true)}
+            />
           </div>
           {#if mode === "route"}
             <div class="left">
@@ -1488,19 +1508,14 @@
                 canRedo={redoStack.length > 0}
                 snap={snapNew && geoReady}
                 canSnap={geoReady}
-                {basemap}
-                hasRoads={roads !== null}
-                {showRoads}
                 canFit={(doc?.waypoints.length ?? 0) > 0}
                 onundo={undo}
                 onredo={redo}
                 onsnap={(on) => (snapNew = on)}
-                onbasemap={setBasemap}
-                onroads={(shown) => (showRoads = shown)}
                 onfit={() => routeMap?.fitRoute()}
                 onsettings={() => (settingsOpen = true)}
               />
-              <Hints shown={hintsShown} ontoggle={toggleHints} />
+              <Hints shown={hintsShown} ontoggle={toggleHints} bind:width={hintsWidth} />
             </div>
             <div class="right">
               <RouteSide
@@ -1520,6 +1535,8 @@
                   editEpisodes((episodes) => episodes.map((e) => (e.id === id ? { ...e, ...change } : e)))}
                 onremoveepisode={(id) => editEpisodes((episodes) => episodes.filter((e) => e.id !== id))}
                 onexportepisode={exportEpisode}
+                {exportingId}
+                extracting={extractAsked}
               />
             </div>
           {:else}
@@ -1590,6 +1607,7 @@
         onremove={removeEvent}
         onplace={(id) => (placingId = id)}
         onextract={geoReady && doc !== null ? extractByHand : null}
+        extracting={extractAsked}
       />
     </div>
     <div class="timeline">
@@ -1739,16 +1757,23 @@
   .right > :global(*) {
     pointer-events: auto;
   }
-  .zoom {
+  /* 地図の右上。拡大・縮小と、地図の表示の板を開くボタン。 */
+  .mapbar {
     top: 0;
     right: 0;
     display: flex;
     flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .mapbar.beside {
+    right: calc(300px + var(--gutter));
+  }
+  .zoom {
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     border-radius: var(--radius-tile);
-  }
-  .zoom.beside {
-    right: calc(300px + var(--gutter));
   }
   .zoom button {
     display: grid;

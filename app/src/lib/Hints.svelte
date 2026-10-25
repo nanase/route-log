@@ -4,7 +4,16 @@
   /**
    * 経路入力のときの、操作の手がかり。地図の左下に浮かせ、? キーで出し入れする。
    */
-  let { shown, ontoggle }: { shown: boolean; ontoggle: () => void } = $props();
+  let {
+    shown,
+    ontoggle,
+    width = $bindable(0),
+  }: {
+    shown: boolean;
+    ontoggle: () => void;
+    /** 出している板かボタンの幅。地図の縮尺を、その右へ逃がす */
+    width?: number;
+  } = $props();
 
   /** 押し方と、それで起きること。押し方は、キーの形で並べて出す。 */
   const HINTS: [string[], string][] = [
@@ -18,7 +27,7 @@
 </script>
 
 {#if shown}
-  <section class="float" aria-label="操作方法">
+  <section class="float" aria-label="操作方法" bind:clientWidth={width}>
     <header>
       <b>操作方法</b>
       <span class="space"></span>
@@ -34,7 +43,7 @@
     </dl>
   </section>
 {:else}
-  <button type="button" class="btn float closed" onclick={ontoggle} title="操作方法を開く">
+  <button type="button" class="btn float closed" onclick={ontoggle} title="操作方法を開く" bind:clientWidth={width}>
     <Icon name="help" />操作方法<kbd>?</kbd><Icon name="up" />
   </button>
 {/if}

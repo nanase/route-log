@@ -2,6 +2,7 @@
   import EpisodeList from "./EpisodeList.svelte";
   import EventName from "./EventName.svelte";
   import KindTag from "./KindTag.svelte";
+  import Spinner from "./Spinner.svelte";
   import { type Path, segmentLengths } from "./route";
   import StatusMark from "./StatusMark.svelte";
   import type { Episode, RideEvent, SegmentMode, Span } from "./types";
@@ -17,6 +18,8 @@
     selected,
     focusedId,
     canExtract,
+    extracting,
+    exportingId,
     onwaypoint,
     onevent,
     onextract,
@@ -37,6 +40,10 @@
     focusedId: string | null;
     /** 抽出できるか。判定用データを開いていなければ、できない */
     canExtract: boolean;
+    /** 抽出し直している最中 */
+    extracting: boolean;
+    /** エクスポートしているパート */
+    exportingId: string | null;
     onwaypoint: (index: number) => void;
     onevent: (event: RideEvent) => void;
     onextract: () => void;
@@ -93,13 +100,16 @@
     onchange={onchangeepisode}
     onremove={onremoveepisode}
     onexport={onexportepisode}
+    {exportingId}
   />
 
   <header class="events-head">
     <b>イベント {events.length} 件</b>
     <span class="space"></span>
     {#if canExtract}
-      <button type="button" class="btn small" onclick={onextract}>再抽出</button>
+      <button type="button" class="btn small" onclick={onextract} disabled={extracting}>
+        {#if extracting}<Spinner />{/if}再抽出
+      </button>
     {/if}
   </header>
   <div class="events">
