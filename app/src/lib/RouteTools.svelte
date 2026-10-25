@@ -61,7 +61,7 @@
   </div>
 
   <div class="group">
-    <b>点の結び方</b>
+    <b>連結方法</b>
     <div class="tiles two">
       <button
         type="button"
@@ -83,9 +83,7 @@
         直線
       </button>
     </div>
-    {#if canSnap}
-      <span class="fine">これから足す区間に使います</span>
-    {:else}
+    {#if !canSnap}
       <span class="fine">
         「道に沿わせる」は、判定データを選ぶと使えます。
         <button type="button" class="link" onclick={onsettings}>設定を開く</button>
@@ -133,7 +131,7 @@
   </div>
 
   <button type="button" class="btn fit" onclick={onfit} disabled={!canFit}>
-    <Icon name="fit" />経路の全体を表示
+    <Icon name="fit" />全経路表示
   </button>
 </section>
 

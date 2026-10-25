@@ -171,7 +171,7 @@
 
 <dialog bind:this={dialog} class="card" tabindex="-1" aria-labelledby="overview-title" {onclose} {oncancel}>
   <header>
-    <h2 id="overview-title">概略図の動画</h2>
+    <h2 id="overview-title">概略図生成</h2>
     <button
       type="button"
       class="btn icon-only ghost"
@@ -189,7 +189,7 @@
         <img src={previewUrl} alt={still === "start" ? "最初の見本" : "止まった所の見本"} />
       {/if}
       {#if !valid}
-        <span class="state">始点より後の経由点を、終点に選んでください</span>
+        <span class="state">始点より後の経由地を、終点に選んでください</span>
       {:else if previewError !== ""}
         <span class="state error"><Icon name="error" />{previewError}</span>
       {:else if previewing}
@@ -204,13 +204,9 @@
           </button>
         {/each}
       </div>
-      <p class="fine">
-        {#if others.length > 0}
-          全部の回を合わせた経路を見せてから、この回へ寄ります。他の回は、寄るにつれて薄くなります
-        {:else}
-          最初は引いた所から、ゆっくり寄って、経路の全体が収まる所で止まります
-        {/if}
-      </p>
+      {#if others.length === 0}
+        <p class="fine">最初は引いた所から、ゆっくり寄って、経路の全体が収まる所で止まります</p>
+      {/if}
     </div>
 
     <div class="range">
@@ -221,7 +217,7 @@
             {#each choices as choice (choice.id)}
               <option value={choice.id}>{choice.name}</option>
             {/each}
-            <option value={BY_WAYPOINTS}>経由点で選ぶ</option>
+            <option value={BY_WAYPOINTS}>経由地で選ぶ</option>
           </select>
         </label>
       {/if}
@@ -271,7 +267,7 @@
       </label>
       {#if others.length > 0}
         <label>
-          <span class="sub">全経路を見せる時間</span>
+          <span class="sub">全経路の時間</span>
           <span class="unit">
             <input
               class="field mono"
@@ -287,7 +283,7 @@
         </label>
       {/if}
       <label>
-        <span class="sub">寄る時間</span>
+        <span class="sub">ズーム時間</span>
         <span class="unit">
           <input
             class="field mono"
@@ -302,7 +298,7 @@
         </span>
       </label>
       <label>
-        <span class="sub">止めて見せる時間</span>
+        <span class="sub">ストップ時間</span>
         <span class="unit">
           <input
             class="field mono"
@@ -333,9 +329,6 @@
       </label>
       <span class="sub total">全体で <span class="mono">{seconds}</span> 秒</span>
     </div>
-    <p class="fine">
-      4K の MP4 に書き出します。音は入りません。背景は国土地理院の写真で、右下に出典を入れます。
-    </p>
   </div>
 
   <footer>
@@ -356,7 +349,7 @@
       {/if}
       <button type="button" class="btn" onclick={() => dialog.close()}>閉じる</button>
       <button type="button" class="btn primary" disabled={!valid} onclick={render}>
-        <Icon name="export" />書き出す
+        <Icon name="export" />生成
       </button>
     {/if}
   </footer>

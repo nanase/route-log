@@ -58,9 +58,9 @@ impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoTimes => f.write_str(
-                "始まりか終わりの経由点を通った時刻が推定できていません。前後のイベントの時刻を確定してください",
+                "始まりか終わりの経由地を通った時刻が推定できていません。前後のイベントの時刻を確定してください",
             ),
-            Self::NotRecorded => f.write_str("回の範囲に、録画している所がありません"),
+            Self::NotRecorded => f.write_str("パートの範囲に、録画している所がありません"),
             Self::FrameRate(files) => {
                 f.write_str("59.94 fps でない動画があります。Resolve のタイムラインは 59.94 fps です：")?;
                 let listed: Vec<String> = files
@@ -259,7 +259,7 @@ fn kind_name(kind: EventKind) -> &'static str {
         EventKind::Bridge => "橋",
         EventKind::Tunnel => "トンネル",
         EventKind::MichiNoEki => "道の駅",
-        EventKind::Waypoint => "経由点",
+        EventKind::Waypoint => "経由地",
         EventKind::Stop => "停車",
         EventKind::Custom => "手動",
     }
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn the_file_stem_avoids_characters_windows_refuses() {
-        assert_eq!(file_stem("御嶽山", "第 1 回"), "御嶽山 第 1 回");
+        assert_eq!(file_stem("御嶽山", "パート 1"), "御嶽山 パート 1");
         assert_eq!(file_stem("a/b", "c:d?"), "a_b c_d_");
         assert_eq!(file_stem("御嶽山", "前半."), "御嶽山 前半");
     }
@@ -943,7 +943,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let xml = made.fcpxml("御嶽山 第 1 回 ソース");
+        let xml = made.fcpxml("御嶽山 パート 1 ソース");
         let a_start = start_frames("06:00:26;00").unwrap();
         let b_start = start_frames("06:17:05;00").unwrap();
         let first = ms_to_frames(500_000);
@@ -953,7 +953,7 @@ mod tests {
             "<format id=\"r2\" name=\"FFVideoFormat1080p5994\" frameDuration=\"1001/60000s\" width=\"1920\" height=\"1080\"/>".to_owned(),
             format!("<asset id=\"a0\" name=\"A.MP4\" start=\"{}\" duration=\"{}\" hasVideo=\"1\" format=\"r2\" hasAudio=\"1\" audioSources=\"1\" audioChannels=\"1\" audioRate=\"48000\">", time(a_start), time(ms_to_frames(600_000))),
             "<media-rep kind=\"original-media\" src=\"file:///X:/example/A.MP4\"/>".to_owned(),
-            "<project name=\"御嶽山 第 1 回 ソース\">".to_owned(),
+            "<project name=\"御嶽山 パート 1 ソース\">".to_owned(),
             format!("<sequence format=\"r1\" duration=\"{}\" tcStart=\"215999784/60000s\" tcFormat=\"DF\"", time(made.frames())),
             format!("<asset-clip ref=\"a0\" name=\"A.MP4\" offset=\"215999784/60000s\" start=\"{}\" duration=\"{}\" tcFormat=\"DF\">", time(a_start + ms_to_frames(100_000)), time(first)),
             format!("<asset-clip ref=\"a1\" name=\"B.MP4\" offset=\"{}\" start=\"{}\" duration=\"{}\" tcFormat=\"DF\">", time(START_FRAMES + first), time(b_start), time(ms_to_frames(200_000))),
@@ -984,7 +984,7 @@ mod tests {
         ];
         let made =
             SourceTimeline::new(&doc(events), &extent(0, 1600), &timeline(), &both(), &[]).unwrap();
-        let edl = made.marker_edl("御嶽山 第 1 回 ソース");
+        let edl = made.marker_edl("御嶽山 パート 1 ソース");
         let ten = frames_to_tc(START_FRAMES + ms_to_frames(10_000), 60);
         let ten_next = frames_to_tc(START_FRAMES + ms_to_frames(10_000) + 1, 60);
         assert_eq!(
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(
             edl,
             format!(
-                "TITLE: 御嶽山 第 1 回 ソース\nFCM: DROP FRAME\n\n\
+                "TITLE: 御嶽山 パート 1 ソース\nFCM: DROP FRAME\n\n\
                  001  001      V     C        {ten} {ten_next} {ten} {ten_next}  \n |C:ResolveColorRed |M:出発地 |D:1\n\n\
                  002  001      V     C        01:01:10;00 01:01:10;01 01:01:10;00 01:01:10;01  \n |C:ResolveColorBlue |M:国道19号/旧道 |D:1\n\n"
             )

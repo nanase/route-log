@@ -29,7 +29,7 @@ describe("範囲の端", () => {
     const renamed = { ...waypointEvent([0.02, 0], 2, 2224), label: "峠" };
     const arrival: RideEvent = { ...renamed, id: "a", kind: "arrival", label: "宿", detail: {} };
     const ends = endpointsOf(doc([renamed, arrival]));
-    expect(ends.map((e) => e.name)).toEqual(["出発", "経由点 2", "峠", "宿"]);
+    expect(ends.map((e) => e.name)).toEqual(["出発", "経由地 2", "峠", "宿"]);
     expect(ends.map((e) => e.km.toFixed(2))).toEqual(["0.00", "1.11", "2.22", "3.34"]);
   });
 
@@ -50,7 +50,7 @@ describe("回の範囲", () => {
 
   test("範囲の正しい回だけを、名前と端の経由点の番号で出す", () => {
     expect(choices).toEqual([
-      { id: "e1", name: "第 1 回", from: 0, to: 1 },
+      { id: "e1", name: "パート 1", from: 0, to: 1 },
       { id: "e2", name: "後半", from: 1, to: 2 },
     ]);
     expect(episodeFileName("御嶽山", choices[1])).toBe("御嶽山 後半 概略図.mp4");

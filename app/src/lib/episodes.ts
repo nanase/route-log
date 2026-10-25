@@ -56,7 +56,7 @@ export function addEpisode(episodes: Episode[], waypoints: Waypoint[]): Episode[
 
 /** 画面に出す回の名前。名前が無ければ、並びの番号で呼ぶ。 */
 export function nameOf(episode: Episode, index: number): string {
-  return episode.title.trim() || `第 ${index + 1} 回`;
+  return episode.title.trim() || `パート ${index + 1}`;
 }
 
 /**
@@ -99,10 +99,10 @@ export function recordedOf(doc: Path & { events: RideEvent[] }, spans: Span[], e
  * `spans` が null なら動画が無い。
  */
 export function exportBlocker(hasExtent: boolean, spans: Span[] | null, recorded: number | null): string | null {
-  if (!hasExtent) return "回の範囲が正しくありません";
+  if (!hasExtent) return "パートの範囲が正しくありません";
   if (spans === null) return "この走行に使う動画がありません";
-  if (recorded === null) return "始まりと終わりの経由点を通った時刻が推定できると、書き出せます";
-  if (recorded <= 0) return "回の範囲に、録画している所がありません";
+  if (recorded === null) return "始まりと終わりの経由地を通った時刻が推定できると、書き出せます";
+  if (recorded <= 0) return "パートの範囲に、録画している所がありません";
   return null;
 }
 

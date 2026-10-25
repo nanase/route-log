@@ -82,7 +82,7 @@ describe("回を足す", () => {
 
 test("名前が無ければ、並びの番号で呼ぶ", () => {
   expect(nameOf(episode(0, 1, "前編"), 0)).toBe("前編");
-  expect(nameOf(episode(0, 1, "  "), 1)).toBe("第 2 回");
+  expect(nameOf(episode(0, 1, "  "), 1)).toBe("パート 2");
 });
 
 describe("録画の長さ", () => {
@@ -127,10 +127,10 @@ describe("Resolve への書き出し", () => {
   const spans: Span[] = [{ file: 0, start_ms: 0, end_ms: 1000 }];
 
   test("書き出せない理由を、直す順に言う", () => {
-    expect(exportBlocker(false, null, null)).toBe("回の範囲が正しくありません");
+    expect(exportBlocker(false, null, null)).toBe("パートの範囲が正しくありません");
     expect(exportBlocker(true, null, null)).toBe("この走行に使う動画がありません");
     expect(exportBlocker(true, spans, null)).toContain("時刻が推定できると");
-    expect(exportBlocker(true, spans, 0)).toBe("回の範囲に、録画している所がありません");
+    expect(exportBlocker(true, spans, 0)).toBe("パートの範囲に、録画している所がありません");
     expect(exportBlocker(true, spans, 1)).toBeNull();
   });
 

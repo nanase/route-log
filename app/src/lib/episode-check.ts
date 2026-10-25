@@ -102,7 +102,7 @@ export async function runEpisodeCheck(map: MapHandle, app: EpisodeAppHandle) {
 
   press("足す");
   await sleep(300);
-  note("「足す」を押す", "回が 1 つでき、範囲は 1 → 5。名前の欄には「第 1 回」が薄く出る。録画は動画の長さの合計と同じ", {
+  note("「足す」を押す", "回が 1 つでき、範囲は 1 → 5。名前の欄には「パート 1」が薄く出る。録画は動画の長さの合計と同じ", {
     placeholder: cards()[0]?.querySelector("input")?.placeholder,
   });
 
@@ -117,13 +117,13 @@ export async function runEpisodeCheck(map: MapHandle, app: EpisodeAppHandle) {
   await sleep(300);
   note(
     "1 つ目を「前編」の 1 → 4 に、2 つ目を 4 → 5 にする",
-    "前編は 1 → 4、第 2 回は 4 → 5。2 つの録画の合計は、動画の長さの合計と同じ。5 時間を超える回には、警告の印が付く",
+    "前編は 1 → 4、パート 2は 4 → 5。2 つの録画の合計は、動画の長さの合計と同じ。5 時間を超える回には、警告の印が付く",
   );
   const split = await capture("episodes");
 
   map.rightClick(CLICKS[3]);
   await sleep(500);
-  note("境の経由点 4 を右クリックで消す", "前編は 1 → 3 に縮む。第 2 回は始まりが 5 になり、範囲が正しくないと出る", {
+  note("境の経由点 4 を右クリックで消す", "前編は 1 → 3 に縮む。パート 2は始まりが 5 になり、範囲が正しくないと出る", {
     waypoints: ids(),
     from: episodes()[1]?.from === w5,
   });
@@ -131,14 +131,14 @@ export async function runEpisodeCheck(map: MapHandle, app: EpisodeAppHandle) {
 
   await app.undo();
   await sleep(300);
-  note("取り消し", "経由点 5 個に戻り、前編は 1 → 4、第 2 回は 4 → 5 に戻る", { waypoints: ids() });
+  note("取り消し", "経由点 5 個に戻り、前編は 1 → 4、パート 2は 4 → 5 に戻る", { waypoints: ids() });
 
-  press("第 2 回を消す", cards()[1]);
+  press("パート 2を消す", cards()[1]);
   await sleep(300);
-  note("第 2 回のごみ箱を押す", "回は前編だけになる");
+  note("パート 2のごみ箱を押す", "回は前編だけになる");
   await app.undo();
   await sleep(300);
-  note("取り消し", "第 2 回が戻る");
+  note("取り消し", "パート 2が戻る");
 
   const saved = await app.saved();
   note("保存して読み直す", "回と経由点の ID が、画面と同じ", {

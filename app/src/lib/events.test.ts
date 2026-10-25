@@ -252,8 +252,8 @@ describe("確定", () => {
 
   test("経由点のイベントは、字幕にしないものとして作り、位置で見分ける", () => {
     const made = waypointEvent([138.5, 36.5], 2, 700);
-    expect(made).toMatchObject({ kind: "waypoint", status: "estimated", hidden: true, label: "経由点 3", route_m: 700 });
-    expect(made.detail).toEqual({ at: [138.5, 36.5], extracted_label: "経由点 3" });
+    expect(made).toMatchObject({ kind: "waypoint", status: "estimated", hidden: true, label: "経由地 3", route_m: 700 });
+    expect(made.detail).toEqual({ at: [138.5, 36.5], extracted_label: "経由地 3" });
     const events = [event("x", 500, "estimated"), made];
     expect(waypointEventAt(events, [138.5, 36.5])?.id).toBe(made.id);
     expect(waypointEventAt(events, [138.5, 36.6])).toBeNull();

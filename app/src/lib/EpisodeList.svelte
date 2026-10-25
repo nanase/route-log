@@ -52,7 +52,7 @@
     onchange={(e) => onchange(episode.id, { [key]: e.currentTarget.value })}
   >
     {#if !known.has(episode[key])}
-      <option value={episode[key]} disabled>消えた経由点</option>
+      <option value={episode[key]} disabled>消えた経由地</option>
     {/if}
     {#each ends as point (point.index)}
       <option value={path.waypoints[point.index].id}>{point.index + 1}　{point.name}</option>
@@ -61,8 +61,8 @@
 {/snippet}
 
 <header>
-  <b>回 {episodes.length}</b>
-  <span class="fine about">YouTube に上げる 1 本ぶん</span>
+  <b>パート {episodes.length}</b>
+  <span class="fine about">完成動画の範囲</span>
   <span class="space"></span>
   <button type="button" class="btn small" disabled={!canAdd} onclick={onadd}><Icon name="plus" size={14} />足す</button>
 </header>
@@ -77,7 +77,7 @@
           class="field name"
           value={episode.title}
           placeholder={nameOf({ ...episode, title: "" }, index)}
-          aria-label="回の名前"
+          aria-label="パートの名前"
           onchange={(e) => onchange(episode.id, { title: e.currentTarget.value.trim() })}
         />
         {#if extent === null}
@@ -85,7 +85,7 @@
         {:else if spans === null}
           <span class="length muted" title="この走行に使う動画がありません">動画なし</span>
         {:else if recorded === null}
-          <span class="length muted" title="始まりと終わりの経由点を通った時刻が推定できると、録画の長さが出ます"
+          <span class="length muted" title="始まりと終わりの経由地を通った時刻が推定できると、録画の長さが出ます"
             >録画 不明</span
           >
         {:else if recorded > RECORDED_LIMIT_MS}
@@ -111,26 +111,26 @@
           type="button"
           class="btn small icon-only ghost trash"
           aria-label="{nameOf(episode, index)}を消す"
-          title="回を消す"
+          title="パートを消す"
           onclick={() => onremove(episode.id)}
         >
           <Icon name="trash" size={14} />
         </button>
       </div>
       <div class="range">
-        {@render pick(episode, "from", "始まりの経由点", extent === null)}
+        {@render pick(episode, "from", "始まりの経由地", extent === null)}
         <span class="arrow" aria-hidden="true">→</span>
-        {@render pick(episode, "to", "終わりの経由点", extent === null)}
+        {@render pick(episode, "to", "終わりの経由地", extent === null)}
       </div>
       {#if extent === null}
-        <p class="problem"><Icon name="warning" size={14} />終わりは、始まりより後の経由点にします</p>
+        <p class="problem"><Icon name="warning" size={14} />終わりは、始まりより後の経由地にします</p>
       {/if}
     </div>
   {:else}
     <p class="empty">
       {canAdd
-        ? "「足す」で、YouTube に上げる 1 本ぶんの範囲を、始まりと終わりの経由点で決めます。"
-        : "経由点を 2 つ足すと、回を作れます。"}
+        ? "「足す」で、完成動画の範囲を、始まりと終わりの経由地で決めます。"
+        : "経由地を 2 つ追加すると、パートを作れます。"}
     </p>
   {/each}
 </div>

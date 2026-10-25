@@ -217,7 +217,7 @@
       <button
         type="button"
         class="btn small icon-only"
-        aria-label="抽出し直す"
+        aria-label="再抽出"
         title="経路からイベントを抽出し直す"
         onclick={onextract}
       >

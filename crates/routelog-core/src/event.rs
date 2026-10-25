@@ -462,7 +462,7 @@ mod tests {
         assert_eq!((event.status, event.hidden), (EventStatus::Estimated, true));
 
         // いまの形は、確定していても字幕にしないことを持てる。書いて読んでも変わらない。
-        let mut timed = extracted(EventKind::Waypoint, "経由点 2", 1.0);
+        let mut timed = extracted(EventKind::Waypoint, "経由地 2", 1.0);
         timed.status = EventStatus::Confirmed;
         timed.hidden = true;
         timed.detail.at = Some([138.5, 36.5]);

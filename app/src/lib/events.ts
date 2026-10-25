@@ -286,7 +286,7 @@ export function setHidden(event: RideEvent, hidden: boolean): RideEvent {
  * 経由点から決め直す。ここでも入れておくのは、それまでの間も、一覧の正しい所に正しい名前で出すため。
  */
 export function waypointEvent(at: LonLat, index: number, routeM: number): RideEvent {
-  const label = `経由点 ${index + 1}`;
+  const label = `経由地 ${index + 1}`;
   return {
     id: crypto.randomUUID(),
     kind: "waypoint",

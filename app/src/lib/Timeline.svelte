@@ -310,7 +310,7 @@
     clips: spans.length,
     excluded: excluded.map((clip) => `${clock(clip.start_ms)}-${clock(clip.end_ms)}`),
     stops: stops.map((gap) => `${clock(gap.start_ms)}-${clock(gap.end_ms)}${stayOver(gap) === null ? "" : " 停車"}`),
-    menu: menu === null ? null : `${menu.label} ${menu.out ? "走行に戻す" : "走行から外す"}`,
+    menu: menu === null ? null : `${menu.label} ${menu.out ? "走行に戻す" : "走行から除外"}`,
     gapMenu: gapMenu === null ? null : gapMenu.stay === null ? "停車にする" : "停車をやめる",
     candidates: candidates.map(
       (band) => `${clock(band.start_ms)}-${clock(band.end_ms)}${band.choice.taken ? "" : " 外した"}`,
@@ -451,7 +451,7 @@
               data-file={file.name}
               style:left="{left}px"
               style:width="{Math.max(right - left - 1, 1)}px"
-              title="{file.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　{file.codec}　右クリックで走行から外す"
+              title="{file.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　{file.codec}　右クリックで走行から除外"
               oncontextmenu={(event) => openMenu(event, { name: file.name, start_ms: clip.start_ms, end_ms: clip.end_ms }, label, false)}
             >
               {#if right - left >= CLIP_LABEL_PX}{label}{/if}
@@ -469,12 +469,12 @@
               data-file={clip.name}
               style:left="{left}px"
               style:width="{Math.max(right - left - 1, 1)}px"
-              title="{clip.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　走行から外している。押すと戻せる"
+              title="{clip.name}　{clock(clip.start_ms)} – {clock(clip.end_ms)}　走行から除外している。押すと戻せる"
               onpointerdown={(event) => event.stopPropagation()}
-              onclick={(event) => openMenu(event, clip, "外した動画", true)}
-              oncontextmenu={(event) => openMenu(event, clip, "外した動画", true)}
+              onclick={(event) => openMenu(event, clip, "除外した動画", true)}
+              oncontextmenu={(event) => openMenu(event, clip, "除外した動画", true)}
             >
-              {#if right - left >= CLIP_LABEL_PX}外した{/if}
+              {#if right - left >= CLIP_LABEL_PX}除外{/if}
             </button>
           {/if}
         {/each}
@@ -617,9 +617,9 @@
       <div class="mono fine name">{menu.clip.name}</div>
       <div class="act">
         <span class="fine">
-          {menu.out ? "戻すと、再生と時刻にまた使います。" : "外すと、再生にも時刻にも使いません。あとで戻せます。"}
+          {menu.out ? "戻すと、再生と時刻にまた使います。" : "除外すると、再生にも時刻にも使いません。あとで戻せます。"}
         </span>
-        <button type="button" class="btn" onclick={chooseMenu}>{menu.out ? "走行に戻す" : "走行から外す"}</button>
+        <button type="button" class="btn" onclick={chooseMenu}>{menu.out ? "走行に戻す" : "走行から除外"}</button>
       </div>
     </div>
   {/if}

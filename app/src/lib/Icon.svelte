@@ -2,6 +2,7 @@
   /** 24×24 の線画。線の太さと色は、置いた場所の字に合わせる。 */
   const PATHS = {
     down: '<path d="M6 9l6 6 6-6"/>',
+    up: '<path d="M6 15l6-6 6 6"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
     export: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
     movie: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9v6l5-3z"/>',

@@ -218,7 +218,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
   await addEpisode();
   enter(episodeCards()[1]?.querySelectorAll("select")[0], ids[1]);
   await sleep(200);
-  note("回を 2 つ作る", "第 1 回は経由点 1 → 2、第 2 回は 2 → 3", {
+  note("回を 2 つ作る", "パート 1は経由点 1 → 2、パート 2は 2 → 3", {
     episodes: app.path().episodes?.map((e) => [ids.indexOf(e.from) + 1, ids.indexOf(e.to) + 1]),
   });
 
@@ -229,7 +229,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
   await sleep(500);
   const dialogText = (selector: string) =>
     document.querySelector(`dialog ${selector}`)?.textContent?.replace(/\s+/g, " ").trim() ?? null;
-  note("概略図の動画のダイアログを開く", "範囲は第 1 回で、1 出発 → 2。全経路を見せる時間の欄がある。見本は止まった所", {
+  note("概略図の動画のダイアログを開く", "範囲はパート 1で、1 出発 → 2。全経路を見せる時間の欄がある。見本は止まった所", {
     scope: document.querySelector<HTMLSelectElement>("dialog select.scope")?.selectedOptions[0]?.textContent,
     ends: dialogText(".ends"),
     motion: dialogText(".motion"),
@@ -248,7 +248,7 @@ export async function runMapCheck(map: MapHandle, app: AppHandle) {
     if (phases.at(-1) !== p.phase) phases.push(p.phase);
   };
   const started = performance.now();
-  // 第 1 回の動画。第 2 回を薄く描く。
+  // パート 1の動画。パート 2を薄く描く。
   const overview = await invoke("render_overview", {
     route: { line: line(part(app.path(), 0, 1)), others: [line(part(app.path(), 1, 2))] },
     motion: motionInput({ fps: "59.94", leadSeconds: 1, zoomSeconds: 1, holdSeconds: 1, startScale: 0.7 }, true),

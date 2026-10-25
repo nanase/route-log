@@ -55,10 +55,10 @@ pub async fn export_resolve(
         .episodes
         .iter()
         .find(|e| e.id == episode_id)
-        .ok_or("回が見つかりません")?;
+        .ok_or("パートが見つかりません")?;
     let extent = doc
         .extent(episode)
-        .ok_or("回の範囲が正しくありません。終わりは、始まりより後の経由点にします")?;
+        .ok_or("パートの範囲が正しくありません。終わりは、始まりより後の経由地にします")?;
     let timeline = videos
         .current()
         .filter(|t| !t.files().is_empty())

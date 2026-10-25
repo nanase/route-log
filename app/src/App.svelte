@@ -285,7 +285,7 @@
     if (files.length === 0) return "動画なし";
     const used = `動画 ${usedFiles.length} 本・${hms(usedFiles.reduce((sum, file) => sum + file.duration_ms, 0))}`;
     const out = files.length - usedFiles.length;
-    return out === 0 ? used : `${used}（外した動画 ${out} 本）`;
+    return out === 0 ? used : `${used}（除外した動画 ${out} 本）`;
   });
 
   onMount(async () => {
@@ -417,7 +417,7 @@
     if (picked !== null) await FOLDERS[folder].load(picked);
   }
 
-  const repick = (folder: Folder) => ({ label: "フォルダを選び直す", run: () => void pick(folder) });
+  const repick = (folder: Folder) => ({ label: "フォルダを再選択", run: () => void pick(folder) });
 
   /** 走行を切り替える。待っている編集を、いまの走行に入れ終えてから切り替える。 */
   function select(next: string): Promise<void> {
@@ -903,7 +903,7 @@
   async function exportCsv() {
     if (doc === null) return;
     const path = await save({
-      title: "通過時刻の一覧を書き出す",
+      title: "CSV エクスポート",
       defaultPath: `${doc.ride.title}.csv`,
       filters: [{ name: "CSV", extensions: ["csv"] }],
     });
@@ -1150,7 +1150,7 @@
       tell(foundMessage(await invoke<FileStops[]>("find_stops", { files: used, onProgress })));
     } catch (e) {
       const text = String(e);
-      if (text.includes("やめました")) tell("停車を探すのをやめました。探し終えた動画の候補は残ります", "warning");
+      if (text.includes("やめました")) tell("停車位置探索をやめました。探し終えた動画の候補は残ります", "warning");
       else report({ key: "stops", level: "error", title: "停車を探せません。", detail: text });
     } finally {
       stopProgress = null;
@@ -1185,7 +1185,7 @@
     try {
       const names = await invoke<string[]>("set_video_excluded", { date: rideDate, name, excluded });
       if (date === rideDate) excludedNames = names;
-      tell(excluded ? "動画を走行から外しました" : "動画を走行に戻しました");
+      tell(excluded ? "動画を走行から除外しました" : "動画を走行に戻しました");
     } catch (e) {
       const title = excluded ? "動画を走行から外せません。" : "動画を走行に戻せません。";
       report({ key: "exclude", level: "error", title, detail: String(e) });
@@ -1492,7 +1492,7 @@
               />
             </div>
           {:else}
-            <label class="follow float"><input type="checkbox" bind:checked={follow} />現在位置を追う</label>
+            <label class="follow float"><input type="checkbox" bind:checked={follow} />現在位置に追従</label>
             {#if placing !== null}
               <div class="placing float" role="status">
                 停車した場所を、経路の上で押します
@@ -1525,7 +1525,7 @@
             <b>走行を開いていません</b>
             <button type="button" class="btn" onclick={openRides}>走行を選ぶ</button>
           {:else if files.length > 0}
-            <b>この日付の動画は、すべて走行から外してあります</b>
+            <b>この日付の動画は、すべて走行から除外してあります</b>
             <span>下のタイムラインで、薄い帯を押すと戻せます。</span>
             <span>時刻は、一覧の行を押して手で入れられます。</span>
           {:else}

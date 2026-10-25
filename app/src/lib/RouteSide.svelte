@@ -60,7 +60,7 @@
 
 <aside class="float">
   <header>
-    <b>経由点 {path.waypoints.length}</b>
+    <b>経由地 {path.waypoints.length}</b>
     <span class="space"></span>
     <b class="mono">{km(reached[last] ?? 0)} km</b>
   </header>
@@ -80,7 +80,7 @@
         {/if}
       </button>
     {:else}
-      <p class="empty">地図をクリックして、経由点を足してください。</p>
+      <p class="empty">地図をクリックして、経由地を追加してください。</p>
     {/each}
   </div>
 
@@ -97,10 +97,9 @@
 
   <header class="events-head">
     <b>イベント {events.length} 件</b>
-    <span class="fine auto">経路から自動で出ます</span>
     <span class="space"></span>
     {#if canExtract}
-      <button type="button" class="btn small" onclick={onextract}>抽出し直す</button>
+      <button type="button" class="btn small" onclick={onextract}>再抽出</button>
     {/if}
   </header>
   <div class="events">
@@ -116,7 +115,7 @@
         <span class="mono at">{km(event.route_m)}</span>
         <KindTag kind={event.kind} faded={hidden} />
         <span class="name"><EventName {event} /></span>
-        {#if hidden}<span class="off"><StatusMark status={event.status} hidden />字幕なし</span>{/if}
+        {#if hidden}<span class="off"><StatusMark status={event.status} hidden /></span>{/if}
       </button>
     {:else}
       {#if !canExtract}
@@ -125,7 +124,7 @@
           <button type="button" class="link" onclick={onsettings}>設定を開く</button>
         </p>
       {:else}
-        <p class="empty">経由点を 2 つ足すと、ここにイベントが出ます。</p>
+        <p class="empty">経由地を 2 つ追加すると、ここにイベントが出ます。</p>
       {/if}
     {/each}
   </div>
@@ -154,11 +153,6 @@
     padding: 0 8px 0 12px;
     border-top: 1px solid var(--line);
     white-space: nowrap;
-  }
-  .auto {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .space {
     flex: 1;

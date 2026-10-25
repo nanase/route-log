@@ -8,22 +8,22 @@
 
   /** 押し方と、それで起きること。押し方は、キーの形で並べて出す。 */
   const HINTS: [string[], string][] = [
-    [["クリック"], "終わりに点を足す"],
-    [["線の上をクリック"], "途中に点を足す"],
-    [["ドラッグ"], "点を動かす"],
-    [["右クリック"], "点を消す"],
-    [["Shift", "クリック"], "次の点までの結び方を切り替える"],
-    [["小さな丸をドラッグ"], "直線の区間を曲げる"],
+    [["クリック"], "新たな経由地を追加"],
+    [["線の上をクリック"], "途中に経由地を追加"],
+    [["ドラッグ"], "経由地を移動"],
+    [["右クリック"], "経由地を削除"],
+    [["Shift", "クリック"], "連結方法を変更"],
+    [["小さな丸をドラッグ"], "直線区間を曲げる"],
   ];
 </script>
 
 {#if shown}
-  <section class="float" aria-label="操作の手がかり">
+  <section class="float" aria-label="操作方法">
     <header>
-      <b>操作</b>
+      <b>操作方法</b>
       <span class="space"></span>
-      <button type="button" class="toggle" onclick={ontoggle} title="操作の手がかりをしまう">
-        <span class="fine">出し入れ</span><kbd>?</kbd>
+      <button type="button" class="toggle" onclick={ontoggle} aria-label="操作方法を閉じる" title="閉じる">
+        <kbd>?</kbd><Icon name="down" />
       </button>
     </header>
     <dl>
@@ -34,8 +34,8 @@
     </dl>
   </section>
 {:else}
-  <button type="button" class="btn float closed" onclick={ontoggle} title="操作の手がかりを出す">
-    <Icon name="help" />操作<kbd>?</kbd>
+  <button type="button" class="btn float closed" onclick={ontoggle} title="操作方法を開く">
+    <Icon name="help" />操作方法<kbd>?</kbd><Icon name="up" />
   </button>
 {/if}
 

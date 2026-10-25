@@ -69,7 +69,7 @@
       {/if}
     {:else}
       <span class="lead">
-        {confirmed ? "選んでいる（確定済み）" : hasVideo ? "次の候補" : "選んでいる"}{#if target.hidden}・字幕なし{/if}
+        {confirmed ? "選択中（確定済み）" : hasVideo ? "次の候補" : "選択中"}{#if target.hidden}・字幕なし{/if}
       </span>
       <span class="name">
         <KindTag kind={target.kind} />

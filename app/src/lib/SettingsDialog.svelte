@@ -134,7 +134,7 @@
           disabled={folder.state === "loading"}
           onclick={() => onpick(folder.id)}
         >
-          {folder.dir ? "選び直す" : "フォルダを選ぶ"}
+          {folder.dir ? "再選択" : "フォルダを選ぶ"}
         </button>
         <span class="sub note">
           {folder.note}{#if folder.dir}<span class="mono dir" title={folder.dir}>{folder.dir}</span>{/if}
@@ -148,9 +148,9 @@
       <b>時計の補正</b>
       <span class="sub">
         {#if rideDate === null}
-          ドラレコの時計のずれを、秒で直します。走行を開くと直せます
+          時計のずれを補正します。走行を開くと補正できます
         {:else}
-          ドラレコの時計のずれを、秒で直します。<span class="mono">{rideDate}</span> の走行に効きます
+          時計のずれを補正します。<span class="mono">{rideDate}</span> の走行に有効です
         {/if}
       </span>
     </div>
@@ -189,7 +189,6 @@
   <section class="line">
     <div class="text">
       <b>クラウド同期の接続先</b>
-      <span class="sub">設定すると、走行を自動でクラウドと同期します。保存済みの鍵は出しません</span>
     </div>
     {#if savedUrl !== undefined}
       {#if syncReady}
@@ -199,7 +198,7 @@
       {/if}
       {#if !editingSync}
         <button type="button" class="btn" class:primary={!syncReady} onclick={() => (editingSync = true)}>
-          {syncReady ? "変える" : "設定する"}
+          {syncReady ? "変更" : "設定する"}
         </button>
       {/if}
     {/if}

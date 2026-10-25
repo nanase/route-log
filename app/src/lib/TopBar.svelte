@@ -126,10 +126,10 @@
       class:icon-only={compact}
       onclick={onfindstops}
       disabled={!canFindStops}
-      aria-label="停車を探す"
+      aria-label="停車位置探索"
       title="信号待ちを含む停車の候補を、動画の音と映像の動きから探す。探してある動画は飛ばす"
     >
-      <Icon name="search" />{#if !compact}停車を探す{/if}
+      <Icon name="search" />{#if !compact}停車位置探索{/if}
     </button>
   {:else}
     <!-- 探している間は、やめるボタンにして、進み具合を添える。 -->
@@ -137,7 +137,7 @@
       type="button"
       class="btn"
       onclick={oncancelstops}
-      aria-label="停車を探すのをやめる"
+      aria-label="停車位置探索をやめる"
       title="停車を探すのをやめる。探し終えた動画の候補は残る"
     >
       <Icon name="close" />{compact ? "" : "やめる "}<span class="mono">{Math.floor(stopProgress * 100)}%</span>
@@ -150,10 +150,10 @@
     onclick={onoverview}
     disabled={!canOverview}
     aria-haspopup="dialog"
-    aria-label="概略図の動画"
+    aria-label="概略図生成"
     title="動画の冒頭に入れる、経路の概略図の動画を書き出す"
   >
-    <Icon name="movie" />{#if !compact}概略図の動画{/if}
+    <Icon name="movie" />{#if !compact}概略図生成{/if}
   </button>
   <button
     type="button"
@@ -161,10 +161,10 @@
     class:icon-only={compact}
     onclick={onexport}
     disabled={!canExport}
-    aria-label="CSV を書き出す"
+    aria-label="CSV エクスポート"
     title="通過時刻の一覧を CSV に書き出す"
   >
-    <Icon name="export" />{#if !compact}CSV を書き出す{/if}
+    <Icon name="export" />{#if !compact}CSV エクスポート{/if}
   </button>
   <button type="button" class="btn icon-only" onclick={onsettings} aria-label="設定" title="設定">
     <Icon name="settings" />

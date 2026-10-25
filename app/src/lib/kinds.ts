@@ -10,7 +10,7 @@ export const KINDS: Record<EventKind, string> = {
   bridge: "橋",
   tunnel: "トンネル",
   michi_no_eki: "道の駅",
-  waypoint: "経由点",
+  waypoint: "経由地",
   stop: "停車",
   custom: "手動",
 };

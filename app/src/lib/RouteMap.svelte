@@ -394,7 +394,7 @@
       // 見るだけのときは、経由点を小さく出す。つかめない。押すと、そこを通った時刻を入れる相手になる。
       current.waypoints.forEach((waypoint, index) => {
         const state = timed.includes(index) ? "fixed timed" : "fixed";
-        const title = `経由点 ${index + 1}。押すと、ここを通った時刻を入力できます`;
+        const title = `経由地 ${index + 1}。押すと、ここを通った時刻を入力できます`;
         const fixed = handle(`${waypointClass(index)} ${state}`, [waypoint.lon, waypoint.lat], String(index + 1), title);
         fixed.onclick(() => {
           if (placing === null) {
@@ -916,7 +916,7 @@
   >
     {#if chosen !== null && selected !== null}
       {@const index = selected}
-      <b>経由点 {index + 1}</b>
+      <b>経由地 {index + 1}</b>
       {#if index < path.waypoints.length - 1}
         <span class="to">次の点まで</span>
         <div class="seg">
@@ -943,8 +943,8 @@
       <button
         type="button"
         class="btn icon-only remove"
-        aria-label="この点を消す"
-        title="この点を消す"
+        aria-label="経由地を削除"
+        title="経由地を削除"
         onclick={() => remove(index)}
       >
         <Icon name="trash" />

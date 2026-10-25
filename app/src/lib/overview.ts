@@ -110,7 +110,7 @@ export function endpointsOf(doc: Pick<RideDocument, "waypoints" | "route" | "eve
       kind === null
         ? waypointEventAt(doc.events, [waypoint.lon, waypoint.lat])
         : (doc.events.find((e) => e.kind === kind) ?? null);
-    const fallback = index === 0 ? "出発" : index === last ? "到着" : `経由点 ${index + 1}`;
+    const fallback = index === 0 ? "出発" : index === last ? "到着" : `経由地 ${index + 1}`;
     return { index, name: event?.label || fallback, km };
   });
 }

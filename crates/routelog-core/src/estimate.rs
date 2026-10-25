@@ -265,7 +265,7 @@ fn ensure_endpoints(events: &mut Vec<Event>, length_m: f64) {
 
 /// 経由点のイベントに付ける名前。番号は、地図の丸に書く番号と同じにする。
 fn waypoint_label(index: usize) -> String {
-    format!("経由点 {}", index + 1)
+    format!("経由地 {}", index + 1)
 }
 
 /// 経由点のイベントを、いまの経由点に合わせる。
@@ -986,7 +986,7 @@ mod tests {
         let waypoint = doc.events.iter().find(|e| e.id == "w").unwrap();
         assert_eq!(
             (waypoint.label.as_str(), waypoint.route_m.round()),
-            ("経由点 3", 2000.0)
+            ("経由地 3", 2000.0)
         );
         // 経由点の時刻が基準になり、手前のトンネルの推定が出る。
         assert_eq!(times(&doc)[1], ("x", Some(125)));
@@ -1030,7 +1030,7 @@ mod tests {
             found,
             [
                 ("n", "役場前の交差点", 1000.0, None),
-                ("w", "経由点 4", 2020.0, Some(250_000))
+                ("w", "経由地 4", 2020.0, Some(250_000))
             ]
         );
 
