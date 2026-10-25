@@ -5,6 +5,7 @@
 mod data;
 mod extract;
 mod junction;
+pub mod official;
 mod snap;
 
 pub use data::{Area, BBox, GeoData, Road, Station, Structure};

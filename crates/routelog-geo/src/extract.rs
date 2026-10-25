@@ -38,8 +38,8 @@ pub struct Options {
     pub junction_m: f64,
     /// 経路の上で、まとめ始めた交差点からこの距離までの交差点を 1 つにまとめる。
     pub junction_merge_m: f64,
-    /// これより短い橋・トンネルは字幕にしない。
-    pub structure_min_m: f64,
+    /// これより短い橋は字幕にしない。トンネルは、覆道のほかはすべて字幕にする。
+    pub bridge_min_m: f64,
     /// 同じ名前の橋・トンネルの間がこれ以下なら、1 つにまとめる。
     pub structure_join_m: f64,
     /// これより短い市区町村の出入りは無視する。境に沿う道で境を何度もまたがないため。
@@ -60,7 +60,7 @@ impl Default for Options {
             road_again_m: 1000.0,
             junction_m: 15.0,
             junction_merge_m: 50.0,
-            structure_min_m: 50.0,
+            bridge_min_m: 100.0,
             structure_join_m: 30.0,
             area_noise_m: 50.0,
             station_m: 100.0,
@@ -754,8 +754,11 @@ fn structure_events(
             let end_m = samples[end - 1].route_m;
             let mut event = event(kind, name.to_owned(), samples[start].route_m);
             event.detail.end_m = Some(end_m);
-            let short = end_m - samples[start].route_m < options.structure_min_m;
-            event.hidden = short || structure == Structure::Shed;
+            let short = end_m - samples[start].route_m < options.bridge_min_m;
+            event.hidden = match structure {
+                Structure::Bridge => short,
+                _ => structure == Structure::Shed,
+            };
             event
         })
         .collect()
@@ -1843,8 +1846,10 @@ mod tests {
     fn a_short_bridge_and_a_shed_are_hidden() {
         let events = along(
             roads(vec![
-                structure(1, 500.0, 530.0, Structure::Bridge, "小さな橋"),
-                structure(2, 1000.0, 1300.0, Structure::Shed, "四の岩覆道"),
+                structure(1, 300.0, 380.0, Structure::Bridge, "小さな橋"),
+                structure(2, 500.0, 620.0, Structure::Bridge, "長い橋"),
+                structure(3, 800.0, 830.0, Structure::Tunnel, "短いトンネル"),
+                structure(4, 1000.0, 1300.0, Structure::Shed, "四の岩覆道"),
             ]),
             2000.0,
         );
@@ -1853,6 +1858,7 @@ mod tests {
             .filter(|e| e.hidden)
             .map(|e| e.label.as_str())
             .collect();
+        // 橋は 100 m 未満を字幕なしにする。トンネルは短くても字幕にする。
         assert_eq!(hidden, ["小さな橋", "四の岩覆道"]);
     }
 

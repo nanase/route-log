@@ -8,7 +8,7 @@ description = "道路・行政区域の読み込みと、経路からのイベ�
 routelog-core.workspace = true
 flatgeobuf = { version = "6", default-features = false }
 geo-types = "0.7"
-geozero = { version = "0.15", default-features = false, features = ["with-geo"] }
+geozero = { version = "0.15", default-features = false, features = ["with-geo", "with-mvt"] }
 rstar = "0.13"
 serde.workspace = true
 thiserror.workspace = true
