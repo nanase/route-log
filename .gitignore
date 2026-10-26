@@ -6,3 +6,9 @@ data/
 __pycache__/
 mise.local.toml
 *.log
+
+# エージェントの作業用の場所。worktree は本物のチェックアウトなので、外さないと
+# git add -A が入れ子のリポジトリとして取り込む。作業計画は済んだら文書に書き写す。
+.claude/worktrees/
+.superpowers/
+docs/superpowers/
