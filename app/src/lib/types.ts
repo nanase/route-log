@@ -56,6 +56,30 @@ export interface Scan {
   skipped: { path: string; reason: string }[];
 }
 
+/** 走行の動画フォルダ 1 つの、いまの様子。Rust 側の `FolderState` と同じ。 */
+export interface VideoFolder {
+  dir: string;
+  /** フォルダがあるか。ディスクを外したときや、消したときは無い */
+  found: boolean;
+  /** その日付の動画の本数 */
+  count: number;
+}
+
+/** 走行の動画フォルダと、その中の走行の日付の動画。Rust 側の `DateVideos` と同じ。 */
+export interface DateVideos {
+  folders: VideoFolder[];
+  files: VideoFile[];
+  skipped: { path: string; reason: string }[];
+}
+
+/** 走行の一覧に出す、日付ごとの動画の要約。見つからないフォルダの動画は数えない。 */
+export interface VideoSummary {
+  count: number;
+  duration_ms: number;
+  /** 見つからないフォルダがあるか */
+  missing: boolean;
+}
+
 /** 経度・緯度（度）。GeoJSON と同じ順。 */
 export type LonLat = [number, number];
 
@@ -197,7 +221,6 @@ export interface RideSummary {
 }
 
 export interface Config {
-  video_dir: string | null;
   road_data_dir: string | null;
   geo_data_dir: string | null;
 }

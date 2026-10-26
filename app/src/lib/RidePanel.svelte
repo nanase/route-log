@@ -5,20 +5,23 @@
   import { type LabelFilter, matchesFilter, toggleFilter, usedLabels } from "./labels";
   import { barState, type RideSync, type SyncView } from "./sync";
   import { hms } from "./time";
-  import type { RideSummary, RideVideos } from "./types";
+  import type { RideSummary, VideoFolder, VideoSummary } from "./types";
 
   /**
    * 走行の切り替え。上の帯の日付と題を押すと開く。
    *
-   * 走行を選ぶ・作る・消すことをここで行う。クラウドとの同期は自動なので、ここには走行ごとの
-   * 同期の状態を出すだけである。両方で変わった走行だけは、どちらを残すかをここで選ぶ。
+   * 走行を選ぶ・作る・消すことと、開いている走行の動画フォルダを選ぶことをここで行う。クラウドとの
+   * 同期は自動なので、ここには走行ごとの同期の状態を出すだけである。両方で変わった走行だけは、
+   * どちらを残すかをここで選ぶ。
    */
   let {
     date,
     title,
     labels,
     filter = $bindable(),
-    videos,
+    summaries,
+    folders,
+    videoBusy,
     stored,
     sync,
     onselect,
@@ -27,6 +30,9 @@
     onlabels,
     onremove,
     onresolve,
+    onaddfolder,
+    onreloadfolders,
+    onremovefolder,
     onsettings,
     onclose,
   }: {
@@ -38,7 +44,12 @@
     labels: string[];
     /** ラベルでの絞り込み。一覧を閉じても覚えておくよう、開く側が持つ */
     filter: LabelFilter;
-    videos: RideVideos[];
+    /** 日付ごとの動画の要約 */
+    summaries: Record<string, VideoSummary>;
+    /** 開いている走行の動画フォルダ */
+    folders: VideoFolder[];
+    /** 動画フォルダを読んでいる間。フォルダを足す・読み直す・外すボタンを止める */
+    videoBusy: boolean;
     stored: RideSummary[];
     /** クラウドとの同期の状態 */
     sync: SyncView;
@@ -50,20 +61,25 @@
     onremove: (id: string) => Promise<void>;
     /** 両方で変わった走行を、選んだほうで揃える */
     onresolve: (id: string, keep: "local" | "cloud") => Promise<void>;
+    /** 開いている走行に動画フォルダを足す。足すフォルダは、呼ばれた側が選ばせる */
+    onaddfolder: () => void;
+    /** 開いている走行の動画フォルダを読み直す */
+    onreloadfolders: () => void;
+    /** 開いている走行から動画フォルダを外す */
+    onremovefolder: (dir: string) => void;
     onsettings: () => void;
     onclose: () => void;
   } = $props();
 
-  /** 一覧の 1 行。動画だけがある日付、手元の走行、クラウドにだけある走行のどれか。 */
+  /** 一覧の 1 行。手元の走行か、クラウドにだけある走行のどちらか。 */
   interface Row {
     key: string;
     date: string;
-    /** 走行の ID。まだ記録の無い日付では null */
-    id: string | null;
+    id: string;
     title: string;
-    /** 付いているラベル。記録の無い日付と、まだ受け取っていない走行では空 */
+    /** 付いているラベル。まだ受け取っていない走行では空 */
     labels: string[];
-    videos: RideVideos | undefined;
+    videos: VideoSummary | undefined;
     summary: RideSummary | undefined;
     /** クラウドにだけあって、まだ受け取れていない走行か */
     remote: boolean;
@@ -86,9 +102,11 @@
   let busy = $state(false);
   /** 消すかどうかを聞いている行 */
   let asking = $state<string | null>(null);
+  /** 外すかどうかを聞いている動画フォルダ */
+  let removing = $state<string | null>(null);
 
   const rows = $derived.by(() => {
-    const videosOf = (rideDate: string) => videos.find((ride) => ride.date === rideDate);
+    const videosOf = (rideDate: string) => summaries[rideDate];
     const list: Row[] = stored.map((summary) => ({
       key: summary.id,
       date: summary.ride_date,
@@ -115,11 +133,6 @@
         // 突き合わせの最中なら、これから受け取る。済んでも残っているのは、受け取れなかった走行である。
         state: sync.rides[row.id] ?? (sync.checking ? "sending" : "unsent"),
       });
-    }
-    for (const ride of videos) {
-      if (list.some((known) => known.date === ride.date)) continue;
-      const none = { id: null, labels: [], summary: undefined, remote: false, state: undefined };
-      list.push({ key: ride.date, date: ride.date, title: ride.date, videos: ride, ...none });
     }
     return list.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? 1 : -1));
   });
@@ -172,7 +185,7 @@
 
   /** いまの一覧。自動の確認が読む。 */
   export const snapshot = () => ({
-    rows: rows.filter((row) => row.id !== null).map((row) => `${row.date} ${row.title}: ${row.state ?? "-"}`),
+    rows: rows.map((row) => `${row.date} ${row.title}: ${row.state ?? "-"}`),
     message,
   });
 
@@ -188,14 +201,24 @@
     dialog.close();
   }
 
-  const summaryOf = (row: Row) => {
-    const video = row.videos
-      ? `動画 ${row.videos.files.length} 本・${hms(row.videos.files.reduce((sum, file) => sum + file.duration_ms, 0))}`
-      : "動画なし";
-    const route = row.summary ? `経路 ${(row.summary.length_m / 1000).toFixed(1)} km` : "記録なし";
-    return `${video}　${route}`;
+  /** 行に出す動画の要約。動画が無く、見つからないフォルダがあれば、見つからないと出す */
+  const videoOf = (row: Row) => {
+    const videos = row.videos;
+    if (videos === undefined || videos.count === 0) {
+      return videos?.missing ? { text: "動画が見つかりません", lost: true } : { text: "動画なし", lost: false };
+    }
+    return { text: `動画 ${videos.count} 本・${hms(videos.duration_ms)}`, lost: false };
   };
 </script>
+
+{#snippet detail(row: Row)}
+  {@const video = videoOf(row)}
+  <span class="mono detail">
+    <span class="video" class:lost={video.lost}>
+      {#if video.lost}<Icon name="warning" size={13} />{/if}{video.text}
+    </span>　{row.summary ? `経路 ${(row.summary.length_m / 1000).toFixed(1)} km` : "記録なし"}
+  </span>
+{/snippet}
 
 <!-- 板の外（背景）を押したら閉じる。背景を押すと、押された相手は dialog そのものになる。 -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -270,7 +293,7 @@
       {/if}
       {#each shown as row (row.key)}
         {@const open = row.date === date && !row.remote}
-        {#if asking === row.key && row.id !== null}
+        {#if asking === row.key}
           {@const id = row.id}
           {@const local = row.summary !== undefined}
           <div class="asking">
@@ -305,10 +328,65 @@
                   />
                   <span class="pill here">表示中</span>
                 </span>
-                {#if row.id !== null}
-                  <LabelEditor labels={row.labels} {known} onchange={onlabels} />
-                {/if}
-                <span class="mono detail">{summaryOf(row)}</span>
+                <LabelEditor labels={row.labels} {known} onchange={onlabels} />
+                {@render detail(row)}
+                <div class="folders">
+                  <span class="caption">動画フォルダ</span>
+                  {#each folders as folder (folder.dir)}
+                    {#if removing === folder.dir}
+                      <div class="removing">
+                        <span class="folder">
+                          <Icon name="folder" size={15} /><span class="mono dir" title={folder.dir}>{folder.dir}</span>
+                        </span>
+                        <span><b>このフォルダを除外しますか</b>　動画ファイルは削除されません</span>
+                        <div class="buttons">
+                          <button type="button" class="btn small" onclick={() => (removing = null)}>キャンセル</button>
+                          <button
+                            type="button"
+                            class="btn small danger"
+                            disabled={videoBusy}
+                            onclick={() => {
+                              removing = null;
+                              onremovefolder(folder.dir);
+                            }}
+                          >
+                            除外
+                          </button>
+                        </div>
+                      </div>
+                    {:else}
+                      <div class="folder" class:lost={!folder.found}>
+                        <Icon name={folder.found ? "folder" : "warning"} size={15} />
+                        <span class="mono dir" title={folder.dir}>{folder.dir}</span>
+                        <span class="count">{folder.found ? `${folder.count} 本` : "見つかりません"}</span>
+                        <button
+                          type="button"
+                          class="btn small icon-only"
+                          aria-label="再読み込み"
+                          title="再読み込み"
+                          disabled={videoBusy}
+                          onclick={onreloadfolders}
+                        >
+                          <Icon name="refresh" size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          class="btn small icon-only ghost"
+                          aria-label="このフォルダを除外"
+                          title="このフォルダを除外"
+                          onclick={() => (removing = folder.dir)}
+                        >
+                          <Icon name="close" size={14} />
+                        </button>
+                      </div>
+                    {/if}
+                  {/each}
+                  <div>
+                    <button type="button" class="btn small" disabled={videoBusy} onclick={onaddfolder}>
+                      <Icon name="plus" size={13} />フォルダを追加
+                    </button>
+                  </div>
+                </div>
               </div>
             {:else if row.remote}
               <div class="main">
@@ -316,7 +394,7 @@
                   <span class="mono date">{row.date}</span>
                   {#if row.title !== row.date}<b>{row.title}</b>{:else}<span class="untitled">（題なし）</span>{/if}
                 </span>
-                <span class="mono detail">{summaryOf(row)}</span>
+                {@render detail(row)}
               </div>
             {:else}
               <button type="button" class="main" onclick={() => choose(row)} title="この走行を開く">
@@ -325,11 +403,11 @@
                   {#if row.title !== row.date}<b>{row.title}</b>{:else}<span class="untitled">（題なし）</span>{/if}
                   {#each row.labels as name (name)}<LabelTag {name} />{/each}
                 </span>
-                <span class="mono detail">{summaryOf(row)}</span>
+                {@render detail(row)}
               </button>
             {/if}
             <span class="sync">
-              {#if row.state !== undefined && row.id !== null}
+              {#if row.state !== undefined}
                 {@const id = row.id}
                 <span class="pill {STATES[row.state].tone}">
                   {#if row.state === "synced"}<Icon name="check" size={13} />{/if}{STATES[row.state].name}
@@ -344,17 +422,15 @@
                 {/if}
               {/if}
             </span>
-            {#if row.id !== null}
-              <button
-                type="button"
-                class="btn small icon-only ghost trash"
-                aria-label="{row.date} の記録を消す"
-                title="記録を削除"
-                onclick={() => (asking = row.key)}
-              >
-                <Icon name="trash" size={14} />
-              </button>
-            {/if}
+            <button
+              type="button"
+              class="btn small icon-only ghost trash"
+              aria-label="{row.date} の記録を消す"
+              title="記録を削除"
+              onclick={() => (asking = row.key)}
+            >
+              <Icon name="trash" size={14} />
+            </button>
           </div>
         {/if}
       {/each}
@@ -562,6 +638,73 @@
     color: var(--ink-2);
     font-size: 12px;
     white-space: nowrap;
+  }
+  .detail .video {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    vertical-align: bottom;
+  }
+  .lost {
+    color: var(--warn-ink);
+  }
+  .folders {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--primary-line);
+    border-radius: var(--radius-tile);
+    background: var(--surface);
+  }
+  .caption {
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .folder :global(.icon) {
+    color: var(--ink-3);
+  }
+  .folder.lost > :global(.icon:first-child) {
+    color: var(--warn);
+  }
+  .folder.lost .dir {
+    color: var(--ink-3);
+  }
+  /* 長い場所は、頭を省いて末尾（フォルダの名前）を残す。 */
+  .dir {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    direction: rtl;
+    font-size: 12px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .count {
+    flex: none;
+    color: var(--ink-3);
+    font-size: 12px;
+  }
+  .folder.lost .count {
+    color: var(--warn-ink);
+  }
+  .removing {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-control);
+    background: var(--danger-soft);
+    color: var(--danger-ink);
   }
   .sync {
     display: flex;

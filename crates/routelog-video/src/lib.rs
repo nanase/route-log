@@ -15,7 +15,7 @@ pub use probe::{
     Ffprobe, Probe, dir_on_path, find_ffmpeg, find_in, find_program, hide_console, parse_media,
     parse_probe,
 };
-pub use scan::{Scan, Skipped, scan};
+pub use scan::{Scan, Skipped, scan, scan_where};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

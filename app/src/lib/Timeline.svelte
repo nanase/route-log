@@ -395,9 +395,7 @@
 
   <div class="lane" {onwheel}>
     {#if !shown}
-      <p class="empty">
-        設定で動画フォルダを選ぶとタイムラインが表示されます。
-      </p>
+      <p class="empty">動画なし</p>
     {/if}
     <!-- 軸の両端に余白を取る。端にあるイベントの札が切れない。 -->
     <div class="axis-box" bind:this={box} bind:clientWidth={width}>

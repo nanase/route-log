@@ -6,12 +6,11 @@
   import type { Folder, FolderState } from "./ui";
 
   /**
-   * 設定。初回に 1 度選べば済むフォルダ 3 つ、走行ごとの時計の補正、マーカーの前倒し、クラウド同期の
+   * 設定。初回に 1 度選べば済むフォルダ 2 つ、走行ごとの時計の補正、マーカーの前倒し、クラウド同期の
    * 接続先をまとめる。
    */
   let {
     config,
-    videoState,
     roadState,
     geoState,
     clockOffsetMs,
@@ -23,7 +22,6 @@
   }: {
     /** 選んであるフォルダの場所 */
     config: Config;
-    videoState: FolderState;
     roadState: FolderState;
     geoState: FolderState;
     clockOffsetMs: number;
@@ -62,13 +60,6 @@
   ];
 
   const folders = $derived([
-    {
-      id: "video" as const,
-      name: "動画フォルダ",
-      note: "ドラレコの動画を置いた場所",
-      state: videoState,
-      dir: config.video_dir,
-    },
     {
       id: "road" as const,
       name: "道路データ",

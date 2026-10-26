@@ -35,8 +35,19 @@ pub struct Scan {
 ///
 /// ファイルを開くのは ffprobe だけで、何も書き込まない。
 pub fn scan(dir: &Path, pattern: &NamePattern, ffprobe: &Ffprobe) -> Result<Scan, Error> {
+    scan_where(dir, pattern, ffprobe, |_| true)
+}
+
+/// `scan` と同じだが、ファイル名から読んだ値で `keep` が偽になる動画は、ffprobe にかけずに飛ばす。
+pub fn scan_where(
+    dir: &Path,
+    pattern: &NamePattern,
+    ffprobe: &Ffprobe,
+    keep: impl Fn(&ParsedName) -> bool,
+) -> Result<Scan, Error> {
     let mut candidates = Vec::new();
     collect(dir, pattern, &mut candidates)?;
+    candidates.retain(|(_, parsed)| keep(parsed));
 
     let next = AtomicUsize::new(0);
     let files = Mutex::new(Vec::new());
@@ -135,6 +146,25 @@ mod tests {
                 .ends_with("DJI_20261003050500_0004_D.MP4")
         );
         assert!(scan.skipped[0].reason.contains("routelog-no-such-ffprobe"));
+    }
+
+    #[test]
+    fn a_file_left_out_by_its_name_is_not_probed() {
+        let dir = temp_dir("where");
+        std::fs::write(dir.join("DJI_20261003050500_0004_D.MP4"), b"not a video").unwrap();
+        std::fs::write(dir.join("DJI_20261010061200_0001_D.MP4"), b"not a video").unwrap();
+
+        let ffprobe = Ffprobe::new("routelog-no-such-ffprobe");
+        let fourth = |parsed: &ParsedName| parsed.seq == 4;
+        let scan = scan_where(&dir, &NamePattern::dji_action4(), &ffprobe, fourth).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(scan.skipped.len(), 1, "ffprobe にかけたのは 1 本だけ");
+        assert!(
+            scan.skipped[0]
+                .path
+                .ends_with("DJI_20261003050500_0004_D.MP4")
+        );
     }
 
     #[test]

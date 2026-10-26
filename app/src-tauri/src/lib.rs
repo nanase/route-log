@@ -2,6 +2,7 @@ mod check;
 mod config;
 mod events;
 mod excluded;
+mod folders;
 mod overview;
 mod resolve;
 mod rides;
@@ -60,6 +61,7 @@ pub fn run() {
             app.manage(excluded::ExcludedVideos::open(
                 dir.join("excluded-videos.json"),
             ));
+            app.manage(folders::VideoFolders::open(dir.join("video-folders.json")));
             app.manage(sync::Synced::open(dir.join("sync.json")));
             app.manage(structures::Structures::open(app.handle())?);
             sync::init_credentials();
@@ -101,6 +103,11 @@ pub fn run() {
             sync::sync_apply,
             sync::sync_delete,
             videos::scan_videos,
+            videos::load_date_videos,
+            videos::add_video_folder,
+            videos::remove_video_folder,
+            videos::video_summaries,
+            videos::move_video_dir,
             videos::build_timeline,
             videos::locate,
             videos::export_csv,

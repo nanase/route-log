@@ -28,7 +28,8 @@ pub fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    /// 最後に開いた動画フォルダ。
+    /// 以前の版が 1 つだけ覚えていた動画フォルダ。走行ごとの動画フォルダへ覚え直したら空にする。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_dir: Option<String>,
     /// 国道マップの配信データ（PMTiles）があるフォルダ。
     pub road_data_dir: Option<String>,

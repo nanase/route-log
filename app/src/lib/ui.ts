@@ -9,8 +9,8 @@ export type SaveState = "saved" | "pending" | "saving" | "error";
 /** 背景地図。どれも地理院タイル。 */
 export type Basemap = "pale" | "std" | "photo";
 
-/** 設定で選ぶフォルダ。動画、道路データ、判定データ。 */
-export type Folder = "video" | "road" | "geo";
+/** 設定で選ぶフォルダ。道路データと判定データ。 */
+export type Folder = "road" | "geo";
 
 /** フォルダの読み込みの状態。 */
 export type FolderState = "none" | "loading" | "ready" | "error";

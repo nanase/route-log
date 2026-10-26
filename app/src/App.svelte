@@ -58,6 +58,7 @@
   import TopBar from "./lib/TopBar.svelte";
   import type {
     Config,
+    DateVideos,
     Episode,
     Exported,
     FileStops,
@@ -69,6 +70,7 @@
     RoadData,
     Scan,
     Timeline,
+    VideoSummary,
   } from "./lib/types";
   import {
     type Basemap,
@@ -139,7 +141,7 @@
   let selectedWaypoint = $state<number | null>(null);
   /** 経路入力のときに、一覧で選んで地図で目立たせているイベント */
   let focusedId = $state<string | null>(null);
-  let config = $state<Config>({ video_dir: null, road_data_dir: null, geo_data_dir: null });
+  let config = $state<Config>({ road_data_dir: null, geo_data_dir: null });
   let videoState = $state<FolderState>("none");
   let roadState = $state<FolderState>("none");
   let geoState = $state<FolderState>("none");
@@ -152,7 +154,10 @@
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   /** 最後に出した知らせ。自動の確認が読む */
   let lastMessage = "";
-  let videos = $state<RideVideos[]>([]);
+  /** 開いている走行の動画フォルダと、その中の動画。まだ読んでいなければ null */
+  let rideVideos = $state.raw<DateVideos | null>(null);
+  /** 動画フォルダを覚えている日付ごとの、動画の要約。走行の一覧に出す */
+  let summaries = $state.raw<Record<string, VideoSummary>>({});
   /** 開いている走行で、タイムラインから外している動画のファイル名 */
   let excludedNames = $state.raw<string[]>([]);
   /** 開いている走行に使う動画の、停車の候補。探していない動画は入らない */
@@ -202,11 +207,11 @@
 
   /** 判定用データを開いてあるか */
   const geoReady = $derived(geoState === "ready");
-  /** 動画のある日付と、記録のある日付を合わせた一覧。新しい順 */
-  const dates = $derived(
-    [...new Set([...videos.map((v) => v.date), ...stored.map((s) => s.ride_date)])].sort().reverse(),
-  );
-  const files = $derived(videos.find((v) => v.date === date)?.files ?? []);
+  /** 記録のある日付の一覧。新しい順 */
+  const dates = $derived([...new Set(stored.map((s) => s.ride_date))].sort().reverse());
+  const files = $derived(rideVideos?.files ?? []);
+  /** 動画が無く、覚えた動画フォルダに見つからないものがあるか */
+  const videoLost = $derived(files.length === 0 && (rideVideos?.folders.some((folder) => !folder.found) ?? false));
   /** 走行に使う動画。再生、タイムライン、時刻と動画の位置の変換は、これだけを相手にする */
   const usedFiles = $derived(files.filter((file) => !excludedNames.includes(file.name)));
   const clockOffsetMs = $derived(doc?.ride.clock_offset_ms ?? 0);
@@ -286,7 +291,7 @@
   const videoSummary = $derived.by(() => {
     if (videoState === "loading") return "動画を読み込み中…";
     if (date === null) return "";
-    if (files.length === 0) return "動画なし";
+    if (files.length === 0) return videoLost ? "動画フォルダなし" : "動画なし";
     const used = `動画 ${usedFiles.length} 本・${hms(usedFiles.reduce((sum, file) => sum + file.duration_ms, 0))}`;
     const out = files.length - usedFiles.length;
     return out === 0 ? used : `${used}（除外した動画 ${out} 本）`;
@@ -314,11 +319,27 @@
     if (stored.some((ride) => ride.ride_date === last)) await select(last as string);
     if (config.road_data_dir) await loadRoads(config.road_data_dir);
     if (config.geo_data_dir) await loadGeo(config.geo_data_dir);
-    if (config.video_dir) await loadVideos(config.video_dir);
-    // 動画が無くても、記録のある走行があれば、それを開いて始める。
+    // 記録のある走行があれば、それを開いて始める。
     await openFirst();
     booted = true;
+    void refreshSummaries();
+    void moveVideoDir();
   });
+
+  /**
+   * 以前の版が 1 つだけ覚えていた動画フォルダを、日付ごとの動画フォルダとして覚え直す。覚え直したら、
+   * 開いている走行の動画を読み直す。
+   */
+  async function moveVideoDir() {
+    try {
+      if (!(await invoke<boolean>("move_video_dir"))) return;
+    } catch (e) {
+      report({ key: "video", level: "error", title: "動画フォルダの読み込みに失敗", detail: String(e) });
+      return;
+    }
+    await refreshSummaries();
+    if (date !== null && files.length === 0) await reloadVideos();
+  }
 
   /** 何も開いていなければ、前に開いていた走行を開く。それがもう無ければ、いちばん新しいものを開く。 */
   async function openFirst() {
@@ -345,29 +366,79 @@
     toastTimer = setTimeout(() => (toast = ""), TOAST_MS);
   }
 
-  async function loadVideos(dir: string) {
+  /** 動画フォルダを読むたびに進める番号。遅れて返った古い応答を使わないために持つ */
+  let videoLoads = 0;
+
+  /**
+   * 走行の動画フォルダを読み、開いている走行の動画にする。読む間に走行を替えたら、結果は出さない。
+   *
+   * 読んだ動画を返す。`work` が null を返したら、動画は替えずに null を返す。読めなければ undefined。
+   */
+  async function showVideos(
+    rideDate: string,
+    work: () => Promise<DateVideos | null>,
+  ): Promise<DateVideos | null | undefined> {
+    const load = ++videoLoads;
     videoState = "loading";
     dismiss("video");
     try {
-      const scan = await invoke<Scan>("scan_videos", { dir });
-      videos = scan.rides;
+      const loaded = await work();
+      if (load !== videoLoads || date !== rideDate) return loaded;
+      if (loaded !== null) rideVideos = loaded;
       videoState = "ready";
-      const count = videos.reduce((n, ride) => n + ride.files.length, 0);
-      tell(`動画 ${count} 本を読み込み`);
-      if (scan.skipped.length > 0) {
+      if (loaded !== null && loaded.skipped.length > 0) {
         report({
           key: "video",
           level: "warning",
-          title: `読めないファイル ${scan.skipped.length} 本`,
-          detail: scan.skipped[0].reason,
+          title: `読めないファイル ${loaded.skipped.length} 本`,
+          detail: loaded.skipped[0].reason,
         });
       }
-      await openFirst();
+      return loaded;
     } catch (e) {
-      videoState = "error";
-      report({ key: "video", level: "error", title: "動画フォルダの読み込みに失敗", detail: String(e), action: repick("video") });
+      if (load === videoLoads) {
+        videoState = "error";
+        report({ key: "video", level: "error", title: "動画フォルダの読み込みに失敗", detail: String(e) });
+      }
+      return undefined;
+    } finally {
+      void refreshSummaries();
     }
-    config = await invoke<Config>("get_config");
+  }
+
+  async function refreshSummaries() {
+    summaries = await invoke<Record<string, VideoSummary>>("video_summaries");
+  }
+
+  /** 開いている走行の動画フォルダを読み直す。 */
+  async function reloadVideos() {
+    const rideDate = date;
+    if (rideDate === null) return;
+    const loaded = await showVideos(rideDate, () => invoke<DateVideos>("load_date_videos", { date: rideDate }));
+    if (loaded) tell(`動画 ${loaded.files.length} 本を読み込み`);
+  }
+
+  /** 開いている走行に、選んだ動画フォルダを足す。その日付の動画が無いフォルダは足さない。 */
+  async function addVideoFolder() {
+    const rideDate = date;
+    if (rideDate === null) return;
+    const dir = await open({ directory: true, title: "動画フォルダを選択" });
+    if (dir === null) return;
+    const added = await showVideos(rideDate, () =>
+      invoke<DateVideos | null>("add_video_folder", { date: rideDate, dir }),
+    );
+    if (added === null) tell(`選択されたフォルダには ${rideDate} の動画がありません`, "warning");
+    else if (added) tell(`動画 ${added.files.length} 本を読み込み`);
+  }
+
+  /** 開いている走行から動画フォルダを外す。 */
+  async function removeVideoFolder(dir: string) {
+    const rideDate = date;
+    if (rideDate === null) return;
+    const left = await showVideos(rideDate, () =>
+      invoke<DateVideos>("remove_video_folder", { date: rideDate, dir }),
+    );
+    if (left) tell("動画フォルダを除外");
   }
 
   async function loadRoads(dir: string) {
@@ -434,7 +505,6 @@
   }
 
   const FOLDERS: Record<Folder, { title: string; load: (dir: string) => Promise<void> }> = {
-    video: { title: "動画フォルダを選択", load: loadVideos },
     road: { title: "道路データのフォルダを選択", load: loadRoads },
     geo: { title: "判定データのフォルダを選択", load: loadGeo },
   };
@@ -463,6 +533,9 @@
     // 次に起動したときに、同じ走行から始められるようにする。
     localStorage.setItem(LAST_RIDE_KEY, next);
     excludedNames = names;
+    rideVideos = null;
+    // 動画フォルダを読むのを待たずに、走行を開く。
+    void showVideos(next, () => invoke<DateVideos>("load_date_videos", { date: next }));
     chosenId = null;
     selectedId = null;
     conflicts = [];
@@ -1140,8 +1213,10 @@
         extractNeeded = false;
         saveState = "saved";
         dismiss("save");
-        // 動画のある日付は、記録の無い走行として開いたままにする。
-        if (!videos.some((ride) => ride.date === date)) date = null;
+        date = null;
+        rideVideos = null;
+        videoLoads++;
+        videoState = "none";
       });
     } finally {
       sync.forget(id);
@@ -1235,12 +1310,27 @@
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  /**
+   * 自動の確認で、フォルダの中の日付から 1 つを選び、その日付の走行を作って、そのフォルダを動画フォルダにする。
+   * `pick` には、日付の順に並んだ日付ごとの動画が渡る。
+   */
+  async function openCheckRide(dir: string, pick: (rides: RideVideos[]) => RideVideos): Promise<string> {
+    const scan = await invoke<Scan>("scan_videos", { dir });
+    if (scan.rides.length === 0) throw new Error(`${dir} に動画がありません`);
+    const rideDate = pick(scan.rides).date;
+    await createRide(rideDate);
+    const added = await showVideos(rideDate, () =>
+      invoke<DateVideos | null>("add_video_folder", { date: rideDate, dir }),
+    );
+    if (!added) throw new Error(`${dir} の動画を読めません`);
+    return rideDate;
+  }
+
   /** フォルダを読み、最初の走行でファイルをまたぐ再生を確かめて、報告を書いて終了する。 */
   async function checkTimeline(target: string) {
     let report: unknown;
     try {
-      await loadVideos(target);
-      await select(dates[dates.length - 1]);
+      await openCheckRide(target, (rides) => rides[0]);
       setMode("confirm");
       while (timeline === null || player == null) await sleep(100);
       report = await runTimelineCheck(timeline, player, (seconds) => setClockOffset(seconds * 1000), {
@@ -1263,8 +1353,7 @@
   async function checkConfirm(videoDir: string, geoDir: string) {
     let report: unknown;
     try {
-      await loadVideos(videoDir);
-      await select(dates[dates.length - 1]);
+      await openCheckRide(videoDir, (rides) => rides[0]);
       await loadGeo(geoDir);
       while (timeline === null || player == null || routeMap === undefined) await sleep(100);
       report = await runConfirmCheck(timeline, player, routeMap, {
@@ -1302,13 +1391,13 @@
   async function checkEpisodes(videoDir: string) {
     let report: unknown;
     try {
-      await loadVideos(videoDir);
       const total = (ride: RideVideos) => ride.files.reduce((sum, file) => sum + file.duration_ms, 0);
-      const longest = videos.reduce((best, ride) => (total(ride) > total(best) ? ride : best));
-      await select(longest.date);
+      const longest = await openCheckRide(videoDir, (rides) =>
+        rides.reduce((best, ride) => (total(ride) > total(best) ? ride : best)),
+      );
       while (timeline === null || routeMap === undefined) await sleep(100);
       report = {
-        date: longest.date,
+        date: longest,
         ...(await runEpisodeCheck(routeMap, {
           setMode,
           path: () => doc ?? EMPTY,
@@ -1464,6 +1553,7 @@
           {date}
           title={doc?.ride.title ?? date ?? ""}
           {videoSummary}
+          videoWarning={videoLost && videoState !== "loading"}
           {mode}
           status={bar}
           failure={syncView.failure}
@@ -1574,9 +1664,20 @@
             <button type="button" class="btn" onclick={openRides}>走行を選択</button>
           {:else if files.length > 0}
             <b>すべての動画を除外中</b>
+          {:else if videoState === "loading"}
+            <b>動画を読み込み中…</b>
+          {:else if videoLost}
+            <b class="lost"><Icon name="warning" />動画が見つかりません</b>
+            {#each rideVideos?.folders.filter((folder) => !folder.found) ?? [] as folder (folder.dir)}
+              <span class="mono dir" title={folder.dir}>{folder.dir}</span>
+            {/each}
+            <span class="buttons">
+              <button type="button" class="btn" onclick={reloadVideos}>再読み込み</button>
+              <button type="button" class="btn" onclick={addVideoFolder}>動画フォルダを選択</button>
+            </span>
           {:else}
             <b>動画が割り当てられていません</b>
-            <button type="button" class="btn" onclick={() => (settingsOpen = true)}>動画フォルダを選択</button>
+            <button type="button" class="btn" onclick={addVideoFolder}>動画フォルダを選択</button>
           {/if}
         </div>
       {/if}
@@ -1641,7 +1742,9 @@
       title={doc?.ride.title ?? date ?? ""}
       labels={doc?.ride.labels ?? []}
       bind:filter={labelFilter}
-      {videos}
+      {summaries}
+      folders={rideVideos?.folders ?? []}
+      videoBusy={videoState === "loading"}
       {stored}
       sync={syncView}
       onselect={select}
@@ -1650,6 +1753,9 @@
       onlabels={setLabels}
       onremove={removeRide}
       onresolve={(id, keep) => sync.resolve(id, keep)}
+      onaddfolder={addVideoFolder}
+      onreloadfolders={reloadVideos}
+      onremovefolder={removeVideoFolder}
       onsettings={() => {
         ridesOpen = false;
         settingsOpen = true;
@@ -1660,7 +1766,6 @@
   {#if settingsOpen}
     <SettingsDialog
       {config}
-      {videoState}
       {roadState}
       {geoState}
       {clockOffsetMs}
@@ -1871,6 +1976,27 @@
   /* 白いボタンの字が、暗い地に合わせた淡い色にならないようにする。 */
   .no-video .btn {
     color: var(--ink);
+  }
+  .no-video .lost {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .no-video .lost :global(.icon) {
+    color: var(--warn-ring);
+  }
+  /* 長い場所は、頭を省いて末尾（フォルダの名前）を残す。 */
+  .no-video .dir {
+    max-width: calc(100% - 40px);
+    overflow: hidden;
+    direction: rtl;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .no-video .buttons {
+    display: flex;
+    gap: 8px;
   }
   main.confirm .toast {
     bottom: calc(96px + var(--gutter));

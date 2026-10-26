@@ -12,6 +12,7 @@
     date,
     title,
     videoSummary,
+    videoWarning,
     mode,
     status,
     failure,
@@ -34,6 +35,8 @@
     title: string;
     /** 動画の本数と長さ。読み込み中はその旨 */
     videoSummary: string;
+    /** 覚えた動画フォルダが見つからず、動画が無いとき。要約を注意の色で出す */
+    videoWarning: boolean;
     mode: Mode;
     /** 保存と同期の状態。出すものが無ければ null */
     status: BarState | null;
@@ -67,7 +70,11 @@
     {:else}
       <strong class="mono">{date}</strong>
       {#if title !== date}<strong class="title">{title}</strong>{/if}
-      {#if !compact && videoSummary !== ""}<span class="videos">{videoSummary}</span>{/if}
+      {#if !compact && videoSummary !== ""}
+        <span class="videos" class:warning={videoWarning}>
+          {#if videoWarning}<Icon name="warning" size={13} />{/if}{videoSummary}
+        </span>
+      {/if}
     {/if}
     <Icon name="down" />
   </button>
@@ -195,7 +202,13 @@
     text-overflow: ellipsis;
   }
   .videos {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     color: var(--ink-3);
+  }
+  .videos.warning {
+    color: var(--warn-ink);
   }
   .rule {
     flex: none;
