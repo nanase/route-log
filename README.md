@@ -48,7 +48,7 @@ flowchart LR
 
 ## 開発の始め方
 
-Windows で動かしています。mise で道具の版を揃え、`app/` で依存を入れて起動します。
+mise で道具の版を揃え、`app/` で依存を入れて起動します。
 
 ```sh
 mise install

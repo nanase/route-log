@@ -83,7 +83,7 @@ mise.toml             node・bun・ffmpeg・python・uv の版と、書き出し
 
 ## ローカルの保存
 
-データフォルダは、Windows では `%APPDATA%\cc.nanase.routelog` です。
+データフォルダは、OS が決めるアプリのデータの置き場所の下に、アプリの識別子 `cc.nanase.routelog` の名前で作られます。
 
 - 走行 1 つを JSON ファイル 1 つに書く。置き場所はデータフォルダの `rides/<走行の ID>.json`
 - API が走行を丸ごと送り受けするので、手元でも同じ形のまま持つ。SQLite は使わない
