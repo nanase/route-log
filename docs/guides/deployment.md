@@ -1,6 +1,8 @@
-# Cloudflare 側の準備
+# 設定とデプロイ
 
-走行ログの API を Cloudflare に置き、アプリから同期できるようにする手順です。作るものは 5 つあります。
+走行ログの API を Cloudflare に置き、アプリから同期できるようにする手順です。手順 1〜10 は、初めて作るときに 1 度だけ行います。作ったあとの更新は [マイグレーション](#マイグレーション) と [Worker を入れ替える](#worker-を入れ替える) にあります。
+
+作るものは 5 つあります。
 
 | 作るもの | 何に使うか |
 | --- | --- |
@@ -46,7 +48,7 @@ mise exec -- bun wrangler d1 migrations apply routelog --remote
 ## 4. `wrangler.toml` を埋める
 
 - `ACCESS_TEAM_DOMAIN` に、チームのドメインを入れる
-- 末尾の `[[routes]]` の 3 行のコメントを外し、`pattern` をホスト名にする
+- 末尾の `[[routes]]` の `pattern` を、API のホスト名にする
 
 ```toml
 [vars]
@@ -151,9 +153,24 @@ mise exec -- bun wrangler delete          # Worker を消す
 
 D1 と R2 は、ダッシュボードか `wrangler d1 delete` / `wrangler r2 bucket delete` で消します。Access のアプリケーションとサービストークンは、ダッシュボードで消します。
 
+## マイグレーション
+
+D1 のスキーマは `worker/migrations/` の連番の SQL で変えます。
+
+- 変更 1 つにつき、`worker/migrations/` に次の番号の SQL を足す
+- 同じ名前の戻し用の SQL を `worker/migrations/rollback/` に置く
+- 当てたファイルは書き換えない
+  - wrangler は当てたファイルを名前で覚えるので、書き換えた中身は当て済みのデータベースに届かない
+- 手元の D1 で当ててから、本番に当てる（[Worker の確認](development.md#worker-の確認)）
+
+```sh
+mise exec -- bun run migrate:local                                  # 手元
+mise exec -- bun wrangler d1 migrations apply routelog --remote     # 本番
+```
+
 ## Worker を入れ替える
 
-新しいマイグレーションがあれば、Worker より先に当てます。新しい Worker は、足した列を読むためです。
+新しいマイグレーションがあれば、Worker より先に当てます。新しい Worker は、足した列を読むためです。古い Worker は、足した列を知らずに捨てます。
 
 ```sh
 mise exec -- bun wrangler d1 migrations list routelog --remote   # 当てていないものを見る
