@@ -189,16 +189,11 @@
     message,
   });
 
+  /** 走行を作って開く。板は閉じず、続けて題やラベル、動画フォルダを入れられるようにする。 */
   async function create() {
     if (newDate === "") return;
     await oncreate(newDate);
     newDate = "";
-    dialog.close();
-  }
-
-  async function choose(row: Row) {
-    await onselect(row.date);
-    dialog.close();
   }
 
   /** 行に出す動画の要約。動画が無く、見つからないフォルダがあれば、見つからないと出す */
@@ -397,7 +392,8 @@
                 {@render detail(row)}
               </div>
             {:else}
-              <button type="button" class="main" onclick={() => choose(row)} title="この走行を開く">
+              <!-- 開いても板は閉じない。ほかの走行も続けて開ける。 -->
+              <button type="button" class="main" onclick={() => onselect(row.date)} title="この走行を開く">
                 <span class="head">
                   <span class="mono date">{row.date}</span>
                   {#if row.title !== row.date}<b>{row.title}</b>{:else}<span class="untitled">（題なし）</span>{/if}
